@@ -1,0 +1,75 @@
+import CommitHandler from '../github/commit-handler.js';
+import logger from '../utils/logger.js';
+import config from '../config/loader.js';
+
+class Executor {
+  async execute(configOverride = null) {
+    const cfg = configOverride || config.get();
+
+    logger.info('Starting execution', {
+      dryRun: cfg.general.dryRun,
+      repositories: cfg.repositories.length
+    });
+
+    try {
+      // Initialize GitHub client
+      const token = config.getGitHubToken();
+      const handler = new CommitHandler(token);
+
+      // Validate authentication
+      const authResult = await handler.init();
+      if (!authResult.success) {
+        throw new Error('GitHub authentication failed');
+      }
+
+      logger.info('Authenticated with GitHub', { user: authResult.user });
+
+      // Process repositories
+      const results = await handler.processRepositories(
+        cfg.repositories,
+        cfg.contentTemplate,
+        cfg.general.dryRun
+      );
+
+      // Log summary
+      const successful = results.filter(r => r.success).length;
+      const skipped = results.filter(r => r.skipped).length;
+      const failed = results.filter(r => !r.success).length;
+
+      logger.info('Execution completed', {
+        total: results.length,
+        successful,
+        skipped,
+        failed
+      });
+
+      return {
+        success: true,
+        results,
+        summary: { total: results.length, successful, skipped, failed }
+      };
+    } catch (error) {
+      logger.error('Execution failed', { error: error.message });
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async getStatus() {
+    try {
+      const cfg = config.get();
+      const token = config.getGitHubToken();
+      const handler = new CommitHandler(token);
+
+      const status = await handler.getStatus(cfg.repositories);
+      return { success: true, status };
+    } catch (error) {
+      logger.error('Failed to get status', { error: error.message });
+      return { success: false, error: error.message };
+    }
+  }
+}
+
+export default new Executor();
