@@ -1,0 +1,30 @@
+{
+  "name": "sure-daily-github",
+  "version": "1.0.0",
+  "description": "Lean automation for daily GitHub commits - VPS optimized",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "sure-daily-github": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js start",
+    "run": "node src/cli.js run",
+    "status": "node src/cli.js status",
+    "init": "node src/cli.js init",
+    "test": "node --test"
+  },
+  "keywords": ["github", "automation", "commits", "cron"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@octokit/rest": "^20.0.2",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "js-yaml": "^4.1.0",
+    "commander": "^11.1.0"
+  }
+}
