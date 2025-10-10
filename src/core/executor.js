@@ -1,4 +1,5 @@
 import CommitHandler from '../github/commit-handler.js';
+import IssueHandler from '../github/issue-handler.js';
 import logger from '../utils/logger.js';
 import config from '../config/loader.js';
 
@@ -7,6 +8,7 @@ class Executor {
     const cfg = configOverride || config.get();
 
     logger.info('Starting execution', {
+      mode: cfg.general.mode,
       dryRun: cfg.general.dryRun,
       repositories: cfg.repositories.length
     });
@@ -14,7 +16,15 @@ class Executor {
     try {
       // Initialize GitHub client
       const token = config.getGitHubToken();
-      const handler = new CommitHandler(token);
+      const mode = cfg.general.mode || 'commit';
+
+      // Choose handler based on mode
+      let handler;
+      if (mode === 'issue') {
+        handler = new IssueHandler(token);
+      } else {
+        handler = new CommitHandler(token);
+      }
 
       // Validate authentication
       const authResult = await handler.init();
@@ -22,7 +32,7 @@ class Executor {
         throw new Error('GitHub authentication failed');
       }
 
-      logger.info('Authenticated with GitHub', { user: authResult.user });
+      logger.info('Authenticated with GitHub', { user: authResult.user, mode });
 
       // Process repositories
       const results = await handler.processRepositories(
