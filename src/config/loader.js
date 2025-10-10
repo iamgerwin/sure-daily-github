@@ -51,8 +51,8 @@ class ConfigLoader {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
       errors.push('GITHUB_TOKEN environment variable is required');
-    } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
-      errors.push('GITHUB_TOKEN appears to be invalid format');
+    } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
+      errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
     }
 
     // Validate repositories
