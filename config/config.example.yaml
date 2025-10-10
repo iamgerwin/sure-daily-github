@@ -1,0 +1,46 @@
+# Sure Daily GitHub - Configuration Example
+
+general:
+  timezone: "UTC"
+  dailyTarget: 1           # Minimum commits per day (1-10)
+  mode: "commit"           # "commit" or "issue"
+  dryRun: false            # Test mode without actual commits
+
+schedule:
+  enabled: false           # Enable automatic scheduling
+  cron: "0 */6 * * *"     # Every 6 hours (change as needed)
+  timezone: "UTC"
+
+# GitHub repositories to target
+repositories:
+  - owner: "yourusername"
+    repo: "your-repo"
+    enabled: true
+    branch: "main"
+    dailyTarget: 1
+    path: "daily-updates"  # Path where files will be created
+    commitMessage: "docs: daily update ${date}"
+
+  # Add more repositories as needed
+  # - owner: "yourusername"
+  #   repo: "another-repo"
+  #   enabled: true
+  #   branch: "main"
+  #   dailyTarget: 1
+  #   path: "updates"
+  #   commitMessage: "chore: automated update ${date}"
+
+# Content template for commits
+contentTemplate:
+  title: "Daily Update"
+  body: |
+    # Daily Progress - ${date}
+
+    Automated daily update for tracking activity.
+
+    ## Status
+    - System operational
+    - Automated commit created
+
+    ---
+    Generated at ${timestamp}

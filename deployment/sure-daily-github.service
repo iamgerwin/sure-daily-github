@@ -1,0 +1,29 @@
+[Unit]
+Description=Sure Daily GitHub - Automated Commit Service
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/path/to/sure-daily-github
+ExecStart=/usr/bin/node src/cli.js start
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment="NODE_ENV=production"
+Environment="GITHUB_TOKEN=your_github_token_here"
+Environment="LOG_LEVEL=info"
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/path/to/sure-daily-github/logs /path/to/sure-daily-github/data
+
+[Install]
+WantedBy=multi-user.target
