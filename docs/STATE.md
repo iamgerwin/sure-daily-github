@@ -28,6 +28,7 @@ Limits are evaluated before each action:
 
 - If the state file is missing or corrupted, the system starts fresh and keeps a `.bak` backup (when possible).
 - The directory structure is created on demand; failures are logged without crashing the process.
+- Legacy methods `isCommitNeeded` and `recordCommit` are still supported and map to daily limits to preserve original behavior.
 
 ## Overriding State Path
 
@@ -44,4 +45,3 @@ Run unit tests covering state logic and window resets:
 ```bash
 npm test
 ```
-

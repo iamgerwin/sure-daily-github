@@ -23,6 +23,8 @@ The randomization features allow you to:
 
 These features create more organic-looking activity patterns and provide flexible automation control.
 
+> Backward compatible by default: If you do not add the `randomization` block, the tool behaves like the original implementation (one action per repo, sequential order, using `dailyTarget`).
+
 ## Range-Based Issue Counts
 
 ### Basic Configuration
@@ -103,6 +105,8 @@ The system automatically selects the appropriate time period based on your sched
 ## Repository Selection Strategies
 
 Control which repositories are processed during each execution.
+
+> If `repositorySelection` is omitted, the default strategy is `sequential` and all enabled repositories are processed in order, preserving original behavior.
 
 ### Sequential (Default)
 
@@ -350,6 +354,11 @@ These tests cover:
 - Range-based count generation (including time variations)
 - Selection strategies: sequential, weighted, round-robin
 - Deterministic stubs for predictable outcomes
+
+## Backward Compatibility
+
+- With `randomization.enabled: false` (or no block), the daily cap falls back to the repository `dailyTarget` (number or `{ min, max }`).
+- With no `repositorySelection` block, all enabled repositories are processed sequentially.
 
 ## Best Practices
 

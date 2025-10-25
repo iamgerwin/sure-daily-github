@@ -239,6 +239,16 @@ repositorySelection:
 
 See docs/STATE.md for details.
 
+## Backward Compatibility
+
+The original behavior remains the default when advanced features are disabled:
+- Sequential processing of all enabled repositories
+- Single issue/commit per run per repository
+- `dailyTarget` can remain a simple number
+- If the state file is missing/corrupted, the tool falls back safely and continues
+
+Existing configurations continue to work without changes. Optional blocks like `randomization` and `repositorySelection` enhance behavior only when provided.
+
 ## Security Best Practices
 
 - ✅ Never commit `.env` files
