@@ -360,6 +360,10 @@ These tests cover:
 5. **Consider Rate Limits**: Factor in GitHub API rate limits when setting high ranges
 6. **Time Variations**: Use time variations to match your actual work patterns
 
+## Limits Enforcement
+
+When `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When disabled, the repository `dailyTarget` (fixed or range) acts as the daily cap. See docs/STATE.md for details.
+
 ## Troubleshooting
 
 ### Issues Created Don't Match Range
