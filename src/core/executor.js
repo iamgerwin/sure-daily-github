@@ -38,7 +38,8 @@ class Executor {
       const results = await handler.processRepositories(
         cfg.repositories,
         cfg.contentTemplate,
-        cfg.general.dryRun
+        cfg.general.dryRun,
+        cfg
       );
 
       // Log summary

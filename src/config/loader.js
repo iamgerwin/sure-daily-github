@@ -75,8 +75,45 @@ class ConfigLoader {
 
     // Validate general settings
     const general = config.general || {};
-    if (general.dailyTarget && (general.dailyTarget < 1 || general.dailyTarget > 10)) {
-      errors.push('dailyTarget must be between 1 and 10');
+
+    // Validate dailyTarget (can be number or range object)
+    if (general.dailyTarget) {
+      if (typeof general.dailyTarget === 'number') {
+        if (general.dailyTarget < 1 || general.dailyTarget > 100) {
+          errors.push('dailyTarget must be between 1 and 100');
+        }
+      } else if (typeof general.dailyTarget === 'object') {
+        if (!general.dailyTarget.min || !general.dailyTarget.max) {
+          errors.push('dailyTarget range must have min and max values');
+        }
+        if (general.dailyTarget.min < 1 || general.dailyTarget.max > 100) {
+          errors.push('dailyTarget range must be between 1 and 100');
+        }
+        if (general.dailyTarget.min > general.dailyTarget.max) {
+          errors.push('dailyTarget min cannot be greater than max');
+        }
+      }
+    }
+
+    // Validate randomization settings
+    if (config.randomization?.enabled) {
+      const rand = config.randomization;
+      if (rand.issueCount) {
+        if (!rand.issueCount.min || !rand.issueCount.max) {
+          errors.push('randomization.issueCount must have min and max values');
+        }
+        if (rand.issueCount.min > rand.issueCount.max) {
+          errors.push('randomization.issueCount min cannot be greater than max');
+        }
+      }
+    }
+
+    // Validate repository selection
+    if (config.repositorySelection) {
+      const validStrategies = ['random', 'weighted', 'round-robin', 'sequential'];
+      if (config.repositorySelection.strategy && !validStrategies.includes(config.repositorySelection.strategy)) {
+        errors.push(`repositorySelection.strategy must be one of: ${validStrategies.join(', ')}`);
+      }
     }
 
     // Validate schedule
@@ -88,24 +125,57 @@ class ConfigLoader {
       throw new Error(`Configuration validation failed:\n${errors.join('\n')}`);
     }
 
+    // Normalize dailyTarget to consistent format
+    const normalizeDailyTarget = (target) => {
+      if (typeof target === 'number') {
+        return { min: target, max: target };
+      } else if (typeof target === 'object' && target.min && target.max) {
+        return { min: target.min, max: target.max };
+      }
+      return { min: 1, max: 1 };
+    };
+
+    const generalTarget = general.dailyTarget || 1;
+    const normalizedGeneralTarget = normalizeDailyTarget(generalTarget);
+
     // Set defaults
     return {
       general: {
         timezone: general.timezone || 'UTC',
-        dailyTarget: general.dailyTarget || 1,
+        dailyTarget: normalizedGeneralTarget,
         mode: general.mode || 'commit',
         dryRun: general.dryRun || false
       },
+      randomization: config.randomization || {
+        enabled: false,
+        issueCount: normalizedGeneralTarget,
+        timeVariations: {
+          enabled: false,
+          hourly: { min: 1, max: 3 },
+          daily: { min: 5, max: 15 },
+          weekly: { min: 20, max: 50 }
+        }
+      },
+      repositorySelection: config.repositorySelection || {
+        strategy: 'sequential',
+        randomizeOrder: false,
+        maxPerExecution: null
+      },
       schedule: config.schedule || { enabled: false },
-      repositories: config.repositories.map(repo => ({
-        owner: repo.owner,
-        repo: repo.repo,
-        enabled: repo.enabled !== false,
-        branch: repo.branch || 'main',
-        dailyTarget: repo.dailyTarget || general.dailyTarget || 1,
-        path: repo.path || 'daily-updates',
-        commitMessage: repo.commitMessage || 'docs: daily update ${date}'
-      })),
+      repositories: config.repositories.map(repo => {
+        const repoTarget = repo.dailyTarget || generalTarget;
+        return {
+          owner: repo.owner,
+          repo: repo.repo,
+          enabled: repo.enabled !== false,
+          branch: repo.branch || 'main',
+          dailyTarget: normalizeDailyTarget(repoTarget),
+          path: repo.path || 'daily-updates',
+          commitMessage: repo.commitMessage || 'docs: daily update ${date}',
+          labels: repo.labels || ['automated'],
+          weight: repo.weight || 1
+        };
+      }),
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
         body: 'Progress update for ${date}'

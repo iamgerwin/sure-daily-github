@@ -1,6 +1,7 @@
 import GitHubClient from './client.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
+import randomizer from '../utils/randomizer.js';
 
 class IssueHandler {
   constructor(token) {
@@ -71,14 +72,23 @@ class IssueHandler {
     }
   }
 
-  async createDailyIssue(repoConfig, contentTemplate, dryRun = false) {
+  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}) {
     const { owner, repo, dailyTarget } = repoConfig;
 
     try {
-      // Check if issue is needed
-      if (!state.isCommitNeeded(owner, repo, dailyTarget)) {
-        logger.info('Daily target already met', { owner, repo, target: dailyTarget });
-        return { success: true, skipped: true, reason: 'target_met' };
+      // Determine limits (hourly/daily/weekly) and timezone
+      const timezone = config?.general?.timezone || 'UTC';
+      const timeVar = config?.randomization?.timeVariations;
+
+      const actualTarget = targetCount || dailyTarget;
+      const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
+      const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
+      const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
+
+      const check = state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone);
+      if (!check.allowed) {
+        logger.info('Limit reached, skipping issue creation', { owner, repo, check });
+        return { success: true, skipped: true, reason: 'limit_reached' };
       }
 
       if (dryRun) {
@@ -94,7 +104,7 @@ class IssueHandler {
       const result = await this.createIssue(owner, repo, title, body, labels);
 
       if (result.success) {
-        state.recordCommit(owner, repo); // Reuse state tracking
+        state.recordAction(owner, repo, { type: 'issue', timezone });
         logger.info('Daily issue created', {
           owner,
           repo,
@@ -114,10 +124,46 @@ class IssueHandler {
     }
   }
 
-  async processRepositories(repositories, contentTemplate, dryRun = false) {
+  async createMultipleIssues(repoConfig, contentTemplate, count, dryRun = false, config = {}) {
+    const { owner, repo } = repoConfig;
     const results = [];
 
-    for (const repo of repositories) {
+    logger.info('Creating multiple issues', { owner, repo, count });
+
+    for (let i = 0; i < count; i++) {
+      const result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null, config);
+
+      results.push(result);
+
+      if (!result.success || result.skipped) {
+        break; // Stop if we hit target or encounter error
+      }
+
+      // Small delay between issues to avoid rate limiting
+      if (i < count - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    return results;
+  }
+
+  async processRepositories(repositories, contentTemplate, dryRun = false, config = {}) {
+    const results = [];
+
+    // Apply repository selection strategy
+    const selectionConfig = config.repositorySelection || { strategy: 'sequential' };
+    const randomizationConfig = config.randomization;
+
+    const selectedRepos = randomizer.selectRepositories(repositories, selectionConfig);
+
+    logger.info('Processing repositories', {
+      total: repositories.length,
+      selected: selectedRepos.length,
+      strategy: selectionConfig.strategy
+    });
+
+    for (const repo of selectedRepos) {
       if (!repo.enabled) {
         logger.debug('Repository disabled, skipping', {
           owner: repo.owner,
@@ -126,14 +172,52 @@ class IssueHandler {
         continue;
       }
 
-      const result = await this.createDailyIssue(repo, contentTemplate, dryRun);
-      results.push({
-        owner: repo.owner,
-        repo: repo.repo,
-        ...result
-      });
+      // Determine how many issues to create for this repo
+      let issueCount = 1;
 
-      // Small delay to avoid rate limiting
+      if (randomizationConfig?.enabled) {
+        // Use randomization config
+        issueCount = randomizer.getRandomCountWithTimeVariation(randomizationConfig, 'daily');
+        logger.info('Using randomized issue count', {
+          owner: repo.owner,
+          repo: repo.repo,
+          count: issueCount
+        });
+      } else {
+        // Use repo's dailyTarget range
+        issueCount = randomizer.getRandomCount(repo.dailyTarget);
+      }
+
+      // Create issues for this repository
+      if (issueCount > 1) {
+        const multiResults = await this.createMultipleIssues(repo, contentTemplate, issueCount, dryRun, config);
+
+        // Aggregate results
+        const successful = multiResults.filter(r => r.success && !r.skipped).length;
+        const skipped = multiResults.filter(r => r.skipped).length;
+        const failed = multiResults.filter(r => !r.success).length;
+
+        results.push({
+          owner: repo.owner,
+          repo: repo.repo,
+          success: successful > 0,
+          count: issueCount,
+          successful,
+          skipped,
+          failed,
+          details: multiResults
+        });
+      } else {
+        const result = await this.createDailyIssue(repo, contentTemplate, dryRun, null, config);
+        results.push({
+          owner: repo.owner,
+          repo: repo.repo,
+          count: 1,
+          ...result
+        });
+      }
+
+      // Delay between repositories to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 

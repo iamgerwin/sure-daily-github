@@ -139,8 +139,25 @@ program
       const cfg = config.load(options.config);
       console.log('✅ Configuration is valid');
       console.log(`   Repositories: ${cfg.repositories.length}`);
-      console.log(`   Daily target: ${cfg.general.dailyTarget}`);
+
+      // Display dailyTarget nicely
+      const target = cfg.general.dailyTarget;
+      const targetStr = typeof target === 'object'
+        ? `${target.min}-${target.max} (range)`
+        : target;
+      console.log(`   Daily target: ${targetStr}`);
+
       console.log(`   Scheduler: ${cfg.schedule?.enabled ? 'enabled' : 'disabled'}`);
+
+      // Display randomization if enabled
+      if (cfg.randomization?.enabled) {
+        console.log(`   Randomization: enabled`);
+      }
+
+      // Display repository selection strategy
+      if (cfg.repositorySelection?.strategy) {
+        console.log(`   Selection: ${cfg.repositorySelection.strategy}`);
+      }
     } catch (error) {
       console.error('❌ Configuration validation failed:');
       console.error('  ', error.message);
