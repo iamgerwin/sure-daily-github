@@ -321,6 +321,8 @@ randomization:
 
 ## Testing
 
+### Dry-run Execution
+
 Test your randomization configuration with dry-run mode:
 
 ```bash
@@ -335,6 +337,19 @@ The logs will show:
 - Which repositories were selected
 - How many issues would be created
 - Which selection strategy was used
+
+### Unit Tests
+
+Run built-in unit tests for randomization and selection logic:
+
+```bash
+npm test
+```
+
+These tests cover:
+- Range-based count generation (including time variations)
+- Selection strategies: sequential, weighted, round-robin
+- Deterministic stubs for predictable outcomes
 
 ## Best Practices
 
