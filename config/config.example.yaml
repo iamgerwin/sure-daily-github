@@ -1,50 +1,125 @@
 # Sure Daily GitHub - Configuration Example
+# This file demonstrates all available configuration options including
+# randomization and multi-repository features
 
+# ========================================
+# General Settings
+# ========================================
 general:
   timezone: "UTC"
-  dailyTarget: 1           # Minimum commits per day (1-10)
   mode: "commit"           # "commit" or "issue"
   dryRun: false            # Test mode without actual commits
 
+  # Daily target can be:
+  # 1. A fixed number: dailyTarget: 5
+  # 2. A range: dailyTarget: { min: 12, max: 50 }
+  dailyTarget: 1           # Fixed count (1-100)
+  # dailyTarget:           # Range-based (alternative)
+  #   min: 12
+  #   max: 50
+
+# ========================================
+# Randomization Settings (Optional)
+# ========================================
+# Uncomment to enable randomization features
+# randomization:
+#   enabled: true
+#
+#   # Override issue count with specific range
+#   issueCount:
+#     min: 12
+#     max: 50
+#
+#   # Time-based variations (optional)
+#   timeVariations:
+#     enabled: true
+#
+#     # Per-hour limits
+#     hourly:
+#       min: 1
+#       max: 5
+#
+#     # Per-day limits
+#     daily:
+#       min: 10
+#       max: 30
+#
+#     # Per-week limits
+#     weekly:
+#       min: 50
+#       max: 150
+
+# ========================================
+# Repository Selection Strategy (Optional)
+# ========================================
+# Uncomment to enable custom repository selection
+# repositorySelection:
+#   # Strategy: "sequential", "random", "weighted", "round-robin"
+#   strategy: "sequential"
+#
+#   # Randomize the order each execution
+#   randomizeOrder: false
+#
+#   # Max repositories per execution (null = all)
+#   maxPerExecution: null
+
+# ========================================
+# Scheduler Configuration
+# ========================================
 schedule:
   enabled: false           # Enable automatic scheduling
-  cron: "0 */6 * * *"     # Every 6 hours (change as needed)
+  cron: "0 */6 * * *"     # Every 6 hours
   timezone: "UTC"
 
   # Common cron patterns:
   # */3 * * * *      - Every 3 minutes
   # */5 * * * *      - Every 5 minutes
-  # */15 * * * *     - Every 15 minutes
-  # */30 * * * *     - Every 30 minutes
   # 0 * * * *        - Every hour
   # 0 */2 * * *      - Every 2 hours
   # 0 */6 * * *      - Every 6 hours
-  # 0 */12 * * *     - Every 12 hours
   # 0 9 * * *        - Daily at 9 AM
   # 0 9,17 * * *     - Twice daily (9 AM and 5 PM)
-  # 0 9 * * 1-5      - Weekdays at 9 AM
 
-# GitHub repositories to target
+# ========================================
+# Repositories
+# ========================================
 repositories:
+  # Basic example
   - owner: "yourusername"
     repo: "your-repo"
     enabled: true
     branch: "main"
     dailyTarget: 1
-    path: "daily-updates"  # Path where files will be created
+    path: "daily-updates"  # For commit mode
     commitMessage: "docs: daily update ${date}"
+    labels: ["automated"]  # For issue mode
+    weight: 1              # For weighted selection
 
-  # Add more repositories as needed
+  # Example with range-based target
   # - owner: "yourusername"
   #   repo: "another-repo"
   #   enabled: true
   #   branch: "main"
-  #   dailyTarget: 1
-  #   path: "updates"
-  #   commitMessage: "chore: automated update ${date}"
+  #   dailyTarget:
+  #     min: 5
+  #     max: 15
+  #   weight: 40
+  #   labels: ["automated", "high-priority"]
 
-# Content template for commits
+  # Example with higher weight
+  # - owner: "yourusername"
+  #   repo: "important-repo"
+  #   enabled: true
+  #   branch: "main"
+  #   dailyTarget: 10
+  #   weight: 50
+  #   labels: ["automated", "critical"]
+
+# ========================================
+# Content Template
+# ========================================
 contentTemplate:
+  # Variables: ${date}, ${time}, ${timestamp}
   title: "Daily Update"
   body: |
     # Daily Progress - ${date}
@@ -53,7 +128,7 @@ contentTemplate:
 
     ## Status
     - System operational
-    - Automated commit created
+    - Update created at ${time}
 
     ---
     Generated at ${timestamp}
