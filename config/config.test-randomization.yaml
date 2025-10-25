@@ -1,0 +1,97 @@
+# Test Configuration for Randomization Features
+# This demonstrates the new randomization and multi-repository capabilities
+
+general:
+  timezone: "Asia/Manila"
+  mode: "issue"
+  dryRun: true  # Safe testing mode
+
+  # Use range-based daily target
+  dailyTarget:
+    min: 3
+    max: 8
+
+# Enable randomization with time variations
+randomization:
+  enabled: true
+
+  # Override with custom range
+  issueCount:
+    min: 12
+    max: 25
+
+  # Time-based variations
+  timeVariations:
+    enabled: true
+
+    hourly:
+      min: 1
+      max: 3
+
+    daily:
+      min: 10
+      max: 20
+
+    weekly:
+      min: 40
+      max: 80
+
+# Use weighted repository selection
+repositorySelection:
+  strategy: "weighted"
+  randomizeOrder: true
+  maxPerExecution: 2  # Process only 2 repos per run
+
+schedule:
+  enabled: false  # Manual testing
+
+# Multiple repositories with different weights
+repositories:
+  - owner: "iamgerwin"
+    repo: "laravel-api-scaffold"
+    enabled: true
+    branch: "main"
+    dailyTarget:
+      min: 5
+      max: 10
+    weight: 40  # 40% chance
+    labels: ["automated", "test-randomization"]
+
+  - owner: "iamgerwin"
+    repo: "another-test-repo"
+    enabled: true
+    branch: "main"
+    dailyTarget:
+      min: 3
+      max: 7
+    weight: 35  # 35% chance
+    labels: ["automated", "weighted-selection"]
+
+  - owner: "iamgerwin"
+    repo: "third-test-repo"
+    enabled: true
+    branch: "main"
+    dailyTarget:
+      min: 2
+      max: 5
+    weight: 25  # 25% chance
+    labels: ["automated", "low-priority"]
+
+contentTemplate:
+  title: "Test Randomization - ${date} ${time}"
+  body: |
+    # Randomization Test
+
+    Testing the new randomization features.
+
+    - **Date**: ${date}
+    - **Time**: ${time}
+    - **Timestamp**: ${timestamp}
+
+    This issue was created to test:
+    - Random issue counts (range-based)
+    - Weighted repository selection
+    - Multi-repository processing
+
+    ---
+    *Automated test issue*
