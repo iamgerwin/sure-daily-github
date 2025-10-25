@@ -2,7 +2,7 @@
 
 > Lean automation for daily GitHub commits - VPS optimized
 
-A minimal Node.js automation tool that ensures consistent GitHub activity with configurable daily commit targets. Built specifically for low-resource VPS deployment.
+ A minimal Node.js automation tool that ensures consistent GitHub activity with configurable daily commit targets, optional randomization, and multi-repository selection strategies. Built specifically for low-resource VPS deployment.
 
 ## Features
 
@@ -12,6 +12,8 @@ A minimal Node.js automation tool that ensures consistent GitHub activity with c
 - 📊 **Trackable** - State management to avoid duplicate commits
 - 🧪 **Testable** - Dry-run mode for safe testing
 - 🖥️ **VPS-Ready** - Systemd service included for production deployment
+ - 🎲 **Randomized Activity** - Range-based counts with time-based variations
+ - 🗂️ **Multi-Repo Selection** - Sequential, random, weighted, and round-robin strategies
 
 ## Quick Start
 
@@ -42,7 +44,7 @@ node src/cli.js init
 nano config/config.yaml
 ```
 
-Update `config/config.yaml` with your repository details:
+Update `config/config.yaml` with your repository details (number or range-based `dailyTarget`):
 
 ```yaml
 repositories:
@@ -50,7 +52,11 @@ repositories:
     repo: "your-repo"
     enabled: true
     branch: "main"
-    dailyTarget: 1
+    # Fixed number or range
+    # dailyTarget: 1
+    dailyTarget:
+      min: 3
+      max: 7
     path: "daily-updates"
     commitMessage: "docs: daily update ${date}"
 ```
@@ -77,11 +83,14 @@ echo "GITHUB_TOKEN=ghp_your_token_here" > .env
 ### 4. Test
 
 ```bash
-# Validate configuration
+# Validate configuration (pretty prints ranges/randomization)
 node src/cli.js validate
 
-# Test with dry-run (no actual commits)
+# Test with dry-run (no actual writes)
 node src/cli.js run --dry-run
+
+# Run unit tests
+npm test
 
 # Check repository status
 node src/cli.js status
@@ -170,9 +179,31 @@ crontab -e
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `timezone` | string | `UTC` | Default timezone |
-| `dailyTarget` | number | `1` | Minimum commits per day (1-10) |
+| `dailyTarget` | number or range | `1` | Fixed count or `{ min, max }` (1-100) |
 | `mode` | string | `commit` | Operation mode: `commit` or `issue` |
 | `dryRun` | boolean | `false` | Test mode without actual commits |
+
+#### Randomization (Optional)
+
+```yaml
+randomization:
+  enabled: true
+  issueCount: { min: 12, max: 50 }
+  timeVariations:
+    enabled: true
+    hourly: { min: 1, max: 5 }
+    daily: { min: 10, max: 30 }
+    weekly: { min: 50, max: 150 }
+```
+
+#### Repository Selection (Optional)
+
+```yaml
+repositorySelection:
+  strategy: sequential   # sequential | random | weighted | round-robin
+  randomizeOrder: false
+  maxPerExecution: null  # number or null
+```
 
 ### Schedule Settings
 
@@ -190,9 +221,13 @@ crontab -e
 | `repo` | string | ✅ | Repository name |
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
 | `branch` | string | ❌ | Target branch (default: main) |
-| `dailyTarget` | number | ❌ | Override global target |
+| `dailyTarget` | number or range | ❌ | Override global target |
 | `path` | string | ❌ | Path for commits (default: daily-updates) |
 | `commitMessage` | string | ❌ | Commit message template |
+| `labels` | array | ❌ | Labels to apply (issue mode) |
+| `weight` | number | ❌ | Weight for weighted selection (default: 1) |
+
+> See docs/RANDOMIZATION.md for detailed examples.
 
 ## Security Best Practices
 
