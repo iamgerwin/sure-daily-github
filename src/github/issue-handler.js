@@ -72,18 +72,23 @@ class IssueHandler {
     }
   }
 
-  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null) {
+  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}) {
     const { owner, repo, dailyTarget } = repoConfig;
 
     try {
-      // Determine actual target (use override or config)
-      const actualTarget = targetCount || dailyTarget;
-      const target = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
+      // Determine limits (hourly/daily/weekly) and timezone
+      const timezone = config?.general?.timezone || 'UTC';
+      const timeVar = config?.randomization?.timeVariations;
 
-      // Check if issue is needed
-      if (!state.isCommitNeeded(owner, repo, target)) {
-        logger.info('Daily target already met', { owner, repo, target });
-        return { success: true, skipped: true, reason: 'target_met' };
+      const actualTarget = targetCount || dailyTarget;
+      const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
+      const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
+      const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
+
+      const check = state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone);
+      if (!check.allowed) {
+        logger.info('Limit reached, skipping issue creation', { owner, repo, check });
+        return { success: true, skipped: true, reason: 'limit_reached' };
       }
 
       if (dryRun) {
@@ -99,7 +104,7 @@ class IssueHandler {
       const result = await this.createIssue(owner, repo, title, body, labels);
 
       if (result.success) {
-        state.recordCommit(owner, repo); // Reuse state tracking
+        state.recordAction(owner, repo, { type: 'issue', timezone });
         logger.info('Daily issue created', {
           owner,
           repo,
@@ -119,14 +124,14 @@ class IssueHandler {
     }
   }
 
-  async createMultipleIssues(repoConfig, contentTemplate, count, dryRun = false) {
+  async createMultipleIssues(repoConfig, contentTemplate, count, dryRun = false, config = {}) {
     const { owner, repo } = repoConfig;
     const results = [];
 
     logger.info('Creating multiple issues', { owner, repo, count });
 
     for (let i = 0; i < count; i++) {
-      const result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null);
+      const result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null, config);
 
       results.push(result);
 
@@ -185,7 +190,7 @@ class IssueHandler {
 
       // Create issues for this repository
       if (issueCount > 1) {
-        const multiResults = await this.createMultipleIssues(repo, contentTemplate, issueCount, dryRun);
+        const multiResults = await this.createMultipleIssues(repo, contentTemplate, issueCount, dryRun, config);
 
         // Aggregate results
         const successful = multiResults.filter(r => r.success && !r.skipped).length;
@@ -203,7 +208,7 @@ class IssueHandler {
           details: multiResults
         });
       } else {
-        const result = await this.createDailyIssue(repo, contentTemplate, dryRun);
+        const result = await this.createDailyIssue(repo, contentTemplate, dryRun, null, config);
         results.push({
           owner: repo.owner,
           repo: repo.repo,

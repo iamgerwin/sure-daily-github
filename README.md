@@ -12,8 +12,9 @@
 - 📊 **Trackable** - State management to avoid duplicate commits
 - 🧪 **Testable** - Dry-run mode for safe testing
 - 🖥️ **VPS-Ready** - Systemd service included for production deployment
- - 🎲 **Randomized Activity** - Range-based counts with time-based variations
- - 🗂️ **Multi-Repo Selection** - Sequential, random, weighted, and round-robin strategies
+- 🎲 **Randomized Activity** - Range-based counts with time-based variations
+- 🗂️ **Multi-Repo Selection** - Sequential, random, weighted, and round-robin strategies
+ - 🧮 **Stateful Limits** - Hourly/Daily/Weekly counters with timezone-aware resets
 
 ## Quick Start
 
@@ -228,6 +229,15 @@ repositorySelection:
 | `weight` | number | ❌ | Weight for weighted selection (default: 1) |
 
 > See docs/RANDOMIZATION.md for detailed examples.
+
+## State Management
+
+- Persistent counters per repository with hourly/daily/weekly windows
+- Timezone-aware resets using `general.timezone` (default `UTC`)
+- Graceful fallbacks on state corruption (automatic `.bak` backup)
+- Override storage path with `SDG_STATE_FILE`
+
+See docs/STATE.md for details.
 
 ## Security Best Practices
 
