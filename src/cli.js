@@ -1,31 +1,28 @@
 #!/usr/bin/env node
-
 import { Command } from 'commander';
-import config from './config/loader.js';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { readFileSync } from 'fs';
 import executor from './core/executor.js';
 import scheduler from './core/scheduler.js';
-import logger from './utils/logger.js';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import config from './config/loader.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const packageJson = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')
-);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const packageJson = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf-8'));
 
 const program = new Command();
 
 program
   .name('sure-daily-github')
-  .description('Lean automation for daily GitHub commits - VPS optimized')
+  .description(packageJson.description)
   .version(packageJson.version);
 
 // Run command - execute once
 program
   .command('run')
-  .description('Run once (manual trigger)')
-  .option('--dry-run', 'Test mode without actual commits')
+  .description('Execute once')
+  .option('--dry-run', 'Simulate without making actual changes')
   .option('--config <path>', 'Path to configuration file')
   .action(async (options) => {
     try {
@@ -33,19 +30,18 @@ program
 
       if (options.dryRun) {
         cfg.general.dryRun = true;
-        console.log('🔍 Running in dry-run mode\n');
       }
 
       const result = await executor.execute(cfg);
 
       if (result.success) {
-        console.log('\n✅ Execution completed successfully');
-        console.log(`   Total: ${result.summary.total}`);
-        console.log(`   Successful: ${result.summary.successful}`);
-        console.log(`   Skipped: ${result.summary.skipped}`);
-        console.log(`   Failed: ${result.summary.failed}`);
+        console.log('\n✅ Execution completed\n');
+        console.log(`Total:      ${result.summary.total}`);
+        console.log(`Successful: ${result.summary.successful}`);
+        console.log(`Skipped:    ${result.summary.skipped}`);
+        console.log(`Failed:     ${result.summary.failed}\n`);
       } else {
-        console.error('\n❌ Execution failed:', result.error);
+        console.error('❌ Execution failed:', result.error);
         process.exit(1);
       }
     } catch (error) {
@@ -54,39 +50,36 @@ program
     }
   });
 
-// Start command - start scheduler
+// Start command - run scheduler
 program
   .command('start')
-  .description('Start scheduler (daemon mode)')
+  .description('Start the scheduler')
   .option('--config <path>', 'Path to configuration file')
-  .action(async (options) => {
+  .action((options) => {
     try {
       const cfg = config.load(options.config);
 
       if (!cfg.schedule?.enabled) {
         console.error('❌ Scheduler is disabled in configuration');
-        console.log('   Enable schedule.enabled in your config file');
+        console.log('\nTo enable scheduling, set schedule.enabled to true in your config file.');
+        console.log('Then define schedule.cron (e.g., "0 0 * * *" for daily at midnight).');
         process.exit(1);
       }
 
       scheduler.start(cfg);
 
-      console.log('✅ Scheduler started');
-      console.log(`   Cron: ${cfg.schedule.cron}`);
-      console.log(`   Timezone: ${cfg.schedule.timezone || cfg.general.timezone || 'UTC'}`);
-      console.log(`   Logs: ./logs/`);
-      console.log('\n   Press Ctrl+C to stop');
+      console.log('\n🚀 Sure Daily GitHub - Scheduler Started\n');
+      console.log(`Schedule:  ${cfg.schedule.cron}`);
+      console.log(`Timezone:  ${cfg.schedule.timezone || cfg.general.timezone}`);
+      console.log(`Logs:      ./logs/\n`);
+      console.log('Press Ctrl+C to stop\n');
 
       // Keep process alive
       process.on('SIGINT', () => {
-        console.log('\n\n⏹️  Stopping scheduler...');
+        console.log('\n\n👋 Stopping scheduler...');
         scheduler.stop();
-        console.log('✅ Scheduler stopped');
         process.exit(0);
       });
-
-      // Prevent process from exiting
-      await new Promise(() => {});
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);
@@ -105,20 +98,57 @@ program
 
       if (result.success) {
         console.log('\n📊 Repository Status\n');
-        console.log('┌─────────────────────────────────┬────────┬───────┬────────┐');
-        console.log('│ Repository                      │ Target │ Today │ Status │');
-        console.log('├─────────────────────────────────┼────────┼───────┼────────┤');
+        
+        // Check if it's the advanced handler format (has repositories array)
+        if (result.status.repositories && Array.isArray(result.status.repositories)) {
+          console.log('┌─────────────────────────────────┬────────────┬───────┬──────────────────────┐');
+          console.log('│ Repository                      │ Target     │ Today │ Next Issue           │');
+          console.log('├─────────────────────────────────┼────────────┼───────┼──────────────────────┤');
 
-        result.status.forEach(repo => {
-          const repoName = `${repo.owner}/${repo.repo}`.padEnd(31);
-          const target = repo.target.toString().padStart(6);
-          const today = repo.today.toString().padStart(5);
-          const status = repo.needsCommit ? '✗'.padStart(6) : '✓'.padStart(6);
+          result.status.repositories.forEach(repo => {
+            const repoName = repo.repo.padEnd(31);
+            const target = (repo.todayTarget || 'N/A').toString().padStart(10);
+            const today = (repo.issuesCreatedToday || 0).toString().padStart(5);
+            let nextIssue = 'Any time';
+            
+            if (repo.nextIssueTime && repo.nextIssueTime !== 'Any time') {
+              const nextDate = new Date(repo.nextIssueTime);
+              nextIssue = nextDate.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false 
+              });
+            }
+            
+            nextIssue = nextIssue.padStart(20);
 
-          console.log(`│ ${repoName} │ ${target} │ ${today} │ ${status} │`);
-        });
+            console.log(`│ ${repoName} │ ${target} │ ${today} │ ${nextIssue} │`);
+          });
 
-        console.log('└─────────────────────────────────┴────────┴───────┴────────┘\n');
+          console.log('└─────────────────────────────────┴────────────┴───────┴──────────────────────┘\n');
+          
+          if (result.status.lastDailyReset) {
+            const resetDate = new Date(result.status.lastDailyReset);
+            console.log(`Last daily reset: ${resetDate.toLocaleString()}\n`);
+          }
+        } 
+        // Legacy format
+        else if (Array.isArray(result.status)) {
+          console.log('┌─────────────────────────────────┬────────┬───────┬────────┐');
+          console.log('│ Repository                      │ Target │ Today │ Status │');
+          console.log('├─────────────────────────────────┼────────┼───────┼────────┤');
+
+          result.status.forEach(repo => {
+            const repoName = `${repo.owner}/${repo.repo}`.padEnd(31);
+            const target = repo.target.toString().padStart(6);
+            const today = repo.today.toString().padStart(5);
+            const status = repo.needsCommit ? '✗'.padStart(6) : '✓'.padStart(6);
+
+            console.log(`│ ${repoName} │ ${target} │ ${today} │ ${status} │`);
+          });
+
+          console.log('└─────────────────────────────────┴────────┴───────┴────────┘\n');
+        }
       } else {
         console.error('❌ Failed to get status:', result.error);
         process.exit(1);
@@ -141,61 +171,56 @@ program
       console.log(`   Repositories: ${cfg.repositories.length}`);
 
       // Display dailyTarget nicely
-      const target = cfg.general.dailyTarget;
-      const targetStr = typeof target === 'object'
-        ? `${target.min}-${target.max} (range)`
-        : target;
-      console.log(`   Daily target: ${targetStr}`);
+      if (cfg.general.dailyTarget) {
+        const target = cfg.general.dailyTarget;
+        const targetStr = typeof target === 'object' 
+          ? `${target.min}-${target.max}` 
+          : target.toString();
+        console.log(`   Daily target: ${targetStr}`);
+      }
 
       console.log(`   Scheduler: ${cfg.schedule?.enabled ? 'enabled' : 'disabled'}`);
-
-      // Display randomization if enabled
+      
       if (cfg.randomization?.enabled) {
-        console.log(`   Randomization: enabled`);
+        console.log('   Randomization: enabled');
       }
-
-      // Display repository selection strategy
+      
       if (cfg.repositorySelection?.strategy) {
-        console.log(`   Selection: ${cfg.repositorySelection.strategy}`);
+        console.log(`   Strategy: ${cfg.repositorySelection.strategy}`);
       }
     } catch (error) {
-      console.error('❌ Configuration validation failed:');
-      console.error('  ', error.message);
+      console.error('❌ Configuration validation failed:', error.message);
       process.exit(1);
     }
   });
 
-// Init command - create example configuration
+// Init command - create initial configuration
 program
   .command('init')
-  .description('Create example configuration')
-  .action(() => {
-    const configPath = path.join(process.cwd(), 'config', 'config.yaml');
-    const configDir = path.dirname(configPath);
+  .description('Create initial configuration file')
+  .action(async () => {
+    try {
+      const { existsSync, mkdirSync, writeFileSync } = await import('fs');
+      const configPath = 'config/config.yaml';
 
-    if (fs.existsSync(configPath)) {
-      console.log('⚠️  Configuration file already exists:', configPath);
-      console.log('   Delete it first if you want to reinitialize');
-      process.exit(1);
-    }
+      if (existsSync(configPath)) {
+        console.log('⚠️  Configuration file already exists:', configPath);
+        process.exit(1);
+      }
 
-    // Create config directory if it doesn't exist
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
+      if (!existsSync('config')) {
+        mkdirSync('config', { recursive: true });
+      }
 
-    // Create example config
-    const exampleConfig = `# Sure Daily GitHub - Configuration
-
+      const exampleConfig = `# Sure Daily GitHub - Configuration
 general:
   timezone: "UTC"
-  dailyTarget: 1
   mode: "commit"
   dryRun: false
 
 schedule:
   enabled: false
-  cron: "0 */6 * * *"  # Every 6 hours
+  cron: "0 0 * * *"
   timezone: "UTC"
 
 repositories:
@@ -203,28 +228,21 @@ repositories:
     repo: "your-repo"
     enabled: true
     branch: "main"
-    dailyTarget: 1
-    path: "daily-updates"
-    commitMessage: "docs: daily update \${date}"
 
 contentTemplate:
-  title: "Daily Update"
-  body: |
-    # Daily Progress - \${date}
-
-    Automated daily update.
-
-    ---
-    Generated at \${timestamp}
+  message: "Automated commit - \${timestamp}"
 `;
 
-    fs.writeFileSync(configPath, exampleConfig);
-    console.log('✅ Configuration created:', configPath);
-    console.log('\n📝 Next steps:');
-    console.log('   1. Edit config/config.yaml with your repository details');
-    console.log('   2. Set GITHUB_TOKEN environment variable');
-    console.log('   3. Run: sure-daily-github validate');
-    console.log('   4. Test: sure-daily-github run --dry-run');
+      writeFileSync(configPath, exampleConfig);
+      console.log('✅ Configuration file created:', configPath);
+      console.log('\nNext steps:');
+      console.log('1. Edit config/config.yaml with your settings');
+      console.log('2. Set GITHUB_TOKEN in .env file');
+      console.log('3. Run: npm start');
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+      process.exit(1);
+    }
   });
 
 program.parse();

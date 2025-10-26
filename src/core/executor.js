@@ -1,5 +1,6 @@
 import CommitHandler from '../github/commit-handler.js';
 import IssueHandler from '../github/issue-handler.js';
+import AdvancedIssueHandler from '../github/advanced-issue-handler.js';
 import logger from '../utils/logger.js';
 import config from '../config/loader.js';
 
@@ -21,7 +22,17 @@ class Executor {
       // Choose handler based on mode
       let handler;
       if (mode === 'issue') {
-        handler = new IssueHandler(token);
+        // Check if we should use advanced issue handler
+        const hasAdvancedConfig = cfg.repositories.some(r => 
+          r.intervalMinutes || (typeof r.dailyTarget === 'object')
+        );
+        
+        if (hasAdvancedConfig) {
+          handler = new AdvancedIssueHandler(token);
+          logger.info('Using advanced issue handler with randomization');
+        } else {
+          handler = new IssueHandler(token);
+        }
       } else {
         handler = new CommitHandler(token);
       }
@@ -43,7 +54,7 @@ class Executor {
       );
 
       // Log summary
-      const successful = results.filter(r => r.success).length;
+      const successful = results.filter(r => r.success && !r.skipped).length;
       const skipped = results.filter(r => r.skipped).length;
       const failed = results.filter(r => !r.success).length;
 
@@ -72,7 +83,15 @@ class Executor {
     try {
       const cfg = config.get();
       const token = config.getGitHubToken();
-      const handler = new CommitHandler(token);
+      
+      // Use advanced handler if available
+      const hasAdvancedConfig = cfg.repositories.some(r => 
+        r.intervalMinutes || (typeof r.dailyTarget === 'object')
+      );
+      
+      const handler = hasAdvancedConfig 
+        ? new AdvancedIssueHandler(token)
+        : new CommitHandler(token);
 
       const status = await handler.getStatus(cfg.repositories);
       return { success: true, status };
