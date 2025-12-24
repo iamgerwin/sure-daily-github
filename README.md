@@ -359,3 +359,63 @@ For issues, questions, or contributions:
 - Open an issue on GitHub
 - Check logs in `./logs/` directory
 - Review configuration with `validate` command
+
+## Release Notes
+
+### Latest Release: v1.5.1 (2025-12-24)
+
+#### New Features
+- **Systemd Service Management**: Automated process lifecycle management with auto-restart capability
+- **Health Monitoring**: Cron-based health checks that run every 30 minutes and auto-recover from failures
+- **Status Verification Tools**: Quick diagnostics scripts for monitoring service health and status
+- **Comprehensive Documentation**: Professional setup and troubleshooting guide (docs/SCHEDULER_SETUP.md)
+
+#### What This Fixes
+- Scheduler process hanging without any restart mechanism
+- Missing days of GitHub contributions due to service outages
+- Lack of monitoring and diagnostics tools
+- Difficult manual recovery procedures
+
+#### Key Improvements
+- ✅ Automatic restart on crash (10-second delay)
+- ✅ Memory limit enforcement (512MB)
+- ✅ Health monitoring every 30 minutes
+- ✅ Boot-time service persistence
+- ✅ Comprehensive logging and status tracking
+
+For detailed release information, see [CHANGELOG.md](./CHANGELOG.md)
+
+## Deployment
+
+### Production Deployment with Systemd
+
+For production environments, use the included systemd service:
+
+```bash
+# Copy the service file
+sudo cp deployment/sure-daily-github.service /etc/systemd/system/
+
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable sure-daily-github
+sudo systemctl start sure-daily-github
+
+# Add health check to crontab
+*/30 * * * * /opt/sure-daily-github/scripts/health-check.sh
+```
+
+### Verify Installation
+
+```bash
+# Check service status
+systemctl status sure-daily-github
+
+# Run status verification
+/opt/sure-daily-github/scripts/verify-status.sh
+```
+
+### Documentation
+
+- **Setup Guide**: See [docs/SCHEDULER_SETUP.md](./docs/SCHEDULER_SETUP.md)
+- **Troubleshooting**: See [docs/SCHEDULER_SETUP.md#troubleshooting](./docs/SCHEDULER_SETUP.md)
+- **Version History**: See [CHANGELOG.md](./CHANGELOG.md)
