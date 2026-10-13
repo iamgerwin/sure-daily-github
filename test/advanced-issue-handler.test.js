@@ -1,0 +1,123 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
+import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
+
+const config = { general: { timezone: 'UTC' }, randomization: {}, contentTemplates: [] };
+
+function repo(overrides = {}) {
+  return {
+    owner: 'me',
+    repo: 'demo',
+    enabled: true,
+    dailyTarget: { min: 3, max: 3 },
+    intervalMinutes: null,
+    labels: ['automated'],
+    ...overrides
+  };
+}
+
+// State file inside a directory that does not exist yet (fresh install)
+function createHandler() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-issue-'));
+  process.env.SDG_ISSUE_STATE_FILE = path.join(dir, 'data', 'issue-state.json');
+  const handler = new AdvancedIssueHandler('ghp_test');
+  delete process.env.SDG_ISSUE_STATE_FILE;
+
+  const created = [];
+  handler.client = {
+    issues: {
+      create: async (params) => {
+        created.push(params);
+        return { data: { number: created.length, html_url: 'https://example.test', title: params.title } };
+      }
+    }
+  };
+  return { handler, created };
+}
+
+function readState(handler) {
+  return JSON.parse(fs.readFileSync(handler.stateFile, 'utf8'));
+}
+
+test('persists state when the data directory does not exist yet', async () => {
+  const { handler, created } = createHandler();
+
+  await handler.processRepositories([repo()], {}, false, config);
+  await handler.processRepositories([repo()], {}, false, config);
+
+  assert.equal(created.length, 2);
+  assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 2);
+});
+
+test('stops at the daily target across runs', async () => {
+  const { handler, created } = createHandler();
+
+  for (let i = 0; i < 5; i++) {
+    await handler.processRepositories([repo()], {}, false, config);
+  }
+
+  assert.equal(created.length, 3);
+});
+
+test('dry run does not write to the state file', async () => {
+  const { handler, created } = createHandler();
+
+  await handler.processRepositories([repo()], {}, true, config);
+
+  assert.equal(created.length, 0);
+  assert.equal(fs.existsSync(handler.stateFile), false);
+});
+
+test('repositories with the same name under different owners are tracked separately', async () => {
+  const { handler } = createHandler();
+
+  await handler.processRepositories([repo({ owner: 'alice' }), repo({ owner: 'bob' })], {}, false, config);
+
+  const { repositories } = readState(handler);
+  assert.equal(repositories['alice/demo'].issuesCreatedToday, 1);
+  assert.equal(repositories['bob/demo'].issuesCreatedToday, 1);
+});
+
+test('migrates legacy repo-name keys without losing progress', async () => {
+  const { handler, created } = createHandler();
+  fs.mkdirSync(path.dirname(handler.stateFile), { recursive: true });
+  fs.writeFileSync(handler.stateFile, JSON.stringify({
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      demo: { issuesCreatedToday: 3, lastIssueTime: null, todayTarget: 3, nextIssueTime: null }
+    }
+  }));
+
+  await handler.processRepositories([repo()], {}, false, config);
+
+  const { repositories } = readState(handler);
+  assert.equal(created.length, 0);
+  assert.equal(repositories.demo, undefined);
+  assert.equal(repositories['me/demo'].issuesCreatedToday, 3);
+});
+
+test('aborts the run when state cannot be persisted after creating an issue', async () => {
+  const { handler, created } = createHandler();
+  handler.saveState = async () => { throw new Error('disk full'); };
+
+  await assert.rejects(
+    handler.processRepositories([repo({ repo: 'one' }), repo({ repo: 'two' })], {}, false, config),
+    /disk full/
+  );
+  assert.equal(created.length, 1);
+});
+
+test('backs up a corrupt state file instead of silently discarding it', async () => {
+  const { handler } = createHandler();
+  const dir = path.dirname(handler.stateFile);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(handler.stateFile, '{"repositories": {');
+
+  const state = await handler.loadState();
+
+  assert.deepEqual(state.repositories, {});
+  assert.ok(fs.readdirSync(dir).some(f => f.startsWith('issue-state.json.corrupt-')));
+});

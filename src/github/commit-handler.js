@@ -46,12 +46,20 @@ class CommitHandler {
     return `${basePath}/${date}-${timestamp}.md`;
   }
 
-  async createDailyCommit(repoConfig, contentTemplate, dryRun = false) {
+  // The config loader normalizes dailyTarget to { min, max }; state limits need a number
+  resolveDailyMax(dailyTarget) {
+    if (dailyTarget && typeof dailyTarget === 'object') {
+      return dailyTarget.max;
+    }
+    return dailyTarget || 1;
+  }
+
+  async createDailyCommit(repoConfig, contentTemplate, dryRun = false, timezone = 'UTC') {
     const { owner, repo, branch, path: basePath, commitMessage, dailyTarget } = repoConfig;
 
     try {
       // Check if commit is needed
-      if (!state.isCommitNeeded(owner, repo, dailyTarget)) {
+      if (!state.isCommitNeeded(owner, repo, this.resolveDailyMax(dailyTarget), timezone)) {
         logger.info('Daily target already met', { owner, repo, target: dailyTarget });
         return { success: true, skipped: true, reason: 'target_met' };
       }
@@ -77,7 +85,7 @@ class CommitHandler {
       );
 
       if (result.success) {
-        state.recordCommit(owner, repo);
+        state.recordCommit(owner, repo, timezone);
         logger.info('Daily commit created', {
           owner,
           repo,
@@ -97,8 +105,9 @@ class CommitHandler {
     }
   }
 
-  async processRepositories(repositories, contentTemplate, dryRun = false) {
+  async processRepositories(repositories, contentTemplate, dryRun = false, config = {}) {
     const results = [];
+    const timezone = config?.general?.timezone || 'UTC';
 
     for (const repo of repositories) {
       if (!repo.enabled) {
@@ -109,7 +118,7 @@ class CommitHandler {
         continue;
       }
 
-      const result = await this.createDailyCommit(repo, contentTemplate, dryRun);
+      const result = await this.createDailyCommit(repo, contentTemplate, dryRun, timezone);
       results.push({
         owner: repo.owner,
         repo: repo.repo,
@@ -123,17 +132,18 @@ class CommitHandler {
     return results;
   }
 
-  async getStatus(repositories) {
+  async getStatus(repositories, timezone = 'UTC') {
     const status = [];
 
     for (const repo of repositories) {
       const repoState = state.getRepoState(repo.owner, repo.repo);
-      const needsCommit = state.isCommitNeeded(repo.owner, repo.repo, repo.dailyTarget);
+      const target = this.resolveDailyMax(repo.dailyTarget);
+      const needsCommit = state.isCommitNeeded(repo.owner, repo.repo, target, timezone);
 
       status.push({
         owner: repo.owner,
         repo: repo.repo,
-        target: repo.dailyTarget,
+        target,
         today: repoState.commitsToday,
         total: repoState.totalCommits,
         lastCommit: repoState.lastCommitDate,

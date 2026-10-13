@@ -84,12 +84,20 @@ class Executor {
       const cfg = config.get();
       const token = config.getGitHubToken();
       
+      const mode = cfg.general.mode || 'commit';
+
+      // Commit mode tracks progress in StateManager, not the issue state file
+      if (mode !== 'issue') {
+        const status = await new CommitHandler(token).getStatus(cfg.repositories, cfg.general.timezone);
+        return { success: true, status };
+      }
+
       // Use advanced handler if available
-      const hasAdvancedConfig = cfg.repositories.some(r => 
+      const hasAdvancedConfig = cfg.repositories.some(r =>
         r.intervalMinutes || (typeof r.dailyTarget === 'object')
       );
-      
-      const handler = hasAdvancedConfig 
+
+      const handler = hasAdvancedConfig
         ? new AdvancedIssueHandler(token)
         : new CommitHandler(token);
 

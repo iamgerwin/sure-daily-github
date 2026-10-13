@@ -1,4 +1,4 @@
-import { Octokit } from '@octokit/rest';
+import { createOctokit } from './octokit.js';
 import logger from '../utils/logger.js';
 
 class GitHubClient {
@@ -7,7 +7,7 @@ class GitHubClient {
       throw new Error('GitHub token is required');
     }
 
-    this.octokit = new Octokit({
+    this.octokit = createOctokit({
       auth: token,
       userAgent: 'sure-daily-github/1.0.0',
       throttle: {
