@@ -2,12 +2,17 @@ import { Octokit } from '@octokit/rest';
 import logger from '../utils/logger.js';
 import fs from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Anchored to the project root (like StateManager) so it does not depend on cwd
+const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 
 class AdvancedIssueHandler {
   constructor(token) {
     this.token = token;
     this.client = null;
-    this.stateFile = path.join(process.cwd(), 'data', 'issue-state.json');
+    this.stateFile = process.env.SDG_ISSUE_STATE_FILE || DEFAULT_STATE_FILE;
   }
 
   async init() {
@@ -24,8 +29,16 @@ class AdvancedIssueHandler {
   async loadState() {
     try {
       const data = await fs.readFile(this.stateFile, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (!parsed.repositories) parsed.repositories = {};
+      return parsed;
     } catch (error) {
+      if (error.code !== 'ENOENT') {
+        // Keep the unreadable file for inspection instead of silently discarding progress
+        const backup = `${this.stateFile}.corrupt-${Date.now()}`;
+        await fs.copyFile(this.stateFile, backup).catch(() => {});
+        logger.error('Failed to load issue state, starting fresh', { error: error.message, backup });
+      }
       // Initialize default state
       return {
         lastDailyReset: null,
@@ -34,12 +47,34 @@ class AdvancedIssueHandler {
     }
   }
 
+  // Throws on failure: if progress cannot be persisted, creating more issues
+  // would ignore the daily target on every subsequent run
   async saveState(state) {
+    const tmpFile = `${this.stateFile}.${process.pid}.tmp`;
     try {
-      await fs.writeFile(this.stateFile, JSON.stringify(state, null, 2));
+      await fs.mkdir(path.dirname(this.stateFile), { recursive: true });
+      // Write-then-rename so a crash mid-write cannot leave truncated JSON behind
+      await fs.writeFile(tmpFile, JSON.stringify(state, null, 2));
+      await fs.rename(tmpFile, this.stateFile);
     } catch (error) {
+      await fs.rm(tmpFile, { force: true }).catch(() => {});
       logger.error('Failed to save state', { error: error.message });
+      throw error;
     }
+  }
+
+  getRepoKey(repo) {
+    return `${repo.owner}/${repo.repo}`;
+  }
+
+  // Older state files keyed repositories by name only; adopt that entry if present
+  getRepoState(state, repo) {
+    const key = this.getRepoKey(repo);
+    if (!state.repositories[key] && state.repositories[repo.repo]) {
+      state.repositories[key] = state.repositories[repo.repo];
+      delete state.repositories[repo.repo];
+    }
+    return state.repositories[key];
   }
 
   shouldResetDaily(state, timezone) {
@@ -152,16 +187,17 @@ class AdvancedIssueHandler {
       }
       
       // Initialize repo state if not exists
-      if (!state.repositories[repo.repo]) {
-        state.repositories[repo.repo] = {
+      if (!this.getRepoState(state, repo)) {
+        state.repositories[this.getRepoKey(repo)] = {
           issuesCreatedToday: 0,
           lastIssueTime: null,
           todayTarget: null,
           nextIssueTime: null
         };
       }
-      
-      const repoState = state.repositories[repo.repo];
+
+      const repoState = this.getRepoState(state, repo);
+      let issueCreated = false;
       
       // Determine today's target if not set
       if (repoState.todayTarget === null && repo.dailyTarget) {
@@ -245,6 +281,7 @@ class AdvancedIssueHandler {
           // Update state
           repoState.issuesCreatedToday++;
           repoState.lastIssueTime = now;
+          issueCreated = true;
           
           // Calculate next issue time with random interval
           if (repo.intervalMinutes) {
@@ -283,11 +320,19 @@ class AdvancedIssueHandler {
           error: error.message
         });
       }
+
+      // Persist after every created issue so a crash or restart mid-run
+      // cannot lose the count and cause duplicates on the next run
+      if (issueCreated) {
+        await this.saveState(state);
+      }
     }
-    
-    // Save updated state
-    await this.saveState(state);
-    
+
+    // Dry runs must not consume the real daily quota
+    if (!dryRun) {
+      await this.saveState(state);
+    }
+
     return results;
   }
 
@@ -296,7 +341,7 @@ class AdvancedIssueHandler {
     const statuses = [];
     
     for (const repo of repositories) {
-      const repoState = state.repositories[repo.repo] || {};
+      const repoState = state.repositories[this.getRepoKey(repo)] || state.repositories[repo.repo] || {};
       statuses.push({
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: repoState.issuesCreatedToday || 0,
