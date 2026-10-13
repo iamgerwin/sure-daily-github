@@ -2,10 +2,33 @@ import CommitHandler from '../github/commit-handler.js';
 import IssueHandler from '../github/issue-handler.js';
 import AdvancedIssueHandler from '../github/advanced-issue-handler.js';
 import logger from '../utils/logger.js';
+import { acquireRunLock } from '../utils/run-lock.js';
 import config from '../config/loader.js';
 
 class Executor {
   async execute(configOverride = null) {
+    let lock;
+    try {
+      lock = acquireRunLock();
+    } catch (error) {
+      logger.error('Failed to acquire run lock', { error: error.message });
+      return { success: false, error: `Failed to acquire run lock: ${error.message}` };
+    }
+
+    if (!lock.acquired) {
+      const error = `Another execution is already in progress (pid ${lock.holder?.pid ?? 'unknown'})`;
+      logger.warn(error, { holder: lock.holder });
+      return { success: false, locked: true, error };
+    }
+
+    try {
+      return await this.run(configOverride);
+    } finally {
+      lock.release();
+    }
+  }
+
+  async run(configOverride = null) {
     const cfg = configOverride || config.get();
 
     logger.info('Starting execution', {

@@ -38,6 +38,17 @@ Set `SDG_STATE_FILE` to change where state is stored (useful for testing or cust
 export SDG_STATE_FILE=/var/lib/sure-daily-github/state.json
 ```
 
+## Concurrent Runs
+
+Every execution holds an exclusive lock file (`data/run.lock`) for its whole duration, so the scheduler service and a manual `node src/cli.js run` cannot update the state files at the same time. If another live process holds the lock, the run is skipped: `run` exits with an error that shows the holder's PID, and the scheduler logs a warning and waits for the next tick.
+
+A lock left behind by a crashed process is reclaimed automatically when its PID is no longer alive. A lock older than 2 hours is also reclaimed, in case the PID has been reused.
+
+```bash
+export SDG_RUN_LOCK_FILE=/var/lib/sure-daily-github/run.lock   # lock location
+export SDG_RUN_LOCK_STALE_MS=7200000                           # age after which a lock is reclaimed
+```
+
 ## Testing
 
 Run unit tests covering state logic and window resets:
