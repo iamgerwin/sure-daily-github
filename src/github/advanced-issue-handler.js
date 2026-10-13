@@ -1,4 +1,4 @@
-import { Octokit } from '@octokit/rest';
+import { createOctokit } from './octokit.js';
 import logger from '../utils/logger.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -17,7 +17,7 @@ class AdvancedIssueHandler {
 
   async init() {
     try {
-      this.client = new Octokit({ auth: this.token });
+      this.client = createOctokit({ auth: this.token });
       const { data: user } = await this.client.users.getAuthenticated();
       return { success: true, user: user.login };
     } catch (error) {
