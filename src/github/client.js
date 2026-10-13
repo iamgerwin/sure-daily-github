@@ -7,25 +7,10 @@ class GitHubClient {
       throw new Error('GitHub token is required');
     }
 
+    // Rate limit and transient failure retries are handled by createOctokit
     this.octokit = createOctokit({
       auth: token,
-      userAgent: 'sure-daily-github/1.0.0',
-      throttle: {
-        onRateLimit: (retryAfter, options) => {
-          logger.warn(`Rate limit hit, retrying after ${retryAfter}s`, {
-            method: options.method,
-            url: options.url
-          });
-          return true; // Retry once
-        },
-        onSecondaryRateLimit: (retryAfter, options) => {
-          logger.warn(`Secondary rate limit hit`, {
-            method: options.method,
-            url: options.url
-          });
-          return false; // Don't retry
-        }
-      }
+      userAgent: 'sure-daily-github/1.0.0'
     });
 
     this.authenticated = false;
