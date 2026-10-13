@@ -54,7 +54,7 @@ test('GitHub requests are aborted after GITHUB_REQUEST_TIMEOUT_MS', async () => 
 
   process.env.GITHUB_REQUEST_TIMEOUT_MS = '200';
   try {
-    const octokit = createOctokit({ baseUrl: `http://127.0.0.1:${port}` });
+    const octokit = createOctokit({ baseUrl: `http://127.0.0.1:${port}`, retry: { retries: 0 } });
     const started = Date.now();
     await assert.rejects(octokit.request('GET /user'));
     assert.ok(Date.now() - started < 5000, 'request should be aborted quickly');
