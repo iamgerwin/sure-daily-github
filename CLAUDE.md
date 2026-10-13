@@ -8,7 +8,7 @@
 
 ## Pull Requests — MANDATORY
 
-- Every PR opened on this repo MUST use the `create-pr` skill (`skill-draft/SKILL.md`; install to `.claude/skills/create-pr/SKILL.md` for Claude Code discovery): branch naming, title, description template, and `gh` flags.
+- Every PR opened on this repo MUST use the `create-pr` skill (`.claude/skills/create-pr/SKILL.md`): branch naming, title, description template, and `gh` flags.
 
 ## Project
 
