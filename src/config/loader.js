@@ -70,7 +70,19 @@ class ConfigLoader {
         if (repo.repo && !/^[a-zA-Z0-9._-]+$/.test(repo.repo)) {
           errors.push(`Repository ${idx}: invalid repo format`);
         }
+        if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
+          const { min, max } = repo.intervalMinutes;
+          if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max < 1) {
+            errors.push(`Repository ${idx}: intervalMinutes must have positive numeric min and max`);
+          } else if (min > max) {
+            errors.push(`Repository ${idx}: intervalMinutes min cannot be greater than max`);
+          }
+        }
       });
+    }
+
+    if (config.contentTemplates !== undefined && !Array.isArray(config.contentTemplates)) {
+      errors.push('contentTemplates must be an array');
     }
 
     // Validate general settings
@@ -173,13 +185,17 @@ class ConfigLoader {
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',
           labels: repo.labels || ['automated'],
-          weight: repo.weight || 1
+          weight: repo.weight || 1,
+          // Consumed by AdvancedIssueHandler to space issues out across the day
+          intervalMinutes: repo.intervalMinutes || null
         };
       }),
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
         body: 'Progress update for ${date}'
-      }
+      },
+      // Randomly picked per issue by AdvancedIssueHandler
+      contentTemplates: config.contentTemplates || []
     };
   }
 
