@@ -25,7 +25,9 @@ class Scheduler {
     logger.info('Scheduled task triggered');
     try {
       const result = await executor.execute(config);
-      if (!result?.success) {
+      if (result?.locked) {
+        logger.warn('Another process holds the run lock, skipped this run', { error: result.error });
+      } else if (!result?.success) {
         logger.error('Scheduled task failed', { error: result?.error });
       }
       return result;
