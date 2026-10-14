@@ -8,6 +8,10 @@ class IssueHandler {
     this.client = new GitHubClient(token);
   }
 
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async init() {
     const result = await this.client.validate();
     if (!result.success) {
@@ -141,7 +145,7 @@ class IssueHandler {
 
       // Small delay between issues to avoid rate limiting
       if (i < count - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await this.delay(2000);
       }
     }
 
@@ -192,18 +196,20 @@ class IssueHandler {
       if (issueCount > 1) {
         const multiResults = await this.createMultipleIssues(repo, contentTemplate, issueCount, dryRun, config);
 
-        // Aggregate results
+        // Aggregate results; `skipped` stays a boolean so the executor summary
+        // does not count a limit-reached repo as both skipped and failed
         const successful = multiResults.filter(r => r.success && !r.skipped).length;
-        const skipped = multiResults.filter(r => r.skipped).length;
+        const skippedCount = multiResults.filter(r => r.skipped).length;
         const failed = multiResults.filter(r => !r.success).length;
 
         results.push({
           owner: repo.owner,
           repo: repo.repo,
-          success: successful > 0,
+          success: successful > 0 || failed === 0,
+          skipped: successful === 0 && failed === 0 && skippedCount > 0,
           count: issueCount,
           successful,
-          skipped,
+          skippedCount,
           failed,
           details: multiResults
         });
@@ -218,7 +224,7 @@ class IssueHandler {
       }
 
       // Delay between repositories to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await this.delay(1000);
     }
 
     return results;
