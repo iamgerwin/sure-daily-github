@@ -118,3 +118,41 @@ test('selectRoundRobinRepositories rotates from index', () => {
   assert.deepEqual(selected.map(r => r.id), ['b', 'c']);
 });
 
+
+function memoryCursorStore(index = 0) {
+  return {
+    index,
+    getRoundRobinIndex() { return this.index; },
+    setRoundRobinIndex(next) { this.index = next; }
+  };
+}
+
+test('selectRoundRobinRepositories never selects a repository twice', () => {
+  const repos = [{ id: 'a' }, { id: 'b' }];
+  const selected = randomizer.selectRoundRobinRepositories(repos, 5, 1);
+  assert.deepEqual(selected.map(r => r.id), ['b', 'a']);
+});
+
+test('selectRepositories round-robin advances the cursor across runs', () => {
+  const repos = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const store = memoryCursorStore();
+  const cfg = { strategy: 'round-robin', maxPerExecution: 2 };
+
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['a', 'b']);
+  assert.equal(store.index, 2);
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['c', 'a']);
+  assert.equal(store.index, 1);
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['b', 'c']);
+});
+
+test('selectRepositories round-robin wraps a stale cursor and skips disabled repos', () => {
+  const repos = [
+    { id: 'a', enabled: true },
+    { id: 'x', enabled: false },
+    { id: 'b', enabled: true }
+  ];
+  const store = memoryCursorStore(7);
+  const selected = randomizer.selectRepositories(repos, { strategy: 'round-robin', maxPerExecution: 1 }, store);
+  assert.deepEqual(selected.map(r => r.id), ['b']);
+  assert.equal(store.index, 0);
+});

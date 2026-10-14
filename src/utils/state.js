@@ -168,6 +168,17 @@ export class StateManager {
     return { hourly: counters.hourly.count, daily: counters.daily.count, weekly: counters.weekly.count };
   }
 
+  // Round-robin repository selection cursor, persisted so rotation continues across runs
+  getRoundRobinIndex() {
+    const index = this.state.roundRobin?.index;
+    return Number.isInteger(index) && index >= 0 ? index : 0;
+  }
+
+  setRoundRobinIndex(index) {
+    this.state.roundRobin = { index };
+    this.save();
+  }
+
   // Backward compatible methods
   isCommitNeeded(owner, repo, targetCount = 1, timezone = 'UTC', now = new Date()) {
     const { allowed } = this.isWithinLimits(owner, repo, { dailyMax: targetCount }, timezone, now);

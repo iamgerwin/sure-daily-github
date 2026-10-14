@@ -81,3 +81,16 @@ test('Backward compatibility: isCommitNeeded and recordCommit map to daily', () 
   sm.recordCommit(owner, repo, tz);
   assert.equal(sm.isCommitNeeded(owner, repo, 1, tz), false);
 });
+
+test('StateManager persists the round-robin cursor', () => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+  assert.equal(sm.getRoundRobinIndex(), 0);
+
+  sm.setRoundRobinIndex(3);
+  assert.equal(new StateManager({ filePath }).getRoundRobinIndex(), 3);
+
+  // Invalid persisted values fall back to the start of the rotation
+  fs.writeFileSync(filePath, JSON.stringify({ repositories: {}, roundRobin: { index: -2 } }));
+  assert.equal(new StateManager({ filePath }).getRoundRobinIndex(), 0);
+});
