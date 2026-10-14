@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import logger from './logger.js';
+import state from './state.js';
 
 class Randomizer {
   /**
@@ -86,7 +87,7 @@ class Randomizer {
   /**
    * Select repositories based on strategy
    */
-  selectRepositories(repositories, selectionConfig) {
+  selectRepositories(repositories, selectionConfig, cursorStore = state) {
     if (!repositories || repositories.length === 0) {
       return [];
     }
@@ -111,9 +112,12 @@ class Randomizer {
         selectedRepos = this.selectWeightedRepositories(enabledRepos, maxPerExecution);
         break;
 
-      case 'round-robin':
-        selectedRepos = this.selectRoundRobinRepositories(enabledRepos, maxPerExecution);
+      case 'round-robin': {
+        const startIndex = cursorStore.getRoundRobinIndex() % enabledRepos.length;
+        selectedRepos = this.selectRoundRobinRepositories(enabledRepos, maxPerExecution, startIndex);
+        cursorStore.setRoundRobinIndex((startIndex + selectedRepos.length) % enabledRepos.length);
         break;
+      }
 
       case 'sequential':
       default:
@@ -186,7 +190,7 @@ class Randomizer {
 
   /**
    * Select repositories in round-robin fashion
-   * Note: Requires persistent state to maintain round-robin index
+   * Starting at currentIndex, each repository is picked at most once per call
    */
   selectRoundRobinRepositories(repositories, maxCount, currentIndex = 0) {
     if (!repositories || repositories.length === 0) {
@@ -194,7 +198,9 @@ class Randomizer {
     }
 
     const selected = [];
-    const count = maxCount || repositories.length;
+    const count = maxCount && maxCount < repositories.length
+      ? maxCount
+      : repositories.length;
 
     for (let i = 0; i < count; i++) {
       const index = (currentIndex + i) % repositories.length;

@@ -163,6 +163,8 @@ repositorySelection:
   maxPerExecution: 1  # Process one repo at a time
 ```
 
+The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories.
+
 ## Configuration Examples
 
 ### Example 1: Random Daily Activity
