@@ -121,3 +121,71 @@ test('backs up a corrupt state file instead of silently discarding it', async ()
   assert.deepEqual(state.repositories, {});
   assert.ok(fs.readdirSync(dir).some(f => f.startsWith('issue-state.json.corrupt-')));
 });
+
+function writeState(handler, state) {
+  fs.mkdirSync(path.dirname(handler.stateFile), { recursive: true });
+  fs.writeFileSync(handler.stateFile, JSON.stringify(state));
+}
+
+test('status reports today\'s progress when state is from the current day', async () => {
+  const { handler } = createHandler();
+  const next = Date.now() + 60 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 2, lastIssueTime: Date.now(), todayTarget: 3, nextIssueTime: next }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+
+  assert.equal(status.issuesCreatedToday, 2);
+  assert.equal(status.todayTarget, 3);
+  assert.equal(status.nextIssueTime, new Date(next).toISOString());
+});
+
+test('status does not report a previous day\'s progress as today', async () => {
+  const { handler } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, nextIssueTime: yesterday + 1000 }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+
+  assert.equal(status.issuesCreatedToday, 0);
+  assert.equal(status.todayTarget, 'Not set');
+  assert.equal(status.nextIssueTime, 'Any time');
+  // Last issue time is still accurate history
+  assert.equal(status.lastIssueTime, new Date(yesterday).toISOString());
+});
+
+test('status evaluates the day boundary in the configured timezone', async () => {
+  const { handler } = createHandler();
+  // 2026-01-01T23:30Z is already Jan 2 in Asia/Manila (UTC+8) but still Jan 1 in UTC
+  const reset = new Date('2026-01-01T15:00:00Z');
+  const now = new Date('2026-01-01T23:30:00Z');
+  writeState(handler, {
+    lastDailyReset: reset.toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: reset.getTime(), todayTarget: 3, nextIssueTime: null }
+    }
+  });
+
+  const RealDate = global.Date;
+  global.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [now.getTime()])); }
+    static now() { return now.getTime(); }
+  };
+  try {
+    const utc = await handler.getStatus([repo()], 'UTC');
+    const manila = await handler.getStatus([repo()], 'Asia/Manila');
+    assert.equal(utc.repositories[0].issuesCreatedToday, 1);
+    assert.equal(manila.repositories[0].issuesCreatedToday, 0);
+  } finally {
+    global.Date = RealDate;
+  }
+});

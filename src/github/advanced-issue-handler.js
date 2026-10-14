@@ -336,18 +336,21 @@ class AdvancedIssueHandler {
     return results;
   }
 
-  async getStatus(repositories) {
+  async getStatus(repositories, timezone = 'UTC') {
     const state = await this.loadState();
     const statuses = [];
-    
+    // State from a previous day is only cleared by the next run; report what that run will see
+    const stale = this.shouldResetDaily(state, timezone);
+
     for (const repo of repositories) {
       const repoState = state.repositories[this.getRepoKey(repo)] || state.repositories[repo.repo] || {};
+      const todayState = stale ? {} : repoState;
       statuses.push({
         repo: `${repo.owner}/${repo.repo}`,
-        issuesCreatedToday: repoState.issuesCreatedToday || 0,
-        todayTarget: repoState.todayTarget || 'Not set',
+        issuesCreatedToday: todayState.issuesCreatedToday || 0,
+        todayTarget: todayState.todayTarget || 'Not set',
         lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: repoState.nextIssueTime ? new Date(repoState.nextIssueTime).toISOString() : 'Any time'
+        nextIssueTime: todayState.nextIssueTime ? new Date(todayState.nextIssueTime).toISOString() : 'Any time'
       });
     }
     
