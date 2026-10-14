@@ -56,3 +56,13 @@ test('getStatus reports a numeric target for normalized dailyTarget', async () =
   assert.equal(status.target, 2);
   assert.equal(status.needsCommit, true);
 });
+
+test('getStatus counts issue actions toward today (simple issue mode)', async () => {
+  const handler = new CommitHandler('ghp_test');
+  state.recordAction('me', 'issues', { type: 'issue' });
+  state.recordAction('me', 'issues', { type: 'issue' });
+
+  const [status] = await handler.getStatus([{ ...repoConfig, repo: 'issues' }]);
+  assert.equal(status.today, 2);
+  assert.equal(status.needsCommit, false);
+});
