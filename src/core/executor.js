@@ -124,7 +124,7 @@ class Executor {
         ? new AdvancedIssueHandler(token)
         : new CommitHandler(token);
 
-      const status = await handler.getStatus(cfg.repositories);
+      const status = await handler.getStatus(cfg.repositories, cfg.general.timezone);
       return { success: true, status };
     } catch (error) {
       logger.error('Failed to get status', { error: error.message });

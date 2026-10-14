@@ -138,13 +138,14 @@ class CommitHandler {
     for (const repo of repositories) {
       const repoState = state.getRepoState(repo.owner, repo.repo);
       const target = this.resolveDailyMax(repo.dailyTarget);
-      const needsCommit = state.isCommitNeeded(repo.owner, repo.repo, target, timezone);
+      // Daily window counter covers both commits and issues (simple issue mode reuses this status)
+      const { allowed: needsCommit, counts } = state.isWithinLimits(repo.owner, repo.repo, { dailyMax: target }, timezone);
 
       status.push({
         owner: repo.owner,
         repo: repo.repo,
         target,
-        today: repoState.commitsToday,
+        today: counts.daily,
         total: repoState.totalCommits,
         lastCommit: repoState.lastCommitDate,
         needsCommit
