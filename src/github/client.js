@@ -1,6 +1,19 @@
 import { createOctokit } from './octokit.js';
 import logger from '../utils/logger.js';
 
+// The contents API 404s on empty path segments ("a//b.md"), which a configured
+// path with a trailing or doubled slash would otherwise produce for every commit
+export function normalizeRepoPath(filePath) {
+  const segments = String(filePath ?? '').split('/').filter(Boolean);
+  if (segments.length === 0) {
+    throw new Error(`Invalid repository file path: "${filePath}"`);
+  }
+  if (segments.some(segment => segment === '.' || segment === '..')) {
+    throw new Error(`Repository file path must not contain "." or ".." segments: "${filePath}"`);
+  }
+  return segments.join('/');
+}
+
 class GitHubClient {
   constructor(token) {
     if (!token) {
@@ -58,6 +71,7 @@ class GitHubClient {
 
   async getFile(owner, repo, path, branch = 'main') {
     try {
+      path = normalizeRepoPath(path);
       const { data } = await this.octokit.rest.repos.getContent({
         owner,
         repo,
@@ -76,6 +90,8 @@ class GitHubClient {
 
   async createOrUpdateFile(owner, repo, path, content, message, branch = 'main') {
     try {
+      path = normalizeRepoPath(path);
+
       // Check if file exists
       const existingFile = await this.getFile(owner, repo, path, branch);
 
