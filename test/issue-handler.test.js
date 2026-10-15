@@ -83,3 +83,22 @@ test('run where issue creation fails is reported as failed', async () => {
   assert.equal(results[0].failed, 1);
   assert.deepEqual(summarize(results), { successful: 0, skipped: 0, failed: 1 });
 });
+
+test('generateIssueContent renders date and time in the configured timezone', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-14T23:30:05Z');
+
+  const content = handler.generateIssueContent({ title: 'Update ${date}', body: '${time} ${timestamp}' }, 'Asia/Manila', now);
+
+  assert.deepEqual(content, { title: 'Update 2026-10-15', body: '07:30:05 2026-10-14T23:30:05.000Z' });
+});
+
+test('createDailyIssue passes the configured timezone to issue templates', async () => {
+  const { handler, calls } = createHandler();
+  const timezone = 'Pacific/Kiritimati';
+  const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
+  await handler.createDailyIssue(repoConfig('tz'), { title: '${date}' }, false, null, { general: { timezone } });
+
+  assert.equal(calls[0].title, localDate);
+});

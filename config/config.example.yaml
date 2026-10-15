@@ -119,7 +119,7 @@ repositories:
 # Content Template
 # ========================================
 contentTemplate:
-  # Variables: ${date}, ${time}, ${timestamp}
+  # Variables: ${date}, ${time} (in general.timezone), ${timestamp} (UTC ISO)
   title: "Daily Update"
   body: |
     # Daily Progress - ${date}

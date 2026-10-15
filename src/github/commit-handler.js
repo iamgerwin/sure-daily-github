@@ -1,6 +1,7 @@
 import GitHubClient from './client.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
+import { getTemplateDateParts } from '../utils/template-date.js';
 
 class CommitHandler {
   constructor(token) {
@@ -15,11 +16,8 @@ class CommitHandler {
     return result;
   }
 
-  generateContent(template) {
-    const now = new Date();
-    const date = now.toISOString().split('T')[0];
-    const time = now.toTimeString().split(' ')[0];
-    const timestamp = now.toISOString();
+  generateContent(template, timezone = 'UTC', now = new Date()) {
+    const { date, time, timestamp } = getTemplateDateParts(timezone, now);
 
     const content = template.body || `# Daily Update\n\nProgress update for ${date}`;
 
@@ -29,8 +27,8 @@ class CommitHandler {
       .replace(/\$\{timestamp\}/g, timestamp);
   }
 
-  generateCommitMessage(template, repo) {
-    const date = new Date().toISOString().split('T')[0];
+  generateCommitMessage(template, repo, timezone = 'UTC', now = new Date()) {
+    const { date } = getTemplateDateParts(timezone, now);
     const message = template || `docs: daily update ${date}`;
 
     return message
@@ -38,9 +36,9 @@ class CommitHandler {
       .replace(/\$\{repo\}/g, repo);
   }
 
-  generateFilePath(basePath, repo) {
-    const date = new Date().toISOString().split('T')[0];
-    const timestamp = Date.now();
+  generateFilePath(basePath, repo, timezone = 'UTC', now = new Date()) {
+    const { date } = getTemplateDateParts(timezone, now);
+    const timestamp = now.getTime();
 
     // Create unique filename with date and timestamp
     return `${basePath}/${date}-${timestamp}.md`;
@@ -70,9 +68,9 @@ class CommitHandler {
       }
 
       // Generate content and commit details
-      const content = this.generateContent(contentTemplate);
-      const message = this.generateCommitMessage(commitMessage, repo);
-      const filePath = this.generateFilePath(basePath, repo);
+      const content = this.generateContent(contentTemplate, timezone);
+      const message = this.generateCommitMessage(commitMessage, repo, timezone);
+      const filePath = this.generateFilePath(basePath, repo, timezone);
 
       // Create commit
       const result = await this.client.createOrUpdateFile(
