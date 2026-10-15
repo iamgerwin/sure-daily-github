@@ -204,7 +204,8 @@ class ConfigLoader {
           owner: repo.owner,
           repo: repo.repo,
           enabled: repo.enabled !== false,
-          branch: repo.branch || 'main',
+          // Unset means the repository's default branch, resolved by GitHub
+          branch: repo.branch || null,
           dailyTarget: normalizeDailyTarget(repoTarget),
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',

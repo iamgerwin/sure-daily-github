@@ -221,7 +221,7 @@ repositorySelection:
 | `owner` | string | ✅ | GitHub username/organization |
 | `repo` | string | ✅ | Repository name |
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
-| `branch` | string | ❌ | Target branch (default: main) |
+| `branch` | string | ❌ | Target branch (default: the repository's default branch) |
 | `dailyTarget` | number or range | ❌ | Override global target |
 | `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template |
