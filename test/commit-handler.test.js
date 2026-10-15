@@ -66,3 +66,35 @@ test('getStatus counts issue actions toward today (simple issue mode)', async ()
   assert.equal(status.today, 2);
   assert.equal(status.needsCommit, false);
 });
+
+test('commit message, file path and content use the configured timezone date', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const now = new Date('2026-10-14T23:30:05Z');
+
+  assert.equal(handler.generateCommitMessage('docs: ${date} ${repo}', 'demo', 'Asia/Manila', now), 'docs: 2026-10-15 demo');
+  assert.equal(handler.generateFilePath('daily', 'demo', 'Asia/Manila', now), `daily/2026-10-15-${now.getTime()}.md`);
+  assert.equal(handler.generateContent({ body: '${date} ${time}' }, 'Asia/Manila', now), '2026-10-15 07:30:05');
+});
+
+test('createDailyCommit renders templates in the configured timezone', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.client = {
+    createOrUpdateFile: async (...args) => {
+      calls.push(args);
+      return { success: true, data: { commit: { sha: 'sha' } } };
+    }
+  };
+  // Pick a zone whose local date differs from UTC right now
+  const utcDate = new Date().toISOString().split('T')[0];
+  const timezone = ['Pacific/Kiritimati', 'Pacific/Pago_Pago']
+    .find(tz => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date()) !== utcDate);
+  const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
+  await handler.createDailyCommit({ ...repoConfig, repo: 'tz' }, { body: '${date}' }, false, timezone);
+
+  const [, , filePath, content, message] = calls[0];
+  assert.equal(message, `docs: daily update ${localDate}`);
+  assert.equal(content, localDate);
+  assert.ok(filePath.startsWith(`daily-updates/${localDate}-`));
+});

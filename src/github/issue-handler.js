@@ -2,6 +2,7 @@ import GitHubClient from './client.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
+import { getTemplateDateParts } from '../utils/template-date.js';
 
 class IssueHandler {
   constructor(token) {
@@ -20,11 +21,8 @@ class IssueHandler {
     return result;
   }
 
-  generateIssueContent(template) {
-    const now = new Date();
-    const date = now.toISOString().split('T')[0];
-    const time = now.toTimeString().split(' ')[0];
-    const timestamp = now.toISOString();
+  generateIssueContent(template, timezone = 'UTC', now = new Date()) {
+    const { date, time, timestamp } = getTemplateDateParts(timezone, now);
 
     const title = template.title || `Daily Update - ${date}`;
     const body = template.body || `# Daily Update\n\nAutomated update for ${date}`;
@@ -101,7 +99,7 @@ class IssueHandler {
       }
 
       // Generate issue content
-      const { title, body } = this.generateIssueContent(contentTemplate);
+      const { title, body } = this.generateIssueContent(contentTemplate, timezone);
       const labels = repoConfig.labels || ['automated'];
 
       // Create issue
