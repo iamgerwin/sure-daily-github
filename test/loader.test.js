@@ -46,3 +46,42 @@ test('validate rejects non-array contentTemplates', () => {
     /contentTemplates must be an array/
   );
 });
+
+test('validate rejects an unknown general.mode instead of falling back to commit mode', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], general: { mode: 'issues' } }),
+    /general\.mode must be one of: commit, issue/
+  );
+});
+
+test('validate accepts commit and issue modes and defaults to commit', () => {
+  assert.equal(config.validate({ repositories: [baseRepo], general: { mode: 'issue' } }).general.mode, 'issue');
+  assert.equal(config.validate({ repositories: [baseRepo], general: { mode: 'commit' } }).general.mode, 'commit');
+  assert.equal(config.validate({ repositories: [baseRepo] }).general.mode, 'commit');
+});
+
+test('validate rejects invalid general and schedule timezones', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], general: { timezone: 'Asia/Manilla' } }),
+    /general\.timezone is not a valid IANA timezone: Asia\/Manilla/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], schedule: { enabled: true, cron: '0 9 * * *', timezone: 'Mars/Base' } }),
+    /schedule\.timezone is not a valid IANA timezone: Mars\/Base/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], general: { timezone: 8 } }),
+    /general\.timezone is not a valid IANA timezone/
+  );
+});
+
+test('validate accepts valid timezones and defaults general.timezone to UTC', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    general: { timezone: 'Asia/Manila' },
+    schedule: { enabled: true, cron: '0 9 * * *', timezone: 'America/New_York' }
+  });
+  assert.equal(cfg.general.timezone, 'Asia/Manila');
+  assert.equal(cfg.schedule.timezone, 'America/New_York');
+  assert.equal(config.validate({ repositories: [baseRepo] }).general.timezone, 'UTC');
+});
