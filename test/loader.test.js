@@ -85,3 +85,24 @@ test('validate accepts valid timezones and defaults general.timezone to UTC', ()
   assert.equal(cfg.schedule.timezone, 'America/New_York');
   assert.equal(config.validate({ repositories: [baseRepo] }).general.timezone, 'UTC');
 });
+
+test('validate rejects an empty or non-mapping config with a readable error', () => {
+  for (const raw of [undefined, null, 'repositories', ['me/demo']]) {
+    assert.throws(
+      () => config.validate(raw),
+      /Configuration file must contain a YAML mapping/
+    );
+  }
+});
+
+test('validate reports null or non-object repository entries instead of throwing a TypeError', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo, null, 'me/other'] }),
+    (error) => {
+      assert.match(error.message, /Repository 1: must be a mapping with owner and repo/);
+      assert.match(error.message, /Repository 2: must be a mapping with owner and repo/);
+      assert.doesNotMatch(error.message, /Repository 0/);
+      return true;
+    }
+  );
+});

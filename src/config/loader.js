@@ -55,6 +55,12 @@ class ConfigLoader {
   }
 
   validate(config) {
+    // An empty file parses to undefined and a top-level list or scalar has no
+    // keys, so fail with a readable message instead of a TypeError below
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new Error('Configuration validation failed:\nConfiguration file must contain a YAML mapping (e.g. "repositories:")');
+    }
+
     const errors = [];
 
     // Validate GitHub token
@@ -72,6 +78,11 @@ class ConfigLoader {
       errors.push('At least one repository must be configured');
     } else {
       config.repositories.forEach((repo, idx) => {
+        // A bare "-" list item parses to null and would crash the checks below
+        if (!repo || typeof repo !== 'object' || Array.isArray(repo)) {
+          errors.push(`Repository ${idx}: must be a mapping with owner and repo`);
+          return;
+        }
         if (!repo.owner) errors.push(`Repository ${idx}: owner is required`);
         if (!repo.repo) errors.push(`Repository ${idx}: repo is required`);
         if (repo.owner && !/^[a-zA-Z0-9-]+$/.test(repo.owner)) {
