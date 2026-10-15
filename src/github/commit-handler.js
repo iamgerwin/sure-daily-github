@@ -1,11 +1,16 @@
 import GitHubClient from './client.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
+import randomizer from '../utils/randomizer.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
 
 class CommitHandler {
   constructor(token) {
     this.client = new GitHubClient(token);
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async init() {
@@ -106,16 +111,35 @@ class CommitHandler {
   async processRepositories(repositories, contentTemplate, dryRun = false, config = {}) {
     const results = [];
     const timezone = config?.general?.timezone || 'UTC';
+    const enabled = repositories.filter(repo => repo.enabled);
 
-    for (const repo of repositories) {
-      if (!repo.enabled) {
-        logger.debug('Repository disabled, skipping', {
-          owner: repo.owner,
-          repo: repo.repo
-        });
-        continue;
+    // Apply repositorySelection only to repos that still need a commit today,
+    // so maxPerExecution slots are not spent on repos whose target is met
+    const ready = [];
+    for (const repo of enabled) {
+      if (state.isCommitNeeded(repo.owner, repo.repo, this.resolveDailyMax(repo.dailyTarget), timezone)) {
+        ready.push(repo);
+      } else {
+        logger.info('Daily target already met', { owner: repo.owner, repo: repo.repo, target: repo.dailyTarget });
+        results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'target_met' });
       }
+    }
 
+    const selected = randomizer.selectRepositories(ready, config?.repositorySelection);
+    for (const repo of ready) {
+      if (!selected.includes(repo)) {
+        results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });
+      }
+    }
+
+    logger.info('Processing repositories', {
+      total: repositories.length,
+      ready: ready.length,
+      selected: selected.length,
+      strategy: config?.repositorySelection?.strategy || 'sequential'
+    });
+
+    for (const repo of selected) {
       const result = await this.createDailyCommit(repo, contentTemplate, dryRun, timezone);
       results.push({
         owner: repo.owner,
@@ -124,7 +148,7 @@ class CommitHandler {
       });
 
       // Small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await this.delay(1000);
     }
 
     return results;
