@@ -1,5 +1,7 @@
 import { createOctokit } from './octokit.js';
 import logger from '../utils/logger.js';
+import randomizer from '../utils/randomizer.js';
+import stateManager from '../utils/state.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -13,6 +15,8 @@ class AdvancedIssueHandler {
     this.token = token;
     this.client = null;
     this.stateFile = process.env.SDG_ISSUE_STATE_FILE || DEFAULT_STATE_FILE;
+    // Persists the round-robin cursor shared with the simple issue handler
+    this.cursorStore = stateManager;
   }
 
   async init() {
@@ -174,7 +178,8 @@ class AdvancedIssueHandler {
     
     const results = [];
     const now = Date.now();
-    
+    const ready = [];
+
     for (const repo of repositories) {
       if (!repo.enabled) {
         results.push({
@@ -197,8 +202,7 @@ class AdvancedIssueHandler {
       }
 
       const repoState = this.getRepoState(state, repo);
-      let issueCreated = false;
-      
+
       // Determine today's target if not set
       if (repoState.todayTarget === null && repo.dailyTarget) {
         if (typeof repo.dailyTarget === 'object') {
@@ -231,7 +235,29 @@ class AdvancedIssueHandler {
         });
         continue;
       }
-      
+
+      ready.push(repo);
+    }
+
+    // Apply repositorySelection (strategy, maxPerExecution) to the repositories
+    // that can take an issue now, so selection slots are not spent on repos
+    // that are done for the day or still waiting for their interval
+    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore);
+    for (const repo of ready) {
+      if (!selected.includes(repo)) {
+        results.push({
+          success: true,
+          skipped: true,
+          repo: `${repo.owner}/${repo.repo}`,
+          reason: 'Not selected this run'
+        });
+      }
+    }
+
+    for (const repo of selected) {
+      const repoState = this.getRepoState(state, repo);
+      let issueCreated = false;
+
       try {
         // Generate issue content
         const issueContent = this.generateIssueContent(repo, fullConfig);
