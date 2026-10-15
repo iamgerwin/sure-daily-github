@@ -5,6 +5,16 @@ import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import config from '../config/loader.js';
 
+// The config loader normalizes every dailyTarget to { min, max }, so a plain
+// object check would route all issue-mode configs to the advanced handler.
+// Only per-repo intervals or a real range need its once-a-day target roll.
+export function usesAdvancedIssueHandler(repositories = []) {
+  return repositories.some(r =>
+    r.intervalMinutes
+    || (r.dailyTarget && typeof r.dailyTarget === 'object' && r.dailyTarget.min !== r.dailyTarget.max)
+  );
+}
+
 class Executor {
   async execute(configOverride = null) {
     let lock;
@@ -45,12 +55,7 @@ class Executor {
       // Choose handler based on mode
       let handler;
       if (mode === 'issue') {
-        // Check if we should use advanced issue handler
-        const hasAdvancedConfig = cfg.repositories.some(r => 
-          r.intervalMinutes || (typeof r.dailyTarget === 'object')
-        );
-        
-        if (hasAdvancedConfig) {
+        if (usesAdvancedIssueHandler(cfg.repositories)) {
           handler = new AdvancedIssueHandler(token);
           logger.info('Using advanced issue handler with randomization');
         } else {
@@ -115,12 +120,7 @@ class Executor {
         return { success: true, status };
       }
 
-      // Use advanced handler if available
-      const hasAdvancedConfig = cfg.repositories.some(r =>
-        r.intervalMinutes || (typeof r.dailyTarget === 'object')
-      );
-
-      const handler = hasAdvancedConfig
+      const handler = usesAdvancedIssueHandler(cfg.repositories)
         ? new AdvancedIssueHandler(token)
         : new CommitHandler(token);
 
