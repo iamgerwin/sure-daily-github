@@ -108,6 +108,8 @@ Control which repositories are processed during each execution.
 
 > If `repositorySelection` is omitted, the default strategy is `sequential` and all enabled repositories are processed in order, preserving original behavior.
 
+> In issue mode with range targets or `intervalMinutes` (the advanced issue handler), selection is applied only to repositories that can take an issue right now. Repositories that have reached today's target or are still waiting for their interval are skipped first, so `maxPerExecution` slots are never spent on them. Ready repositories left out by the strategy are reported as skipped with reason `Not selected this run`.
+
 ### Sequential (Default)
 
 Process all repositories in order:

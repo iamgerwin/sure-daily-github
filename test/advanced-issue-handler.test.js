@@ -189,3 +189,56 @@ test('status evaluates the day boundary in the configured timezone', async () =>
     global.Date = RealDate;
   }
 });
+
+test('honors repositorySelection.maxPerExecution', async () => {
+  const { handler, created } = createHandler();
+  const repos = ['a', 'b', 'c'].map(name => repo({ repo: name }));
+  const cfg = { ...config, repositorySelection: { strategy: 'sequential', maxPerExecution: 1 } };
+
+  const results = await handler.processRepositories(repos, {}, false, cfg);
+
+  assert.deepEqual(created.map(c => c.repo), ['a']);
+  const notSelected = results.filter(r => r.reason === 'Not selected this run').map(r => r.repo);
+  assert.deepEqual(notSelected, ['me/b', 'me/c']);
+});
+
+test('round-robin rotates through repositories across runs', async () => {
+  const { handler, created } = createHandler();
+  const cursor = { index: 0 };
+  handler.cursorStore = {
+    getRoundRobinIndex: () => cursor.index,
+    setRoundRobinIndex: (index) => { cursor.index = index; }
+  };
+  const repos = ['a', 'b', 'c'].map(name => repo({ repo: name }));
+  const cfg = { ...config, repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+
+  for (let i = 0; i < 4; i++) {
+    await handler.processRepositories(repos, {}, false, cfg);
+  }
+
+  assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c', 'a']);
+});
+
+test('selection only spends slots on repositories that can take an issue now', async () => {
+  const { handler, created } = createHandler();
+  const repos = [
+    repo({ repo: 'done', dailyTarget: { min: 1, max: 1 } }),
+    repo({ repo: 'open' })
+  ];
+  const cfg = { ...config, repositorySelection: { strategy: 'sequential', maxPerExecution: 1 } };
+
+  await handler.processRepositories(repos, {}, false, cfg);
+  await handler.processRepositories(repos, {}, false, cfg);
+
+  // First run fills 'done'; second run must not waste its only slot on it
+  assert.deepEqual(created.map(c => c.repo), ['done', 'open']);
+});
+
+test('processes every ready repository when repositorySelection is omitted', async () => {
+  const { handler, created } = createHandler();
+  const repos = ['a', 'b', 'c'].map(name => repo({ repo: name }));
+
+  await handler.processRepositories(repos, {}, false, config);
+
+  assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c']);
+});
