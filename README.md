@@ -223,7 +223,7 @@ repositorySelection:
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
 | `branch` | string | ❌ | Target branch (default: main) |
 | `dailyTarget` | number or range | ❌ | Override global target |
-| `path` | string | ❌ | Path for commits (default: daily-updates) |
+| `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
 | `weight` | number | ❌ | Weight for weighted selection (default: 1) |
