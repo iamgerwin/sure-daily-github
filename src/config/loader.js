@@ -10,6 +10,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load environment variables
 dotenv.config();
 
+function isValidTimezone(timezone) {
+  if (typeof timezone !== 'string') return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 class ConfigLoader {
   constructor() {
     this.config = null;
@@ -87,6 +97,20 @@ class ConfigLoader {
 
     // Validate general settings
     const general = config.general || {};
+
+    // An unknown mode would otherwise silently fall back to commit mode
+    const validModes = ['commit', 'issue'];
+    if (general.mode && !validModes.includes(general.mode)) {
+      errors.push(`general.mode must be one of: ${validModes.join(', ')}`);
+    }
+
+    // An invalid timezone would otherwise make every run throw a RangeError
+    if (general.timezone && !isValidTimezone(general.timezone)) {
+      errors.push(`general.timezone is not a valid IANA timezone: ${general.timezone}`);
+    }
+    if (config.schedule?.timezone && !isValidTimezone(config.schedule.timezone)) {
+      errors.push(`schedule.timezone is not a valid IANA timezone: ${config.schedule.timezone}`);
+    }
 
     // Validate dailyTarget (can be number or range object)
     if (general.dailyTarget) {
