@@ -36,13 +36,18 @@ export class StateManager {
   }
 
   save() {
+    const tmpFile = `${this.filePath}.${process.pid}.tmp`;
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2));
+      // Write-then-rename so a crash mid-write cannot leave truncated JSON behind,
+      // which load() would treat as corrupt and reset every counter to zero
+      fs.writeFileSync(tmpFile, JSON.stringify(this.state, null, 2));
+      fs.renameSync(tmpFile, this.filePath);
     } catch (error) {
+      try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
       console.error('Error saving state:', error.message);
     }
   }

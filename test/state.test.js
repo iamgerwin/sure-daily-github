@@ -94,3 +94,35 @@ test('StateManager persists the round-robin cursor', () => {
   fs.writeFileSync(filePath, JSON.stringify({ repositories: {}, roundRobin: { index: -2 } }));
   assert.equal(new StateManager({ filePath }).getRoundRobinIndex(), 0);
 });
+
+test('save writes atomically and leaves no temp file behind', () => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(parsed.repositories['me/demo'].totals.commits, 1);
+  assert.deepEqual(fs.readdirSync(path.dirname(filePath)), [path.basename(filePath)]);
+});
+
+test('crash mid-write keeps the previous state file intact and cleans up the temp file', (t) => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+
+  // Simulate the process dying halfway through serializing the state
+  const realWrite = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', (file, data) => {
+    realWrite(file, String(data).slice(0, 10));
+    throw new Error('simulated crash');
+  });
+  t.mock.method(console, 'error', () => {});
+
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+  fs.writeFileSync.mock.restore();
+
+  assert.deepEqual(fs.readdirSync(path.dirname(filePath)), [path.basename(filePath)]);
+  const reloaded = new StateManager({ filePath });
+  assert.equal(reloaded.getRepoState('me', 'demo').totals.commits, 1);
+});
