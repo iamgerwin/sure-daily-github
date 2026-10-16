@@ -11,7 +11,7 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
 - Totals
   - `totals.issues`, `totals.commits`
 - Backward compatibility
-  - Legacy fields `lastCommitDate`, `commitsToday`, `totalCommits` are maintained.
+  - Legacy fields `lastCommitDate`, `commitsToday`, `totalCommits` are maintained. `lastCommitDate` is the timezone-local date of the most recent recorded commit (`null` until the first commit); it does not change when a new day's window opens.
 
 ## Timezone
 
