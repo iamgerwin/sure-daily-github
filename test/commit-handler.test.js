@@ -67,6 +67,15 @@ test('getStatus counts issue actions toward today (simple issue mode)', async ()
   assert.equal(status.needsCommit, false);
 });
 
+test('getStatus does not report a commit for a repository that never committed', async () => {
+  const handler = new CommitHandler('ghp_test');
+  state.recordAction('me', 'no-commits', { type: 'issue' });
+
+  const [status] = await handler.getStatus([{ ...repoConfig, repo: 'no-commits' }]);
+  assert.equal(status.lastCommit, null);
+  assert.equal(status.total, 0);
+});
+
 test('commit message, file path and content use the configured timezone date', async () => {
   const handler = new CommitHandler('ghp_test');
   const now = new Date('2026-10-14T23:30:05Z');
