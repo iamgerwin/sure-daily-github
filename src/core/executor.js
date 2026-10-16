@@ -15,6 +15,23 @@ export function usesAdvancedIssueHandler(repositories = []) {
   );
 }
 
+// A run that completes but fails some repositories must still exit non-zero,
+// otherwise cron and systemd report every failed commit/issue as a success
+export function getRunExitCode(result) {
+  if (!result?.success) return 1;
+  return result.summary?.failed > 0 ? 1 : 0;
+}
+
+// One "owner/repo: reason" line per failed repository for the CLI summary
+export function describeFailures(results = []) {
+  return results
+    .filter(r => !r.success)
+    .map(r => {
+      const error = r.error || r.details?.find(d => d && !d.success)?.error || 'unknown error';
+      return `${r.owner}/${r.repo}: ${error}`;
+    });
+}
+
 class Executor {
   async execute(configOverride = null) {
     let lock;
