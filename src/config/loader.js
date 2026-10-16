@@ -20,6 +20,27 @@ function isValidTimezone(timezone) {
   }
 }
 
+const isTargetCount = (value) => Number.isInteger(value) && value >= 1 && value <= 100;
+
+// Accepts a whole number or a { min, max } range, each value within 1-100
+function validateDailyTarget(target, label, errors) {
+  if (typeof target === 'number') {
+    if (!isTargetCount(target)) {
+      errors.push(`${label} must be a whole number between 1 and 100`);
+    }
+  } else if (target && typeof target === 'object' && !Array.isArray(target)) {
+    if (target.min === undefined || target.min === null || target.max === undefined || target.max === null) {
+      errors.push(`${label} range must have min and max values`);
+    } else if (!isTargetCount(target.min) || !isTargetCount(target.max)) {
+      errors.push(`${label} range must be whole numbers between 1 and 100`);
+    } else if (target.min > target.max) {
+      errors.push(`${label} min cannot be greater than max`);
+    }
+  } else {
+    errors.push(`${label} must be a number or a { min, max } range`);
+  }
+}
+
 class ConfigLoader {
   constructor() {
     this.config = null;
@@ -99,6 +120,11 @@ class ConfigLoader {
             errors.push(`Repository ${idx}: intervalMinutes min cannot be greater than max`);
           }
         }
+        // An invalid per-repo range would otherwise crash the run in randomInt
+        // or be silently replaced with a target of 1
+        if (repo.dailyTarget !== undefined && repo.dailyTarget !== null) {
+          validateDailyTarget(repo.dailyTarget, `Repository ${idx}: dailyTarget`, errors);
+        }
       });
     }
 
@@ -124,22 +150,8 @@ class ConfigLoader {
     }
 
     // Validate dailyTarget (can be number or range object)
-    if (general.dailyTarget) {
-      if (typeof general.dailyTarget === 'number') {
-        if (general.dailyTarget < 1 || general.dailyTarget > 100) {
-          errors.push('dailyTarget must be between 1 and 100');
-        }
-      } else if (typeof general.dailyTarget === 'object') {
-        if (!general.dailyTarget.min || !general.dailyTarget.max) {
-          errors.push('dailyTarget range must have min and max values');
-        }
-        if (general.dailyTarget.min < 1 || general.dailyTarget.max > 100) {
-          errors.push('dailyTarget range must be between 1 and 100');
-        }
-        if (general.dailyTarget.min > general.dailyTarget.max) {
-          errors.push('dailyTarget min cannot be greater than max');
-        }
-      }
+    if (general.dailyTarget !== undefined && general.dailyTarget !== null) {
+      validateDailyTarget(general.dailyTarget, 'dailyTarget', errors);
     }
 
     // Validate randomization settings
