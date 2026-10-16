@@ -98,3 +98,73 @@ test('createDailyCommit renders templates in the configured timezone', async () 
   assert.equal(content, localDate);
   assert.ok(filePath.startsWith(`daily-updates/${localDate}-`));
 });
+
+function stubbedHandler() {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.delay = async () => {};
+  handler.client = {
+    createOrUpdateFile: async (owner, repo) => {
+      calls.push(repo);
+      return { success: true, data: { commit: { sha: 'sha' } } };
+    }
+  };
+  return { handler, calls };
+}
+
+const selectionRepos = ['sel-a', 'sel-b', 'sel-c'].map(repo => ({ ...repoConfig, repo, dailyTarget: { min: 1, max: 1 } }));
+
+test('processRepositories commits to every enabled repo when repositorySelection is omitted', async () => {
+  const { handler, calls } = stubbedHandler();
+  const repos = [
+    ...selectionRepos.map(r => ({ ...r, repo: `all-${r.repo}` })),
+    { ...repoConfig, repo: 'all-disabled', enabled: false }
+  ];
+
+  const results = await handler.processRepositories(repos, {}, false, {});
+
+  assert.deepEqual(calls, ['all-sel-a', 'all-sel-b', 'all-sel-c']);
+  assert.equal(results.length, 3);
+  assert.ok(results.every(r => r.success && !r.skipped));
+});
+
+test('processRepositories honors repositorySelection.maxPerExecution in commit mode', async () => {
+  const { handler, calls } = stubbedHandler();
+  const repos = selectionRepos.map(r => ({ ...r, repo: `max-${r.repo}` }));
+
+  const results = await handler.processRepositories(repos, {}, false, {
+    repositorySelection: { strategy: 'sequential', maxPerExecution: 1 }
+  });
+
+  assert.deepEqual(calls, ['max-sel-a']);
+  const notSelected = results.filter(r => r.reason === 'not_selected').map(r => r.repo);
+  assert.deepEqual(notSelected, ['max-sel-b', 'max-sel-c']);
+  assert.ok(results.every(r => r.success));
+});
+
+test('processRepositories does not spend selection slots on repos whose target is met', async () => {
+  const { handler, calls } = stubbedHandler();
+  const repos = selectionRepos.map(r => ({ ...r, repo: `met-${r.repo}` }));
+  state.recordCommit('me', 'met-sel-a');
+
+  const results = await handler.processRepositories(repos, {}, false, {
+    repositorySelection: { strategy: 'sequential', maxPerExecution: 1 }
+  });
+
+  assert.deepEqual(calls, ['met-sel-b']);
+  assert.equal(results.find(r => r.repo === 'met-sel-a').reason, 'target_met');
+  assert.equal(results.find(r => r.repo === 'met-sel-c').reason, 'not_selected');
+});
+
+test('processRepositories rotates repos across runs with round-robin in commit mode', async () => {
+  const { handler, calls } = stubbedHandler();
+  const repos = selectionRepos.map(r => ({ ...r, repo: `rr-${r.repo}`, dailyTarget: { min: 5, max: 5 } }));
+  const config = { repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+  state.setRoundRobinIndex(0);
+
+  await handler.processRepositories(repos, {}, false, config);
+  await handler.processRepositories(repos, {}, false, config);
+  await handler.processRepositories(repos, {}, false, config);
+
+  assert.deepEqual(calls, ['rr-sel-a', 'rr-sel-b', 'rr-sel-c']);
+});
