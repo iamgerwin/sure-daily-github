@@ -85,3 +85,56 @@ test('validate accepts valid timezones and defaults general.timezone to UTC', ()
   assert.equal(cfg.schedule.timezone, 'America/New_York');
   assert.equal(config.validate({ repositories: [baseRepo] }).general.timezone, 'UTC');
 });
+
+test('validate rejects an inverted per-repo dailyTarget range instead of crashing at run time', () => {
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: { min: 5, max: 2 } }] }),
+    /Repository 0: dailyTarget min cannot be greater than max/
+  );
+});
+
+test('validate rejects incomplete or malformed per-repo dailyTarget values', () => {
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: { min: 3 } }] }),
+    /Repository 0: dailyTarget range must have min and max values/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: { min: 1, max: 2.5 } }] }),
+    /Repository 0: dailyTarget range must be whole numbers between 1 and 100/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: 0 }] }),
+    /Repository 0: dailyTarget must be a whole number between 1 and 100/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: '3' }] }),
+    /Repository 0: dailyTarget must be a number or a \{ min, max \} range/
+  );
+});
+
+test('validate applies the same dailyTarget rules to general settings', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], general: { dailyTarget: { min: 0, max: 3 } } }),
+    /dailyTarget range must be whole numbers between 1 and 100/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], general: { dailyTarget: 101 } }),
+    /dailyTarget must be a whole number between 1 and 100/
+  );
+});
+
+test('validate accepts and normalizes valid per-repo dailyTarget values', () => {
+  const cfg = config.validate({
+    repositories: [
+      { ...baseRepo, dailyTarget: 4 },
+      { ...baseRepo, repo: 'ranged', dailyTarget: { min: 2, max: 6 } },
+      { ...baseRepo, repo: 'inherits' }
+    ],
+    general: { dailyTarget: { min: 1, max: 3 } }
+  });
+  assert.deepEqual(cfg.repositories.map(r => r.dailyTarget), [
+    { min: 4, max: 4 },
+    { min: 2, max: 6 },
+    { min: 1, max: 3 }
+  ]);
+});
