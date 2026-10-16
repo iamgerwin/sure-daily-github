@@ -100,7 +100,7 @@ node src/cli.js status
 ### 5. Run
 
 ```bash
-# Run once manually
+# Run once manually (exits 1 if the run or any repository failed)
 node src/cli.js run
 
 # Start scheduler (keeps running)
