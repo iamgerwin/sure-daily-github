@@ -226,7 +226,7 @@ repositorySelection:
 | `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
-| `weight` | number | ❌ | Weight for weighted selection (default: 1) |
+| `weight` | number | ❌ | Positive weight for weighted selection (default: 1) |
 
 > See docs/RANDOMIZATION.md for detailed examples.
 
