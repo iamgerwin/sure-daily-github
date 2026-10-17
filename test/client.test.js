@@ -26,6 +26,57 @@ function stubClient({ getContent } = {}) {
   return { client, calls };
 }
 
+test('listLabeledPullRequests filters open issues by label and keeps only pull requests', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  const listForRepo = () => {};
+  client.octokit = {
+    rest: { issues: { listForRepo } },
+    paginate: async (method, params) => {
+      calls.push({ method, params });
+      return [
+        { number: 1, title: 'plain issue' },
+        { number: 2, title: 'a PR', pull_request: { url: 'x' } }
+      ];
+    }
+  };
+
+  const result = await client.listLabeledPullRequests('me', 'demo', 'babysit');
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.map(i => i.number), [2]);
+  assert.equal(calls[0].method, listForRepo);
+  assert.deepEqual(calls[0].params, { owner: 'me', repo: 'demo', state: 'open', labels: 'babysit', per_page: 100 });
+});
+
+test('replyToReviewComment posts a thread reply and reports API errors without throwing', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  client.octokit = {
+    rest: {
+      pulls: {
+        createReplyForReviewComment: async (params) => {
+          calls.push(params);
+          if (params.comment_id === 404) {
+            const error = new Error('Not Found');
+            error.status = 404;
+            throw error;
+          }
+          return { data: { id: 77 } };
+        }
+      }
+    }
+  };
+
+  const ok = await client.replyToReviewComment('me', 'demo', 7, 11, 'Fixed');
+  assert.deepEqual(ok, { success: true, data: { id: 77 } });
+  assert.deepEqual(calls[0], { owner: 'me', repo: 'demo', pull_number: 7, comment_id: 11, body: 'Fixed' });
+
+  const failed = await client.replyToReviewComment('me', 'demo', 7, 404, 'Fixed');
+  assert.equal(failed.success, false);
+  assert.equal(failed.status, 404);
+  assert.match(failed.error, /Not Found/);
+});
+
 test('normalizeRepoPath collapses leading, trailing, and doubled slashes', () => {
   assert.equal(normalizeRepoPath('daily-updates/2026-10-15-1.md'), 'daily-updates/2026-10-15-1.md');
   assert.equal(normalizeRepoPath('daily-updates//2026-10-15-1.md'), 'daily-updates/2026-10-15-1.md');
@@ -93,4 +144,73 @@ test('createOrUpdateFile targets the configured branch for both lookup and write
 
   assert.equal(calls.getContent[0].ref, 'master');
   assert.equal(calls.put[0].branch, 'master');
+});
+
+test('listOpenPullRequests follows GraphQL pagination', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  const pages = [
+    { nodes: [{ number: 1, mergeable: 'CONFLICTING' }], pageInfo: { hasNextPage: true, endCursor: 'c1' } },
+    { nodes: [{ number: 2, mergeable: 'MERGEABLE' }], pageInfo: { hasNextPage: false, endCursor: 'c2' } }
+  ];
+  client.octokit = {
+    graphql: async (query, variables) => {
+      calls.push(variables);
+      return { repository: { pullRequests: pages[calls.length - 1] } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo');
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.map(pr => pr.number), [1, 2]);
+  assert.deepEqual(calls, [
+    { owner: 'me', repo: 'demo', cursor: null },
+    { owner: 'me', repo: 'demo', cursor: 'c1' }
+  ]);
+});
+
+test('listOpenPullRequests reports API failures', async () => {
+  const client = new GitHubClient('ghp_test');
+  client.octokit = { graphql: async () => { throw new Error('Could not resolve to a Repository'); } };
+
+  const result = await client.listOpenPullRequests('me', 'missing');
+
+  assert.deepEqual(result, { success: false, error: 'Could not resolve to a Repository' });
+});
+
+test('listOpenPullRequests stops before the next page when shouldContinue is false', async () => {
+  const client = new GitHubClient('ghp_test');
+  let pages = 0;
+  client.octokit = {
+    graphql: async () => {
+      pages++;
+      return { repository: { pullRequests: { nodes: [{ number: pages }], pageInfo: { hasNextPage: true, endCursor: `c${pages}` } } } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => pages < 2 });
+
+  assert.equal(pages, 2);
+  assert.deepEqual(result, {
+    success: true, data: [{ number: 1 }, { number: 2 }], timedOut: true, error: 'scan budget exhausted'
+  });
+});
+
+test('listOpenPullRequests keeps the first page when the budget expires before page 2', async () => {
+  const client = new GitHubClient('ghp_test');
+  let pages = 0;
+  client.octokit = {
+    graphql: async () => {
+      pages++;
+      return { repository: { pullRequests: { nodes: [{ number: pages }], pageInfo: { hasNextPage: true, endCursor: `c${pages}` } } } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => false });
+
+  assert.equal(pages, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(result.data, [{ number: 1 }]);
 });

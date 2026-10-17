@@ -5,6 +5,8 @@ import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import executor, { describeFailures, getRunExitCode } from './core/executor.js';
 import scheduler from './core/scheduler.js';
+import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
+import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import config from './config/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,6 +54,75 @@ program
         console.error('❌ Execution failed:', result.error);
         process.exit(1);
       }
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+      process.exit(1);
+    }
+  });
+
+// Babysit command - address review comments on labeled pull requests
+const collect = (value, previous) => previous.concat([value]);
+
+program
+  .command('babysit')
+  .description('Address review comments on pull requests labeled for babysitting (never merges)')
+  .option('--once', 'Run a single scan and exit (default)')
+  .option('--repo <owner/repo>', 'Restrict to a configured repository (repeatable)', collect, [])
+  .option('--pr <number>', 'Restrict to one pull request (requires exactly one --repo)')
+  .option('--dry-run', 'Triage and print planned actions without pushing, replying, or recording')
+  .option('--config <path>', 'Path to configuration file')
+  .action(async (options) => {
+    try {
+      let pr = null;
+      if (options.pr !== undefined) {
+        pr = Number(options.pr);
+        if (!/^\d+$/.test(options.pr) || pr < 1) {
+          throw new Error('--pr must be a positive pull request number');
+        }
+        if (options.repo.length !== 1) {
+          throw new Error('--pr requires exactly one --repo <owner/repo>');
+        }
+      }
+      const invalidRepo = options.repo.find(name => !/^[^/\s]+\/[^/\s]+$/.test(name));
+      if (invalidRepo) {
+        throw new Error(`--repo must be owner/repo, got "${invalidRepo}"`);
+      }
+
+      const cfg = config.load(options.config);
+      const result = await babysitter.execute(cfg, { repos: options.repo, pr, dryRun: Boolean(options.dryRun) });
+
+      if (result.locked) {
+        console.log(`\n⏭️  ${result.error}; skipped this scan\n`);
+        process.exit(0);
+      }
+      if (!result.success) {
+        console.error('❌ Babysit failed:', result.error);
+        process.exit(1);
+      }
+
+      console.log(`\n✅ Babysit scan completed${result.dryRun ? ' (dry run)' : ''}\n`);
+      for (const r of result.results) {
+        const name = `${r.owner}/${r.repo}${r.number !== undefined ? `#${r.number}` : ''}`;
+        if (r.error) {
+          console.error(`❌ ${name}: ${r.error}`);
+        } else if (r.skipped) {
+          console.log(`⏭️  ${name}: ${r.reason}`);
+        } else if (r.planned) {
+          console.log(`📝 ${name}: ${r.planned.length} planned action(s)`);
+          r.planned.forEach(p => console.log(`   ${p.action.padEnd(7)} ${p.id} by ${p.author}: ${p.reasoning}`));
+          (r.undecided || []).forEach(id => console.log(`   ???     ${id}: no triage decision`));
+        } else {
+          const c = r.counts;
+          console.log(`🔧 ${name}: addressed ${c.addressed}, deferred ${c.deferred}, wontfix ${c.wontfix}, noted ${c.noted}, failed ${c.failed}${r.commitSha ? ` (pushed ${r.commitSha.slice(0, 12)})` : ''}`);
+          (r.failures || []).forEach(f => console.error(`   ❌ ${f.id}: ${f.error}`));
+        }
+      }
+
+      const s = result.summary;
+      console.log(`\nPull requests: ${s.prs} (skipped ${s.skipped})`);
+      console.log(`Comments:      addressed ${s.addressed}, deferred ${s.deferred}, wontfix ${s.wontfix}, noted ${s.noted}`);
+      console.log(`Failed:        ${s.failed}\n`);
+      process.exit(getBabysitExitCode(result));
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);
@@ -167,6 +238,59 @@ program
     }
   });
 
+// Fix-conflicts command - merge the base branch into conflicted open PRs
+program
+  .command('fix-conflicts')
+  .description('Resolve merge conflicts on open pull requests (newer change wins, pushed only if tests pass)')
+  .option('--dry-run', 'Resolve and test locally without pushing')
+  .option('--scan-only', 'Only list conflicted pull requests')
+  .option('--repo <owner/repo>', 'Only process this configured repository (repeatable)', (value, list) => [...list, value], [])
+  .option('--pr <number>', 'Only process this pull request (requires one --repo)')
+  .option('--scan-timeout <seconds>', 'Time budget for listing pull requests (overrides conflictFixer.scanTimeoutSeconds)')
+  .option('--config <path>', 'Path to configuration file')
+  .action(async (options) => {
+    try {
+      const scanTimeoutSeconds = options.scanTimeout === undefined ? null : parseScanTimeout(options.scanTimeout);
+      const cfg = config.load(options.config);
+      const fixer = new ConflictFixer(config.getGitHubToken());
+      const result = await fixer.run(cfg, {
+        repos: options.repo,
+        pr: options.pr ?? null,
+        dryRun: Boolean(options.dryRun),
+        scanOnly: Boolean(options.scanOnly),
+        scanTimeoutSeconds
+      });
+
+      if (!result.success) {
+        console.error('❌ Conflict fixer failed:', result.error);
+        process.exit(1);
+      }
+
+      if (result.results.length === 0) {
+        console.log('\n✅ No conflicted pull requests found\n');
+      } else {
+        console.log('\n🔧 Conflicted Pull Requests\n');
+        result.results.forEach(r => {
+          const target = `${r.owner}/${r.repo}${r.pr ? `#${r.pr}` : ''}`.padEnd(36);
+          console.log(`${target} ${r.status.padEnd(20)} ${r.reason || r.error || ''}`);
+          if (r.output) {
+            console.log(r.output.split('\n').map(line => `    ${line}`).join('\n'));
+          }
+        });
+      }
+
+      console.log(`\nFixed:               ${result.summary.fixed}`);
+      console.log(`Needs manual review: ${result.summary.needsManualReview}`);
+      console.log(`Skipped:             ${result.summary.skipped}`);
+      console.log(`Scan timeout:        ${result.summary.scanTimeout}`);
+      console.log(`Failed:              ${result.summary.failed}\n`);
+      process.exit(getRunExitCode(result));
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+      process.exit(1);
+    }
+  });
+
 // Validate command - validate configuration
 program
   .command('validate')
@@ -188,7 +312,8 @@ program
       }
 
       console.log(`   Scheduler: ${cfg.schedule?.enabled ? 'enabled' : 'disabled'}`);
-      
+      console.log(`   Babysit: ${cfg.babysit.enabled ? 'enabled' : 'disabled'} (label "${cfg.babysit.label}", ${cfg.babysit.engine} ${cfg.babysit.model})`);
+
       if (cfg.randomization?.enabled) {
         console.log('   Randomization: enabled');
       }

@@ -115,8 +115,20 @@ sure-daily-github validate          # Validate configuration file
 sure-daily-github run [--dry-run]   # Run once (manual trigger)
 sure-daily-github start             # Start scheduler (daemon mode)
 sure-daily-github status            # Check repository status
+sure-daily-github babysit [--dry-run] [--repo owner/repo] [--pr N]
+                                    # Address review comments on PRs labeled "babysit"
 sure-daily-github --help            # Show all commands
 ```
+
+### Babysit
+
+`babysit` scans open PRs that carry the `babysit` label and handles each
+review comment: it triages the comment with an AI engine (`opencode` or
+`claude`), pushes fixes that pass the tests as a fast-forward of the PR
+branch, and replies on every thread. Bot reviewers are tagged back for a
+re-review. It never merges. Configure it in the `babysit:` block; set
+`babysit.enabled: true` to also run it on the scheduler. See
+[docs/BABYSIT.md](./docs/BABYSIT.md).
 
 ## VPS Deployment
 
@@ -219,7 +231,7 @@ repositorySelection:
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `owner` | string | ✅ | GitHub username/organization |
-| `repo` | string | ✅ | Repository name |
+| `repo` | string | ✅ | Repository name (each `owner/repo` may appear only once, case-insensitive) |
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
 | `branch` | string | ❌ | Target branch (default: the repository's default branch) |
 | `dailyTarget` | number or range | ❌ | Override global target |
@@ -315,6 +327,12 @@ npm run format
 # Lint code (if using eslint)
 npm run lint
 ```
+
+### Continuous Integration
+
+GitHub Actions (`.github/workflows/test.yml`) runs `npm test` on every pull request to `master` and on every push to `master`.
+The job is named `test` so a branch ruleset can require it as a status check.
+See [docs/PR_MAINTENANCE.md](./docs/PR_MAINTENANCE.md) for the one-time `master` ruleset setup.
 
 ## Project Structure
 

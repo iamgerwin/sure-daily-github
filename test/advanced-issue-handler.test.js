@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
+import { describeFailures } from '../src/core/executor.js';
 
 const config = { general: { timezone: 'UTC' }, randomization: {}, contentTemplates: [] };
 
@@ -199,7 +200,34 @@ test('honors repositorySelection.maxPerExecution', async () => {
 
   assert.deepEqual(created.map(c => c.repo), ['a']);
   const notSelected = results.filter(r => r.reason === 'Not selected this run').map(r => r.repo);
-  assert.deepEqual(notSelected, ['me/b', 'me/c']);
+  assert.deepEqual(notSelected, ['b', 'c']);
+});
+
+test('failed results carry owner and repo so the CLI summary can name them', async () => {
+  const { handler } = createHandler();
+  handler.client.issues.create = async () => { throw new Error('Not Found'); };
+
+  const results = await handler.processRepositories([repo({ repo: 'broken' })], {}, false, config);
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].success, false);
+  assert.equal(results[0].owner, 'me');
+  assert.equal(results[0].repo, 'broken');
+  assert.deepEqual(describeFailures(results), ['me/broken: Not Found']);
+});
+
+test('skipped and created results carry owner and repo', async () => {
+  const { handler } = createHandler();
+  const repos = [repo({ repo: 'a' }), repo({ repo: 'b' }), repo({ repo: 'off', enabled: false })];
+  const cfg = { ...config, repositorySelection: { strategy: 'sequential', maxPerExecution: 1 } };
+
+  const results = await handler.processRepositories(repos, {}, false, cfg);
+
+  for (const r of results) {
+    assert.equal(r.owner, 'me');
+    assert.ok(!r.repo.includes('/'), `repo should be the bare name, got ${r.repo}`);
+  }
+  assert.deepEqual(results.map(r => r.repo).sort(), ['a', 'b', 'off']);
 });
 
 test('round-robin rotates through repositories across runs', async () => {
@@ -241,4 +269,30 @@ test('processes every ready repository when repositorySelection is omitted', asy
   await handler.processRepositories(repos, {}, false, config);
 
   assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c']);
+});
+
+test('renders ${date} and ${time} in the configured timezone', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-14T23:30:05Z');
+  const tzConfig = {
+    general: { timezone: 'Asia/Manila' },
+    randomization: {},
+    contentTemplates: [{ title: 'Update ${date} ${time}', body: 'At ${timestamp} on ${date}' }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo(), tzConfig, now);
+
+  assert.equal(title, 'Update 2026-10-15 07:30:05');
+  assert.equal(body, 'At 2026-10-14T23:30:05.000Z on 2026-10-15');
+});
+
+test('default issue title uses the configured timezone and falls back to UTC', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-15T00:05:00Z');
+
+  const la = handler.generateIssueContent(repo(), { general: { timezone: 'America/Los_Angeles' } }, now);
+  assert.equal(la.title, 'Automated Issue - 2026-10-14 17:05:00');
+
+  const utc = handler.generateIssueContent(repo(), {}, now);
+  assert.equal(utc.title, 'Automated Issue - 2026-10-15 00:05:00');
 });

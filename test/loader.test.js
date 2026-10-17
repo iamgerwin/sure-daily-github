@@ -279,3 +279,175 @@ test('validate accepts valid randomization ranges and ignores disabled sections'
     randomization: { enabled: false, issueCount: { min: 1.5, max: 4 } }
   }));
 });
+
+test('validate rejects duplicate repositories, ignoring case', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo, { owner: 'other', repo: 'demo' }, { owner: 'Me', repo: 'Demo' }] }),
+    /Repository 2: duplicate of repository 0 \(Me\/Demo\)/
+  );
+});
+
+test('validate defaults the babysit block when it is absent', () => {
+  const cfg = config.validate({ repositories: [baseRepo] });
+  assert.deepEqual(cfg.babysit, {
+    enabled: false,
+    label: 'babysit',
+    engine: 'opencode',
+    model: 'openai/gpt-6.1-sol',
+    ownPRsOnly: true,
+    maxPrsPerRun: 5,
+    testTimeoutMinutes: 15,
+    engineTimeoutMinutes: 30
+  });
+  assert.equal(cfg.repositories[0].testCommand, null);
+});
+
+test('validate keeps configured babysit settings and fills in the rest', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, testCommand: 'npm ci && npm test' }],
+    babysit: { enabled: true, label: 'watch-me', engine: 'claude', model: 'opus', ownPRsOnly: false, maxPrsPerRun: 2 }
+  });
+  assert.equal(cfg.babysit.enabled, true);
+  assert.equal(cfg.babysit.label, 'watch-me');
+  assert.equal(cfg.babysit.engine, 'claude');
+  assert.equal(cfg.babysit.model, 'opus');
+  assert.equal(cfg.babysit.ownPRsOnly, false);
+  assert.equal(cfg.babysit.maxPrsPerRun, 2);
+  assert.equal(cfg.babysit.testTimeoutMinutes, 15);
+  assert.equal(cfg.repositories[0].testCommand, 'npm ci && npm test');
+});
+
+test('validate rejects invalid babysit settings', () => {
+  const cases = [
+    [[], /babysit must be a mapping/],
+    [{ enabled: 'yes' }, /babysit\.enabled must be true or false/],
+    [{ ownPRsOnly: 1 }, /babysit\.ownPRsOnly must be true or false/],
+    [{ label: '' }, /babysit\.label must be a non-empty string/],
+    [{ engine: 'gpt' }, /babysit\.engine must be one of: opencode, claude/],
+    [{ model: '' }, /babysit\.model must be a non-empty string/],
+    [{ model: '--dangerously-skip-permissions' }, /babysit\.model must be a non-empty string not starting with "-"/],
+    [{ maxPrsPerRun: 0 }, /babysit\.maxPrsPerRun must be a positive whole number/],
+    [{ testTimeoutMinutes: 1.5 }, /babysit\.testTimeoutMinutes must be a positive whole number/],
+    [{ engineTimeoutMinutes: '30' }, /babysit\.engineTimeoutMinutes must be a positive whole number/]
+  ];
+  for (const [babysit, pattern] of cases) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], babysit }),
+      pattern,
+      `${JSON.stringify(babysit)} should be rejected`
+    );
+  }
+});
+
+test('validate rejects an empty or non-string repository testCommand', () => {
+  for (const testCommand of ['', '  ', 42, ['npm', 'test']]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, testCommand }] }),
+      /Repository 0: testCommand must be a non-empty string/
+    );
+  }
+});
+
+test('validate accepts the same repo name under different owners', () => {
+  const cfg = config.validate({ repositories: [baseRepo, { owner: 'other', repo: 'demo' }] });
+  assert.equal(cfg.repositories.length, 2);
+});
+
+test('validate passes testCommand through and defaults conflictFixer', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, testCommand: 'npm run test:unit' }, { owner: 'me', repo: 'other' }] });
+  assert.equal(cfg.repositories[0].testCommand, 'npm run test:unit');
+  assert.equal(cfg.repositories[1].testCommand, null);
+  assert.deepEqual(cfg.conflictFixer, {
+    testTimeoutMinutes: 15,
+    installDeps: true,
+    scanTimeoutSeconds: 120,
+    attemptTtlMinutes: 60,
+    retryCooldownMinutes: 240,
+    sourceHunks: 'push',
+    mode: 'allowlist',
+    allowlist: [],
+    denylist: []
+  });
+});
+
+test('validate keeps configured conflictFixer settings', () => {
+  const settings = {
+    testTimeoutMinutes: 30, installDeps: false, scanTimeoutSeconds: 45, attemptTtlMinutes: 10, retryCooldownMinutes: 20, sourceHunks: 'claude'
+  };
+  const cfg = config.validate({ repositories: [baseRepo], conflictFixer: settings });
+  assert.deepEqual(cfg.conflictFixer, { ...settings, mode: 'allowlist', allowlist: [], denylist: [] });
+});
+
+test('validate rejects invalid conflictFixer and testCommand values', () => {
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, testCommand: '  ' }] }),
+    /Repository 0: testCommand must be a non-empty string/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { testTimeoutMinutes: 0 } }),
+    /conflictFixer.testTimeoutMinutes must be a positive whole number/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { installDeps: 'yes' } }),
+    /conflictFixer.installDeps must be true or false/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: ['x'] }),
+    /conflictFixer must be a mapping/
+  );
+  for (const field of ['scanTimeoutSeconds', 'attemptTtlMinutes', 'retryCooldownMinutes']) {
+    for (const value of [0, -5, 1.5, '60']) {
+      assert.throws(
+        () => config.validate({ repositories: [baseRepo], conflictFixer: { [field]: value } }),
+        new RegExp(`conflictFixer.${field} must be a positive whole number`)
+      );
+    }
+  }
+});
+
+test('validate accepts each sourceHunks strategy and rejects anything else', () => {
+  for (const sourceHunks of ['push', 'claude', 'escalate']) {
+    const cfg = config.validate({ repositories: [baseRepo], conflictFixer: { sourceHunks } });
+    assert.equal(cfg.conflictFixer.sourceHunks, sourceHunks);
+  }
+  assert.equal(config.validate({ repositories: [baseRepo], conflictFixer: { sourceHunks: null } }).conflictFixer.sourceHunks, 'push');
+  for (const sourceHunks of ['Push', 'newer', '', true, 1]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], conflictFixer: { sourceHunks } }),
+      /conflictFixer.sourceHunks must be one of: push, claude, escalate/
+    );
+  }
+});
+
+test('validate normalizes repo gating settings', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, conflictFixer: false }, { owner: 'me', repo: 'other' }],
+    conflictFixer: { mode: 'denylist', allowlist: ['me/demo'], denylist: ['Me/Legacy.repo'] }
+  });
+  assert.equal(cfg.repositories[0].conflictFixer, false);
+  assert.equal(cfg.repositories[1].conflictFixer, null);
+  assert.equal(cfg.conflictFixer.mode, 'denylist');
+  assert.deepEqual(cfg.conflictFixer.allowlist, ['me/demo']);
+  assert.deepEqual(cfg.conflictFixer.denylist, ['Me/Legacy.repo']);
+});
+
+test('validate rejects invalid repo gating settings', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { mode: 'everything' } }),
+    /conflictFixer.mode must be one of: allowlist, denylist, all/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { allowlist: 'me/demo' } }),
+    /conflictFixer.allowlist must be a list of "owner\/repo" strings/
+  );
+  for (const entry of ['demo', 'me/', '/demo', 'me/de mo', 'me/demo/x', 42]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], conflictFixer: { denylist: ['me/ok', entry] } }),
+      /conflictFixer.denylist\[1\] must be an "owner\/repo" string/
+    );
+  }
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, conflictFixer: 'yes' }] }),
+    /Repository 0: conflictFixer must be true or false/
+  );
+});

@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
+import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +52,50 @@ function validateCountRange(range, label, errors) {
     errors.push(`${label} must be positive whole numbers`);
   } else if (range.min > range.max) {
     errors.push(`${label} min cannot be greater than max`);
+  }
+}
+
+export const BABYSIT_ENGINES = ['opencode', 'claude'];
+
+export const BABYSIT_DEFAULTS = {
+  enabled: false,
+  label: 'babysit',
+  engine: 'opencode',
+  model: 'openai/gpt-6.1-sol',
+  ownPRsOnly: true,
+  maxPrsPerRun: 5,
+  testTimeoutMinutes: 15,
+  engineTimeoutMinutes: 30
+};
+
+const isPositiveInt = (value) => Number.isInteger(value) && value >= 1;
+const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+
+function validateBabysit(babysit, errors) {
+  if (babysit === undefined || babysit === null) return;
+  if (typeof babysit !== 'object' || Array.isArray(babysit)) {
+    errors.push('babysit must be a mapping');
+    return;
+  }
+  for (const key of ['enabled', 'ownPRsOnly']) {
+    if (babysit[key] !== undefined && typeof babysit[key] !== 'boolean') {
+      errors.push(`babysit.${key} must be true or false`);
+    }
+  }
+  if (babysit.label !== undefined && !isNonEmptyString(babysit.label)) {
+    errors.push('babysit.label must be a non-empty string');
+  }
+  if (babysit.engine !== undefined && !BABYSIT_ENGINES.includes(babysit.engine)) {
+    errors.push(`babysit.engine must be one of: ${BABYSIT_ENGINES.join(', ')}`);
+  }
+  // The model is passed as a CLI argument, so a leading dash would be read as a flag
+  if (babysit.model !== undefined && (!isNonEmptyString(babysit.model) || babysit.model.startsWith('-'))) {
+    errors.push('babysit.model must be a non-empty string not starting with "-"');
+  }
+  for (const key of ['maxPrsPerRun', 'testTimeoutMinutes', 'engineTimeoutMinutes']) {
+    if (babysit[key] !== undefined && !isPositiveInt(babysit[key])) {
+      errors.push(`babysit.${key} must be a positive whole number`);
+    }
   }
 }
 
@@ -111,6 +156,9 @@ class ConfigLoader {
     } else if (config.repositories.length === 0) {
       errors.push('At least one repository must be configured');
     } else {
+      // State is keyed by owner/repo (and GitHub names are case-insensitive), so
+      // duplicate entries would share one daily counter and double-process the repo
+      const seenRepos = new Map();
       config.repositories.forEach((repo, idx) => {
         // A bare "-" list item parses to null and would crash the checks below
         if (!repo || typeof repo !== 'object' || Array.isArray(repo)) {
@@ -124,6 +172,14 @@ class ConfigLoader {
         }
         if (repo.repo && !/^[a-zA-Z0-9._-]+$/.test(repo.repo)) {
           errors.push(`Repository ${idx}: invalid repo format`);
+        }
+        if (typeof repo.owner === 'string' && typeof repo.repo === 'string') {
+          const key = `${repo.owner}/${repo.repo}`.toLowerCase();
+          if (seenRepos.has(key)) {
+            errors.push(`Repository ${idx}: duplicate of repository ${seenRepos.get(key)} (${repo.owner}/${repo.repo})`);
+          } else {
+            seenRepos.set(key, idx);
+          }
         }
         if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
           const { min, max } = repo.intervalMinutes;
@@ -143,8 +199,55 @@ class ConfigLoader {
           && (typeof repo.weight !== 'number' || !Number.isFinite(repo.weight) || repo.weight <= 0)) {
           errors.push(`Repository ${idx}: weight must be a positive number`);
         }
+        if (repo.testCommand !== undefined && repo.testCommand !== null
+          && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
+          errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
+        }
+        if (repo.conflictFixer !== undefined && repo.conflictFixer !== null && typeof repo.conflictFixer !== 'boolean') {
+          errors.push(`Repository ${idx}: conflictFixer must be true or false`);
+        }
       });
     }
+
+    // Used by fix-conflicts; validated up front so a bad value fails `validate`
+    const conflictFixer = config.conflictFixer ?? {};
+    if (typeof conflictFixer !== 'object' || Array.isArray(conflictFixer)) {
+      errors.push('conflictFixer must be a mapping');
+    } else {
+      for (const field of ['testTimeoutMinutes', 'scanTimeoutSeconds', 'attemptTtlMinutes', 'retryCooldownMinutes']) {
+        const value = conflictFixer[field];
+        if (value !== undefined && value !== null && (!Number.isInteger(value) || value < 1)) {
+          errors.push(`conflictFixer.${field} must be a positive whole number`);
+        }
+      }
+      const { installDeps } = conflictFixer;
+      if (installDeps !== undefined && installDeps !== null && typeof installDeps !== 'boolean') {
+        errors.push('conflictFixer.installDeps must be true or false');
+      }
+      const validFixerModes = ['allowlist', 'denylist', 'all'];
+      if (conflictFixer.mode !== undefined && conflictFixer.mode !== null && !validFixerModes.includes(conflictFixer.mode)) {
+        errors.push(`conflictFixer.mode must be one of: ${validFixerModes.join(', ')}`);
+      }
+      const { sourceHunks } = conflictFixer;
+      if (sourceHunks !== undefined && sourceHunks !== null && !SOURCE_HUNK_STRATEGIES.includes(sourceHunks)) {
+        errors.push(`conflictFixer.sourceHunks must be one of: ${SOURCE_HUNK_STRATEGIES.join(', ')}`);
+      }
+      for (const field of ['allowlist', 'denylist']) {
+        const list = conflictFixer[field];
+        if (list === undefined || list === null) continue;
+        if (!Array.isArray(list)) {
+          errors.push(`conflictFixer.${field} must be a list of "owner/repo" strings`);
+          continue;
+        }
+        list.forEach((entry, i) => {
+          if (typeof entry !== 'string' || !/^[^\s/]+\/[^\s/]+$/.test(entry)) {
+            errors.push(`conflictFixer.${field}[${i}] must be an "owner/repo" string`);
+          }
+        });
+      }
+    }
+
+    validateBabysit(config.babysit, errors);
 
     if (config.contentTemplates !== undefined && !Array.isArray(config.contentTemplates)) {
       errors.push('contentTemplates must be an array');
@@ -266,9 +369,28 @@ class ConfigLoader {
           labels: repo.labels || ['automated'],
           weight: repo.weight || 1,
           // Consumed by AdvancedIssueHandler to space issues out across the day
-          intervalMinutes: repo.intervalMinutes || null
+          intervalMinutes: repo.intervalMinutes || null,
+          // Consumed by fix-conflicts and babysit; overrides test command detection
+          testCommand: repo.testCommand || null,
+          // Per-repo fix-conflicts opt in/out; null defers to the lists
+          conflictFixer: typeof repo.conflictFixer === 'boolean' ? repo.conflictFixer : null
         };
       }),
+      conflictFixer: {
+        testTimeoutMinutes: conflictFixer.testTimeoutMinutes ?? 15,
+        installDeps: conflictFixer.installDeps ?? true,
+        scanTimeoutSeconds: conflictFixer.scanTimeoutSeconds ?? 120,
+        attemptTtlMinutes: conflictFixer.attemptTtlMinutes ?? 60,
+        retryCooldownMinutes: conflictFixer.retryCooldownMinutes ?? 240,
+        // Non-test conflict hunks: newer side wins and is pushed (push), or the
+        // PR is left for review (claude is resolved by pr-maint, escalate by a human)
+        sourceHunks: conflictFixer.sourceHunks ?? 'push',
+        // Opt-in by default: an empty allowlist means nothing is fixed
+        mode: conflictFixer.mode ?? 'allowlist',
+        allowlist: conflictFixer.allowlist ?? [],
+        denylist: conflictFixer.denylist ?? []
+      },
+      babysit: { ...BABYSIT_DEFAULTS, ...(config.babysit || {}) },
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
         body: 'Progress update for ${date}'
