@@ -2,6 +2,7 @@ import { createOctokit } from './octokit.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
+import { getTemplateDateParts } from '../utils/template-date.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -107,14 +108,14 @@ class AdvancedIssueHandler {
     return array[Math.floor(Math.random() * array.length)];
   }
 
-  generateIssueContent(repo, config) {
+  generateIssueContent(repo, config, now = new Date()) {
     const randomization = config.randomization || {};
     const templates = config.contentTemplates || [];
     
     // Pick a random template or use default
     const template = templates.length > 0 ? this.getRandomElement(templates) : {};
-    const timestamp = new Date().toISOString();
-    const now = new Date();
+    // ${date} and ${time} follow general.timezone, not the host's locale and clock
+    const { date, time, timestamp } = getTemplateDateParts(config.general?.timezone || 'UTC', now);
     
     // Replace placeholders
     const replacements = {
@@ -143,8 +144,8 @@ class AdvancedIssueHandler {
       currentPerf: 'Current performance metrics',
       targetPerf: 'Target performance goals',
       approach: 'Optimization strategy',
-      date: now.toLocaleDateString(),
-      time: now.toLocaleTimeString()
+      date,
+      time
     };
     
     // Generate title
