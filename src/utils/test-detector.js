@@ -13,14 +13,15 @@ function readPackageJson(dir) {
   }
 }
 
+// A rule line whose target list includes `test` (`test:`, `test::`, `unit test:`),
+// but not a variable assignment such as `test := ...` or `test ::= ...`
+const MAKE_TEST_RULE = /^(?:[^\s:#=]+[ \t]+)*test(?:[ \t]+[^\s:#=]+)*[ \t]*::?(?![:=])/m;
+
 function hasMakeTestTarget(dir) {
-  for (const name of ['GNUmakefile', 'makefile', 'Makefile']) {
-    const file = path.join(dir, name);
-    if (fs.existsSync(file) && /^test\s*:/m.test(fs.readFileSync(file, 'utf8'))) {
-      return true;
-    }
-  }
-  return false;
+  // make reads only the first of these that exists, so a test target in a
+  // later one is never reachable by `make test`
+  const name = ['GNUmakefile', 'makefile', 'Makefile'].find(file => fs.existsSync(path.join(dir, file)));
+  return Boolean(name) && MAKE_TEST_RULE.test(fs.readFileSync(path.join(dir, name), 'utf8'));
 }
 
 // Returns { install, test } shell commands, or null when the repository has no
