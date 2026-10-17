@@ -138,3 +138,29 @@ test('validate accepts and normalizes valid per-repo dailyTarget values', () => 
     { min: 1, max: 3 }
   ]);
 });
+
+test('validate rejects a malformed schedule.cron instead of failing only when the scheduler starts', () => {
+  for (const expression of ['0 0 * *x', '61 * * * *', 'every day', 123, ['0 0 * * *']]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], schedule: { enabled: true, cron: expression } }),
+      /schedule\.cron is not a valid cron expression/,
+      `${JSON.stringify(expression)} should be rejected`
+    );
+  }
+});
+
+test('validate accepts valid cron expressions and ignores cron when the schedule is disabled', () => {
+  for (const expression of ['0 0 * * *', '*/15 9-17 * * 1-5', '0 0 */6 * * *']) {
+    const cfg = config.validate({ repositories: [baseRepo], schedule: { enabled: true, cron: expression } });
+    assert.equal(cfg.schedule.cron, expression);
+  }
+  const cfg = config.validate({ repositories: [baseRepo], schedule: { enabled: false, cron: 'not a cron' } });
+  assert.equal(cfg.schedule.enabled, false);
+});
+
+test('validate still reports a missing cron expression separately', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], schedule: { enabled: true } }),
+    (error) => /Cron expression is required/.test(error.message) && !/not a valid cron/.test(error.message)
+  );
+});
