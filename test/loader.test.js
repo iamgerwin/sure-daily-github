@@ -86,6 +86,12 @@ test('validate accepts valid timezones and defaults general.timezone to UTC', ()
   assert.equal(config.validate({ repositories: [baseRepo] }).general.timezone, 'UTC');
 });
 
+test('validate leaves branch unset so the repository default branch is used', () => {
+  const cfg = config.validate({ repositories: [baseRepo, { ...baseRepo, repo: 'other', branch: 'develop' }] });
+  assert.equal(cfg.repositories[0].branch, null);
+  assert.equal(cfg.repositories[1].branch, 'develop');
+});
+
 test('validate rejects an inverted per-repo dailyTarget range instead of crashing at run time', () => {
   assert.throws(
     () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: { min: 5, max: 2 } }] }),

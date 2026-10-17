@@ -69,15 +69,14 @@ class GitHubClient {
     }
   }
 
-  async getFile(owner, repo, path, branch = 'main') {
+  // Without a branch, the contents API reads from and writes to the repository's
+  // default branch, so repos whose default is not "main" still work unconfigured
+  async getFile(owner, repo, path, branch = null) {
     try {
       path = normalizeRepoPath(path);
-      const { data } = await this.octokit.rest.repos.getContent({
-        owner,
-        repo,
-        path,
-        ref: branch
-      });
+      const params = { owner, repo, path };
+      if (branch) params.ref = branch;
+      const { data } = await this.octokit.rest.repos.getContent(params);
       return { success: true, data };
     } catch (error) {
       if (error.status === 404) {
@@ -88,7 +87,7 @@ class GitHubClient {
     }
   }
 
-  async createOrUpdateFile(owner, repo, path, content, message, branch = 'main') {
+  async createOrUpdateFile(owner, repo, path, content, message, branch = null) {
     try {
       path = normalizeRepoPath(path);
 
@@ -100,9 +99,9 @@ class GitHubClient {
         repo,
         path,
         message,
-        content: Buffer.from(content).toString('base64'),
-        branch
+        content: Buffer.from(content).toString('base64')
       };
+      if (branch) params.branch = branch;
 
       // If file exists, include sha for update
       if (existingFile.success && existingFile.data.sha) {
