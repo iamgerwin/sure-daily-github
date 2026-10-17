@@ -74,20 +74,26 @@ class IssueHandler {
     }
   }
 
-  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}) {
+  // Hourly/daily/weekly limits for a repo, shared by selection and creation
+  checkLimits(repoConfig, config = {}, targetCount = null) {
     const { owner, repo, dailyTarget } = repoConfig;
+    const timezone = config?.general?.timezone || 'UTC';
+    const timeVar = config?.randomization?.timeVariations;
+
+    const actualTarget = targetCount || dailyTarget;
+    const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
+    const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
+    const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
+
+    return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone);
+  }
+
+  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}) {
+    const { owner, repo } = repoConfig;
 
     try {
-      // Determine limits (hourly/daily/weekly) and timezone
       const timezone = config?.general?.timezone || 'UTC';
-      const timeVar = config?.randomization?.timeVariations;
-
-      const actualTarget = targetCount || dailyTarget;
-      const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
-      const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
-      const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
-
-      const check = state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone);
+      const check = this.checkLimits(repoConfig, config, targetCount);
       if (!check.allowed) {
         logger.info('Limit reached, skipping issue creation', { owner, repo, check });
         return { success: true, skipped: true, reason: 'limit_reached' };
@@ -157,10 +163,28 @@ class IssueHandler {
     const selectionConfig = config.repositorySelection || { strategy: 'sequential' };
     const randomizationConfig = config.randomization;
 
-    const selectedRepos = randomizer.selectRepositories(repositories, selectionConfig);
+    // Apply repositorySelection only to repos still within their limits,
+    // so maxPerExecution slots are not spent on repos that are done for now
+    const ready = [];
+    for (const repo of repositories.filter(r => r.enabled)) {
+      if (this.checkLimits(repo, config).allowed) {
+        ready.push(repo);
+      } else {
+        logger.info('Limit reached, skipping issue creation', { owner: repo.owner, repo: repo.repo });
+        results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'limit_reached' });
+      }
+    }
+
+    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig);
+    for (const repo of ready) {
+      if (!selectedRepos.includes(repo)) {
+        results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });
+      }
+    }
 
     logger.info('Processing repositories', {
       total: repositories.length,
+      ready: ready.length,
       selected: selectedRepos.length,
       strategy: selectionConfig.strategy
     });

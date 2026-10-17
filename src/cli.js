@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
-import executor from './core/executor.js';
+import executor, { describeFailures, getRunExitCode } from './core/executor.js';
 import scheduler from './core/scheduler.js';
 import config from './config/loader.js';
 
@@ -40,6 +40,14 @@ program
         console.log(`Successful: ${result.summary.successful}`);
         console.log(`Skipped:    ${result.summary.skipped}`);
         console.log(`Failed:     ${result.summary.failed}\n`);
+
+        const failures = describeFailures(result.results);
+        if (failures.length > 0) {
+          console.error('❌ Failed repositories:');
+          failures.forEach(line => console.error(`   ${line}`));
+          console.error('');
+        }
+        process.exit(getRunExitCode(result));
       } else {
         console.error('❌ Execution failed:', result.error);
         process.exit(1);

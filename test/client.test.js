@@ -77,3 +77,20 @@ test('getFile normalizes the path and reports 404 as notFound', async () => {
   assert.deepEqual(result, { success: false, notFound: true });
   assert.equal(calls.getContent[0].path, 'daily-updates/x.md');
 });
+
+test('createOrUpdateFile omits branch and ref when none is configured', async () => {
+  const { client, calls } = stubClient();
+  const result = await client.createOrUpdateFile('me', 'demo', 'daily-updates/x.md', 'hi', 'docs: update', null);
+
+  assert.equal(result.success, true);
+  assert.equal('ref' in calls.getContent[0], false);
+  assert.equal('branch' in calls.put[0], false);
+});
+
+test('createOrUpdateFile targets the configured branch for both lookup and write', async () => {
+  const { client, calls } = stubClient();
+  await client.createOrUpdateFile('me', 'demo', 'daily-updates/x.md', 'hi', 'docs: update', 'master');
+
+  assert.equal(calls.getContent[0].ref, 'master');
+  assert.equal(calls.put[0].branch, 'master');
+});

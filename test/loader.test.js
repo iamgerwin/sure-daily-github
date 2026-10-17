@@ -86,6 +86,12 @@ test('validate accepts valid timezones and defaults general.timezone to UTC', ()
   assert.equal(config.validate({ repositories: [baseRepo] }).general.timezone, 'UTC');
 });
 
+test('validate leaves branch unset so the repository default branch is used', () => {
+  const cfg = config.validate({ repositories: [baseRepo, { ...baseRepo, repo: 'other', branch: 'develop' }] });
+  assert.equal(cfg.repositories[0].branch, null);
+  assert.equal(cfg.repositories[1].branch, 'develop');
+});
+
 test('validate rejects an inverted per-repo dailyTarget range instead of crashing at run time', () => {
   assert.throws(
     () => config.validate({ repositories: [{ ...baseRepo, dailyTarget: { min: 5, max: 2 } }] }),
@@ -163,4 +169,37 @@ test('validate still reports a missing cron expression separately', () => {
     () => config.validate({ repositories: [baseRepo], schedule: { enabled: true } }),
     (error) => /Cron expression is required/.test(error.message) && !/not a valid cron/.test(error.message)
   );
+});
+
+test('validate rejects a non-positive or fractional maxPerExecution', () => {
+  for (const maxPerExecution of [0, -1, 1.5, '2']) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], repositorySelection: { strategy: 'random', maxPerExecution } }),
+      /repositorySelection.maxPerExecution must be a positive whole number or null/,
+      `maxPerExecution ${JSON.stringify(maxPerExecution)} should be rejected`
+    );
+  }
+});
+
+test('validate accepts a positive or null maxPerExecution', () => {
+  for (const maxPerExecution of [1, 3, null, undefined]) {
+    const cfg = config.validate({ repositories: [baseRepo], repositorySelection: { strategy: 'random', maxPerExecution } });
+    assert.equal(cfg.repositorySelection.maxPerExecution, maxPerExecution);
+  }
+});
+
+test('validate rejects a non-positive or non-numeric repository weight', () => {
+  for (const weight of [0, -5, '10', Infinity]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, weight }] }),
+      /Repository 0: weight must be a positive number/,
+      `weight ${String(weight)} should be rejected`
+    );
+  }
+});
+
+test('validate keeps positive weights and defaults a missing weight to 1', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, weight: 2.5 }, { owner: 'me', repo: 'other' }] });
+  assert.equal(cfg.repositories[0].weight, 2.5);
+  assert.equal(cfg.repositories[1].weight, 1);
 });

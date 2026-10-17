@@ -126,3 +126,27 @@ test('crash mid-write keeps the previous state file intact and cleans up the tem
   const reloaded = new StateManager({ filePath });
   assert.equal(reloaded.getRepoState('me', 'demo').totals.commits, 1);
 });
+
+test('lastCommitDate tracks the last recorded commit, not the last window check', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const tz = 'Asia/Manila';
+  const commitDay = new Date('2025-03-10T02:00:00Z'); // 2025-03-10 10:00 in Manila
+  const laterDay = new Date('2025-03-14T02:00:00Z');
+
+  // Window checks and issue actions on a fresh repo do not invent a commit date
+  sm.isWithinLimits('me', 'demo', { dailyMax: 1 }, tz, commitDay);
+  sm.recordAction('me', 'demo', { type: 'issue', timezone: tz, now: commitDay });
+  assert.equal(sm.getRepoState('me', 'demo').lastCommitDate, null);
+
+  sm.recordCommit('me', 'demo', tz, commitDay);
+  assert.equal(sm.getRepoState('me', 'demo').lastCommitDate, '2025-03-10');
+
+  // Rolling into a later day resets today's count but keeps the real last commit date
+  sm.isWithinLimits('me', 'demo', { dailyMax: 1 }, tz, laterDay);
+  const repoState = sm.getRepoState('me', 'demo');
+  assert.equal(repoState.lastCommitDate, '2025-03-10');
+  assert.equal(repoState.commitsToday, 0);
+
+  sm.recordCommit('me', 'demo', tz, laterDay);
+  assert.equal(sm.getRepoState('me', 'demo').lastCommitDate, '2025-03-14');
+});

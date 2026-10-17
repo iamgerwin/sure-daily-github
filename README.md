@@ -100,7 +100,7 @@ node src/cli.js status
 ### 5. Run
 
 ```bash
-# Run once manually
+# Run once manually (exits 1 if the run or any repository failed)
 node src/cli.js run
 
 # Start scheduler (keeps running)
@@ -221,12 +221,12 @@ repositorySelection:
 | `owner` | string | ✅ | GitHub username/organization |
 | `repo` | string | ✅ | Repository name |
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
-| `branch` | string | ❌ | Target branch (default: main) |
+| `branch` | string | ❌ | Target branch (default: the repository's default branch) |
 | `dailyTarget` | number or range | ❌ | Override global target |
 | `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
-| `weight` | number | ❌ | Weight for weighted selection (default: 1) |
+| `weight` | number | ❌ | Positive weight for weighted selection (default: 1) |
 
 > See docs/RANDOMIZATION.md for detailed examples.
 
