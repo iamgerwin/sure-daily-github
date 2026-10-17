@@ -312,7 +312,11 @@ export class ActionExecutor {
       if (verdict.rule === 'mode') applyToLabels(fresh, action);
       // Logged under the mode it was judged in, before a trip lowers it
       this.record({ ...base, verdict: 'deny', rule: verdict.rule, kind: verdict.kind, reason: verdict.reason });
-      if (verdict.trip) this.trip(verdict, action);
+      // The dashboard is one upsert per tick, never a runaway: at the hourly
+      // cap it waits for the budget (the tick fails) instead of keeping the
+      // breaker, and with it repository setup, down for another 24 hours
+      const paced = verdict.rule === 'rate' && action.scope === 'dashboard';
+      if (verdict.trip && !paced) this.trip(verdict, action);
       return { status: 'denied', verdict };
     }
 
@@ -346,8 +350,10 @@ export class ActionExecutor {
   }
 
   // Repository setup writes (label creates and repairs) are not Actions, but
-  // they spend the same hourly budget and stop at the same breaker. Each call
-  // is one GitHub write; returns false when it was not admitted.
+  // they spend the same hourly budget and stop at the same breaker. At the
+  // hourly cap setup only pauses, to be finished on a later tick: a trip would
+  // hold it in shadow mode, where setup never runs. Each call is one GitHub
+  // write; returns false when it was not admitted.
   async runSetup(what, write) {
     const base = { pr: null, type: 'setup', scope: 'repository', headSha: null, payload: { what } };
     const caps = { ...DEFAULT_CAPS, ...(this.ctx.caps || {}) };
@@ -355,7 +361,7 @@ export class ActionExecutor {
     if (this.mode === 'shadow') {
       verdict = { rule: 'mode', kind: 'deny', reason: 'shadow mode only writes the dashboard issue', trip: false, escalate: false };
     } else if (this.hourWrites() + 1 > caps.writesPerHour) {
-      verdict = { rule: 'rate', kind: 'trip', reason: `${caps.writesPerHour} writes in the last hour`, trip: true, escalate: false };
+      verdict = { rule: 'rate', kind: 'deny', reason: `${caps.writesPerHour} writes in the last hour`, trip: false, escalate: false };
     }
     if (verdict) {
       this.record({ ...base, verdict: 'deny', rule: verdict.rule, kind: verdict.kind, reason: verdict.reason });

@@ -736,7 +736,7 @@ test('a planned needs-human clear is denied when the live mergeability is UNKNOW
   assert.equal(readLedger(files.ledger).escalations['10'].active, true);
 });
 
-test('label setup is admitted under the hourly cap and breaker, and finishes on a later tick', async (t) => {
+test('label setup is admitted under the hourly cap, and a setup cut short is not marked done', async (t) => {
   const files = tmpFiles(t);
   const fake = fakeGitHub({ prs: [] });
   const runner = makeRunner(fake, files);
@@ -745,13 +745,83 @@ test('label setup is admitted under the hourly cap and breaker, and finishes on 
   assert.equal(fake.writes().filter(w => w.name === 'createLabel').length, 1);
   const state = JSON.parse(fs.readFileSync(files.ledger, 'utf8'));
   assert.equal(state.writes.length, 1);
-  assert.match(state.breaker.reason, /^rate: /);
+  assert.equal(state.breaker, null, 'the hourly cap paces setup, it does not trip the breaker');
   assert.equal(state.repos['iamgerwin/demo'].labelsVersion, undefined, 'setup cut short is not marked done');
   const setup = readDecisions(files.decisions).filter(d => d.type === 'setup');
   assert.deepEqual(setup.map(d => d.verdict), ['allow', 'deny']);
-  // Creating the dashboard costs two writes: it does not fit, and that fails the tick
+  // The hour's one write went to setup: the dashboard waits, and that fails the tick
   assert.equal(result.results[0].dashboard, 'denied');
   assert.equal(getPrMaintExitCode(result), 1);
+});
+
+test('writesPerHour 1 without a dashboard: setup completes across ticks, then the dashboard is created, breaker never trips', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [] });
+  let now = NOW;
+  const runner = makeRunner(fake, files, { now: () => now });
+  const cfg = makeConfig({ mode: 'act', rateLimits: { writesPerPrPerTick: 20, writesPerHour: 1 } });
+
+  let result;
+  for (let tick = 0; tick < 20 && !fake.state.issues.length; tick++) {
+    result = await runner.execute(cfg);
+    const state = JSON.parse(fs.readFileSync(files.ledger, 'utf8'));
+    assert.equal(state.breaker, null, `breaker tripped on tick ${tick}`);
+    assert.equal(result.mode, 'act');
+    now += 61 * 60 * 1000;
+  }
+  assert.equal(fake.state.repoLabels.length, 8, 'every label was created');
+  assert.equal(readLedger(files.ledger).labelsVersion, 1);
+  assert.equal(fake.state.issues.length, 1, 'the dashboard was created');
+  assert.equal(result.results[0].dashboard, 'done');
+  assert.equal(getPrMaintExitCode(result), 0);
+  // Pinning would be a second write the hourly cap can never fit
+  assert.ok(!fake.calls.some(c => c.name === 'pinIssue'));
+  assert.equal(readLedger(files.ledger).dashboard.number, fake.state.issues[0].number);
+});
+
+test('a needs-human clear denied for live UNKNOWN mergeability is retried and succeeds on the next clean tick', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [{ number: 10, headRefOid: sha('a'), labels: ['sdg:conflict', NEEDS_HUMAN] }] });
+  seedLedger(files.ledger, {
+    escalations: { 10: { reason: 'non-text', active: true, pending: false, headSha: sha('a'), history: [NOW], clears: [] } }
+  });
+  const runner = makeRunner(fake, files);
+  const get = fake.octokit.rest.pulls.get;
+  fake.octokit.rest.pulls.get = async (params) => {
+    const res = await get(params);
+    return { data: { ...res.data, mergeable: null, mergeable_state: 'unknown' } };
+  };
+  const first = await runner.execute(makeConfig({ mode: 'act' }));
+  const outcomes = first.results[0].prs[0].outcomes;
+  assert.deepEqual(outcomes.map(o => [o.label, o.status, o.rule]), [[NEEDS_HUMAN, 'denied', 'needs-human']],
+    'nothing after the denied clear is written');
+  assert.deepEqual(fake.state.comments, [], 'no un-escalated sticky while needs-human stays');
+  assert.equal(readLedger(files.ledger).prs['10']?.fingerprint, undefined, 'the denial is not cached as settled');
+
+  // GitHub has computed mergeability again; nothing else changed
+  fake.octokit.rest.pulls.get = get;
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.deepEqual(fake.state.prs[0].labels, ['sdg:waiting']);
+  assert.equal(readLedger(files.ledger).escalations['10'].active, false);
+  assert.equal(fake.state.comments.length, 1);
+  assert.doesNotMatch(fake.state.comments[0].body, /Escalated/);
+});
+
+test('renderDashboard keeps an escalated babysit PR within the bound ahead of 50 older skipped forks', () => {
+  const ledger = emptyLedger();
+  ledger.escalations['51'] = { reason: 'policy-denial', active: true, pending: false, headSha: sha('a'), history: [NOW], clears: [] };
+  const prs = [
+    ...Array.from({ length: 50 }, (_, i) => pr(i + 1, { isCrossRepository: true })),
+    pr(51, { labels: ['babysit', 'sdg:waiting', NEEDS_HUMAN] })
+  ];
+  const rows = decide({ prs }, ledger, opts()).prs;
+  const body = renderDashboard(rows, { mode: 'act', configuredMode: 'act', now: NOW, repo: 'iamgerwin/demo' });
+  const listed = body.split('\n').filter(l => l.startsWith('| #'));
+  assert.equal(listed.length, MAX_DASHBOARD_ROWS);
+  assert.match(listed[0], /^\| #51 \|.*needs-human/);
+  assert.ok(listed.slice(1).every(l => /skipped \(fork\)/.test(l)));
+  assert.ok(listed.slice(1).map(l => Number(l.match(/#(\d+)/)[1])).every((n, i, all) => i === 0 || all[i - 1] < n), 'by number within a tier');
+  assert.match(body, /1 more pull request not listed \(the dashboard is capped\): https:\/\/github\.com\/iamgerwin\/demo\/pulls/);
 });
 
 test('label setup makes no write when the hourly budget is already spent', async (t) => {

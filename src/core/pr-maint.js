@@ -20,8 +20,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LOCK_FILE = path.join(__dirname, '../../data/pr-maint.lock');
 // Bump when LABEL_DEFINITIONS change so the labels are repaired once more
 export const LABELS_VERSION = 1;
-// Denials a later tick may clear by itself, so the PR is decided again
-const RETRY_RULES = new Set(['rate', 'head-pin']);
+// Denials a later tick may clear by itself, so the PR is decided again. A
+// needs-human denial means the live read disagreed with the snapshot the clear
+// was planned on (e.g. mergeability went back to UNKNOWN).
+const RETRY_RULES = new Set(['rate', 'head-pin', 'needs-human']);
+const retryable = (outcome) => outcome.status === 'error'
+  || (outcome.status === 'denied' && RETRY_RULES.has(outcome.verdict.rule));
 
 export function prMaintLockFile() {
   return process.env.SDG_PR_MAINT_LOCK_FILE || DEFAULT_LOCK_FILE;
@@ -267,6 +271,15 @@ export function decide(snapshot, repoLedger, opts) {
 export const MAX_DASHBOARD_ROWS = 50;
 const utf8Bytes = (text) => Buffer.byteLength(text, 'utf8');
 
+// What the bounds cut last: babysit, then escalated or with a pending change,
+// then the other automated PRs, then skipped ones
+function dashboardTier(row) {
+  if (row.skip) return 3;
+  if (row.priority) return 0;
+  if (row.escalation?.active || (row.blocker || '').includes(NEEDS_HUMAN) || row.pending?.length) return 1;
+  return 2;
+}
+
 // Bounded to MAX_DASHBOARD_ROWS rows and the policy's MAX_TEXT_BYTES (UTF-8),
 // with the omitted count and a link, so it never outgrows the text policy.
 // repo: "owner/repo" for the link.
@@ -292,7 +305,7 @@ export function renderDashboard(rows, { mode, configuredMode, breaker = null, ca
   // "Pending" is the label change not applied yet: in shadow mode, what
   // act mode would do
   lines.push('| PR | State | Next step | Blocker | Pending |', '|---|---|---|---|---|');
-  const sorted = [...rows].sort((a, b) => a.number - b.number);
+  const sorted = [...rows].sort((a, b) => dashboardTier(a) - dashboardTier(b) || a.number - b.number);
   const omittedLine = (n) => `${n} more pull request${n === 1 ? '' : 's'} not listed (the dashboard is capped)`
     + (repo ? `: https://github.com/${repo}/pulls` : '.');
   // Room for the footer and the longest possible omitted line
@@ -465,7 +478,10 @@ export class PrMaint {
     const plan = decide(snapshot, repoLedger, { mode, authors: settings.authors, owner: login, pr, now: this.now() });
     const byNumber = new Map(snapshot.prs.map(p => [p.number, p]));
 
-    const dashboardHandler = (action) => github.upsertDashboard(owner, repo, action.payload.body, { number: action.payload.issue });
+    // Creating the issue also pins it: two writes, unless the hourly cap can
+    // never fit two, then it is created unpinned (the owner can pin it by hand)
+    const pin = caps.writesPerHour >= 2;
+    const dashboardHandler = (action) => github.upsertDashboard(owner, repo, action.payload.body, { number: action.payload.issue, pin });
     // In shadow mode the PR handlers do not even exist
     const handlers = mode === 'shadow'
       ? { 'comment.upsert:dashboard': dashboardHandler }
@@ -514,11 +530,14 @@ export class PrMaint {
         });
         outcomes.push({ action, ...outcome });
         if (outcome.status === 'done') applyOutcome(repoLedger, action, outcome.result, this.now());
+        // The rest of the row (lifecycle labels, an un-escalated sticky) assumes
+        // the clear went through: retried with it on a later tick
+        if (clearsNeedsHuman(action) && retryable(outcome)) break;
       }
       // What was applied is no longer pending (the next snapshot agrees)
       const applied = new Set(outcomes.filter(o => o.status === 'done').map(o => describeAction(o.action)));
       row.pending = row.pending.filter(text => !applied.has(text));
-      const unsettled = outcomes.some(o => o.status === 'error' || (o.status === 'denied' && RETRY_RULES.has(o.verdict.rule)));
+      const unsettled = outcomes.some(retryable);
       if (!dryRun && row.changed && !unsettled) {
         // The managed labels as our own writes left them
         let labels = row.managedLabels;
@@ -582,8 +601,7 @@ export class PrMaint {
         type: 'comment.upsert', scope: 'dashboard', pr: null, headSha: null,
         payload: { marker: 'dashboard', body, issue: known?.number ?? null }
       };
-      // Creating the issue also pins it: two writes
-      const outcome = await executor.run(action, { cost: known ? 1 : 2 });
+      const outcome = await executor.run(action, { cost: !known && pin ? 2 : 1 });
       if (outcome.status === 'done') applyOutcome(repoLedger, action, outcome.result, this.now());
       dashboard = outcome.status;
       if (dashboardFailed(dashboard)) {

@@ -305,7 +305,7 @@ export class PrMaintGitHub {
   }
 
   // One pinned dashboard issue, found by its marker, edited only on change
-  async upsertDashboard(owner, repo, body, { number = null } = {}) {
+  async upsertDashboard(owner, repo, body, { number = null, pin = true } = {}) {
     let existing = await this.readDashboard(owner, repo, number);
     if (!existing) {
       const issues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
@@ -320,6 +320,7 @@ export class PrMaintGitHub {
     }
 
     const { data } = await this.octokit.rest.issues.create({ owner, repo, title: DASHBOARD_TITLE, body });
+    if (!pin) return { written: 1, number: data.number };
     try {
       await this.octokit.graphql(PIN_ISSUE_MUTATION, { issueId: data.node_id });
       return { written: 2, number: data.number };

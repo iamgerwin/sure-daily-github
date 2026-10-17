@@ -113,7 +113,7 @@ test('the per-PR rate cap denies the overflow write and trips the breaker withou
   assert.deepEqual(state.writes, [NOW]);
 });
 
-test('setup writes spend the hourly budget and trip the breaker at the cap', async (t) => {
+test('setup writes spend the hourly budget and pause at the cap without tripping the breaker', async (t) => {
   const { executor, state, decisions } = setup(t, { caps: { writesPerHour: 2 } });
   let done = 0;
   const write = async () => { done++; };
@@ -122,12 +122,26 @@ test('setup writes spend the hourly budget and trip the breaker at the cap', asy
   assert.equal(await executor.runSetup('create label c', write), false);
   assert.equal(done, 2);
   assert.deepEqual(state.writes, [NOW, NOW]);
-  assert.equal(state.breaker.to, 'shadow');
-  assert.equal(executor.mode, 'shadow');
-  assert.equal(await executor.runSetup('create label d', write), false, 'shadow never runs setup');
+  assert.equal(state.breaker, null);
+  assert.equal(executor.mode, 'act');
   assert.deepEqual(decisions().map(d => [d.type, d.verdict, d.rule || null]), [
-    ['setup', 'allow', null], ['setup', 'allow', null], ['setup', 'deny', 'rate'], ['setup', 'deny', 'mode']
+    ['setup', 'allow', null], ['setup', 'allow', null], ['setup', 'deny', 'rate']
   ]);
+
+  const shadow = setup(t, { mode: 'shadow' });
+  assert.equal(await shadow.executor.runSetup('create label d', write), false, 'shadow never runs setup');
+  assert.deepEqual(shadow.decisions().map(d => [d.type, d.verdict, d.rule || null]), [['setup', 'deny', 'mode']]);
+});
+
+test('a dashboard upsert at the hourly cap is denied without tripping the breaker', async (t) => {
+  const { executor, state, calls } = setup(t, { caps: { writesPerHour: 1 } });
+  state.writes = [NOW - 1000];
+  const outcome = await executor.run(dashboard());
+  assert.equal(outcome.status, 'denied');
+  assert.equal(outcome.verdict.rule, 'rate');
+  assert.equal(state.breaker, null);
+  assert.equal(executor.mode, 'act');
+  assert.deepEqual(calls, []);
 });
 
 test('the fresh read receives the action, so a needs-human clear can ask for live checks', async (t) => {
