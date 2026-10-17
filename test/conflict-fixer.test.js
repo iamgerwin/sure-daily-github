@@ -311,6 +311,53 @@ test('hooks planted by the tests never run during the push', async (t) => {
   assert.equal(fs.existsSync(marker), false);
 });
 
+test('a push repository pre-created by the tests is never used for the credential push', async (t) => {
+  const fx = await fixture(t);
+  const marker = path.join(fx.root, 'ext-ran');
+  const helper = path.join(fx.root, 'capture.sh');
+  fs.writeFileSync(helper, `#!/bin/sh\nenv > "${marker}"\nexit 1\n`, { mode: 0o755 });
+  // The tests run in <root>/repo, so the old predictable push dir was its sibling
+  const plant = [
+    'push="$(dirname "$PWD")/push"',
+    'git init -q --bare "$push"',
+    'git --git-dir="$push" config protocol.ext.allow always',
+    `git --git-dir="$push" config "url.ext::${helper}.insteadOf" "${fx.remote}"`
+  ].join(' && ');
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  const result = await fixer.run(config({ testCommand: plant }));
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+  assert.notEqual(await fx.remoteHead(), fx.pr.headRefOid);
+  assert.equal(fs.existsSync(marker), false);
+  assert.deepEqual(fs.readdirSync(fx.workRoot), []);
+});
+
+test('does not push when the push repository config was tampered with', async (t) => {
+  for (const planted of ['core.fsmonitor=/bin/true', 'url.ext::/bin/true.insteadOf=/x', 'protocol.ext.allow=always']) {
+    const fx = await fixture(t);
+    const [key, value] = planted.split(/=(.*)/);
+    const { fixer } = makeFixer(fx, [fx.pr], {
+      git: async (args, options) => {
+        const result = await runGit(args, options);
+        // Plant after the untrusted push into the push repo, as tested code could
+        const target = args.find(arg => path.basename(arg).startsWith('sdg-push-'));
+        if (args.includes('push') && target && options.cwd !== target) {
+          await runGit(['config', '--file', path.join(target, 'config'), key, value], {});
+        }
+        return result;
+      }
+    });
+
+    const result = await fixer.run(config());
+
+    assert.equal(result.results[0].status, 'needs-manual-review', planted);
+    assert.match(result.results[0].reason, /tampered/);
+    assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+    assert.deepEqual(fs.readdirSync(fx.workRoot), []);
+  }
+});
+
 test('pushes exactly the merge commit the tests ran against', async (t) => {
   const fx = await fixture(t);
   let tested;
@@ -487,6 +534,7 @@ test('interrupt marks in-progress attempts as interrupted and exits non-zero', a
   fixer.ledger.start(KEY, fx.pr.headRefOid, 1000);
   fixer.activeKeys.add(KEY);
   fixer.activeDir = fs.mkdtempSync(path.join(fx.workRoot, 'sdg-fix-'));
+  fixer.activePushDir = fs.mkdtempSync(path.join(fx.workRoot, 'sdg-push-'));
 
   fixer.interrupt('SIGTERM');
   // A second signal while shutting down is ignored

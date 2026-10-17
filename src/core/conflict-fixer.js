@@ -19,6 +19,18 @@ export const DEFAULT_RETRY_COOLDOWN_MINUTES = 240;
 
 const FIXED_STATUSES = new Set(['fixed', 'would-fix']);
 const SIGNALS = ['SIGINT', 'SIGTERM'];
+const PUSH_BLOCKED_PROTOCOLS = ['ext', 'file', 'git', 'ssh'];
+// What `git init --bare` writes across git versions; anything else was planted
+const FRESH_PUSH_CONFIG_KEYS = new Set([
+  'core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates',
+  'core.ignorecase', 'core.precomposeunicode', 'core.symlinks'
+]);
+
+export function isFreshPushConfig({ code, stdout }) {
+  if (code !== 0) return false;
+  return String(stdout).split('\n').filter(Boolean)
+    .every(key => FRESH_PUSH_CONFIG_KEYS.has(key.toLowerCase()));
+}
 
 // Shared by the --scan-timeout option parser and execute()
 export function parseScanTimeout(value) {
@@ -103,6 +115,7 @@ class ConflictFixer {
     this.exit = options.exit || ((code) => process.exit(code));
     this.activeKeys = new Set();
     this.activeDir = null;
+    this.activePushDir = null;
     this.lock = null;
     this.interrupted = false;
   }
@@ -153,8 +166,8 @@ class ConflictFixer {
     } catch (error) {
       logger.error('Failed to mark interrupted attempts', { error: error.message });
     }
-    if (this.activeDir) {
-      fs.rmSync(this.activeDir, { recursive: true, force: true });
+    for (const dir of [this.activeDir, this.activePushDir]) {
+      if (dir) fs.rmSync(dir, { recursive: true, force: true });
     }
     this.lock?.release();
     this.exit(signal === 'SIGINT' ? 130 : 143);
@@ -403,13 +416,28 @@ class ConflictFixer {
       }
 
       // The authenticated push runs from a fresh repository whose config the
-      // tested code never saw, and sends the pinned merge commit, not HEAD
-      const pushDir = path.join(root, 'push');
-      await must(['init', '-q', '--bare', pushDir], { ...untrusted, cwd: root });
+      // tested code never saw, and sends the pinned merge commit, not HEAD.
+      // mkdtemp makes its path unpredictable and refuses an existing one, so
+      // tested code cannot plant a repository there for init to reinitialize.
+      const pushDir = fs.mkdtempSync(path.join(this.workRoot, 'sdg-push-'));
+      this.activePushDir = pushDir;
+      await must(['init', '-q', '--bare', pushDir], { ...untrusted, cwd: pushDir });
       await must(['push', '-q', pushDir, `${mergeSha}:refs/heads/${head}`], untrusted);
 
-      // Never forced: a rejected fast-forward means someone pushed meanwhile
-      const push = await git(['push', '-q', url, `${mergeSha}:refs/heads/${head}`], { cwd: pushDir });
+      // Checked after the untrusted push, which runs with the clone's config
+      if (!isFreshPushConfig(await git(['config', '--file', path.join(pushDir, 'config'), '--name-only', '--list'],
+        { ...untrusted, cwd: pushDir }))) {
+        return done('needs-manual-review', { reason: 'push repository config tampered', files });
+      }
+
+      // Never forced: a rejected fast-forward means someone pushed meanwhile.
+      // Command-line protocol overrides beat any config, so an insteadOf
+      // rewrite cannot route the credentials through ext::, ssh, git or file
+      // (file stays allowed only when the remote itself is a local path).
+      const lockdown = PUSH_BLOCKED_PROTOCOLS
+        .filter(protocol => !(protocol === 'file' && path.isAbsolute(url)))
+        .flatMap(protocol => ['-c', `protocol.${protocol}.allow=never`]);
+      const push = await git([...lockdown, 'push', '-q', url, `${mergeSha}:refs/heads/${head}`], { cwd: pushDir });
       if (push.code !== 0) {
         const stderr = String(push.stderr).trim();
         if (/rejected|non-fast-forward|fetch first/.test(stderr)) {
@@ -425,6 +453,10 @@ class ConflictFixer {
     } finally {
       this.activeDir = null;
       fs.rmSync(root, { recursive: true, force: true });
+      if (this.activePushDir) {
+        fs.rmSync(this.activePushDir, { recursive: true, force: true });
+        this.activePushDir = null;
+      }
     }
   }
 
