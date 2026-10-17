@@ -6,6 +6,7 @@ import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
+import { MODES, DEFAULT_CAPS } from '../core/policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +96,62 @@ function validateBabysit(babysit, errors) {
   for (const key of ['maxPrsPerRun', 'testTimeoutMinutes', 'engineTimeoutMinutes']) {
     if (babysit[key] !== undefined && !isPositiveInt(babysit[key])) {
       errors.push(`babysit.${key} must be a positive whole number`);
+    }
+  }
+}
+
+export const PR_MAINT_MODES = MODES;
+
+export const PR_MAINT_DEFAULTS = {
+  enabled: false,
+  mode: 'shadow',
+  authors: ['iamgerwin'],
+  rateLimits: { ...DEFAULT_CAPS },
+  // Enforced once the workers and merges that spend them land
+  budgets: {
+    claudeRunsPerPrPerDay: 6,
+    claudeRunsPerDay: 40,
+    pushesPerPrPerDay: 4,
+    mergesPerDay: 3
+  }
+};
+
+function validatePrMaint(prMaint, errors) {
+  if (prMaint === undefined || prMaint === null) return;
+  if (typeof prMaint !== 'object' || Array.isArray(prMaint)) {
+    errors.push('prMaint must be a mapping');
+    return;
+  }
+  if (prMaint.enabled !== undefined && typeof prMaint.enabled !== 'boolean') {
+    errors.push('prMaint.enabled must be true or false');
+  }
+  if (prMaint.mode !== undefined && !PR_MAINT_MODES.includes(prMaint.mode)) {
+    errors.push(`prMaint.mode must be one of: ${PR_MAINT_MODES.join(', ')}`);
+  }
+  if (prMaint.authors !== undefined) {
+    if (!Array.isArray(prMaint.authors) || prMaint.authors.length === 0) {
+      errors.push('prMaint.authors must be a non-empty list of GitHub logins');
+    } else {
+      prMaint.authors.forEach((author, i) => {
+        if (typeof author !== 'string' || !/^[A-Za-z0-9-]+(\[bot\])?$/.test(author)) {
+          errors.push(`prMaint.authors[${i}] must be a GitHub login`);
+        }
+      });
+    }
+  }
+  for (const group of ['rateLimits', 'budgets']) {
+    const values = prMaint[group];
+    if (values === undefined || values === null) continue;
+    if (typeof values !== 'object' || Array.isArray(values)) {
+      errors.push(`prMaint.${group} must be a mapping`);
+      continue;
+    }
+    for (const [key, value] of Object.entries(values)) {
+      if (!Object.hasOwn(PR_MAINT_DEFAULTS[group], key)) {
+        errors.push(`prMaint.${group}.${key} is not a known setting`);
+      } else if (!isPositiveInt(value)) {
+        errors.push(`prMaint.${group}.${key} must be a positive whole number`);
+      }
     }
   }
 }
@@ -248,6 +305,7 @@ class ConfigLoader {
     }
 
     validateBabysit(config.babysit, errors);
+    validatePrMaint(config.prMaint, errors);
 
     if (config.contentTemplates !== undefined && !Array.isArray(config.contentTemplates)) {
       errors.push('contentTemplates must be an array');
@@ -391,6 +449,12 @@ class ConfigLoader {
         denylist: conflictFixer.denylist ?? []
       },
       babysit: { ...BABYSIT_DEFAULTS, ...(config.babysit || {}) },
+      prMaint: {
+        ...PR_MAINT_DEFAULTS,
+        ...(config.prMaint || {}),
+        rateLimits: { ...PR_MAINT_DEFAULTS.rateLimits, ...(config.prMaint?.rateLimits || {}) },
+        budgets: { ...PR_MAINT_DEFAULTS.budgets, ...(config.prMaint?.budgets || {}) }
+      },
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
         body: 'Progress update for ${date}'

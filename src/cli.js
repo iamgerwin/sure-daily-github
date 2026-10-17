@@ -7,7 +7,8 @@ import executor, { describeFailures, getRunExitCode } from './core/executor.js';
 import scheduler from './core/scheduler.js';
 import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
-import config from './config/loader.js';
+import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
+import config, { PR_MAINT_MODES } from './config/loader.js';
 import { getTemplateDateParts } from './utils/template-date.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -124,6 +125,90 @@ program
       console.log(`Comments:      addressed ${s.addressed}, deferred ${s.deferred}, wontfix ${s.wontfix}, noted ${s.noted}`);
       console.log(`Failed:        ${s.failed}\n`);
       process.exit(getBabysitExitCode(result));
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+      process.exit(1);
+    }
+  });
+
+// PR-maint command - one tick of the pull request lifecycle orchestrator
+program
+  .command('pr-maint')
+  .description('Label, track, and report open pull requests through the policy engine (never merges)')
+  .option('--mode <mode>', `Override prMaint.mode (${PR_MAINT_MODES.join(', ')})`)
+  .option('--once', 'Run a single tick and exit (default)')
+  .option('--repo <owner/repo>', 'Restrict to a configured repository (repeatable)', collect, [])
+  .option('--pr <number>', 'Restrict actions to one pull request (requires exactly one --repo)')
+  .option('--dry-run', 'Decide and print planned actions without writing to GitHub or the state files')
+  .option('--config <path>', 'Path to configuration file')
+  .action(async (options) => {
+    try {
+      if (options.mode !== undefined && !PR_MAINT_MODES.includes(options.mode)) {
+        throw new Error(`--mode must be one of: ${PR_MAINT_MODES.join(', ')}`);
+      }
+      let pr = null;
+      if (options.pr !== undefined) {
+        pr = Number(options.pr);
+        if (!/^\d+$/.test(options.pr) || pr < 1) {
+          throw new Error('--pr must be a positive pull request number');
+        }
+        if (options.repo.length !== 1) {
+          throw new Error('--pr requires exactly one --repo <owner/repo>');
+        }
+      }
+      const invalidRepo = options.repo.find(name => !/^[^/\s]+\/[^/\s]+$/.test(name));
+      if (invalidRepo) {
+        throw new Error(`--repo must be owner/repo, got "${invalidRepo}"`);
+      }
+
+      const cfg = config.load(options.config);
+      const result = await prMaint.execute(cfg, {
+        repos: options.repo,
+        pr,
+        mode: options.mode ?? null,
+        dryRun: Boolean(options.dryRun)
+      });
+
+      if (result.locked) {
+        console.log(`\n⏭️  ${result.error}; skipped this tick\n`);
+        process.exit(0);
+      }
+      if (result.skipped) {
+        console.log(`\n⏭️  pr-maint skipped: ${result.reason}\n`);
+        process.exit(0);
+      }
+      if (!result.success) {
+        console.error('❌ pr-maint failed:', result.error);
+        process.exit(1);
+      }
+
+      const modeNote = result.mode !== result.configuredMode ? ` (configured ${result.configuredMode}, breaker tripped)` : '';
+      console.log(`\n✅ pr-maint tick completed in ${result.mode} mode${modeNote}${result.dryRun ? ' (dry run)' : ''}\n`);
+      for (const r of result.results) {
+        const name = `${r.owner}/${r.repo}`;
+        if (r.error) {
+          console.error(`❌ ${name}: ${r.error}`);
+          continue;
+        }
+        if (r.skipped || r.paused) {
+          console.log(`⏭️  ${name}: ${r.paused ? 'paused by the dashboard issue' : r.reason}`);
+          continue;
+        }
+        console.log(`📋 ${name} (dashboard ${r.dashboard})`);
+        for (const p of r.prs) {
+          const state = p.skip ? `skipped (${p.skip})` : (p.lifecycle || 'none');
+          const notes = [p.priority, p.changed ? null : 'unchanged'].filter(Boolean).join(', ');
+          console.log(`   #${String(p.number).padEnd(5)} ${state}${notes ? ` [${notes}]` : ''}`);
+          if (!p.outcomes.length && p.pending.length) console.log(`      pending  ${p.pending.join('; ')}`);
+          p.outcomes.forEach(o => console.log(`      ${o.status.padEnd(8)} ${o.detail}${o.rule ? ` (${o.rule}: ${o.reason})` : ''}`));
+        }
+      }
+
+      const s = result.summary;
+      console.log(`\nPull requests: ${s.prs}`);
+      console.log(`Actions:       ${s.actions} (written ${s.written}, denied ${s.denied})`);
+      console.log(`Failed:        ${s.failed}\n`);
+      process.exit(getPrMaintExitCode(result));
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);
@@ -311,6 +396,7 @@ program
 
       console.log(`   Scheduler: ${cfg.schedule?.enabled ? 'enabled' : 'disabled'}`);
       console.log(`   Babysit: ${cfg.babysit.enabled ? 'enabled' : 'disabled'} (label "${cfg.babysit.label}", ${cfg.babysit.engine} ${cfg.babysit.model})`);
+      console.log(`   PR maintenance: ${cfg.prMaint.enabled ? 'enabled' : 'disabled'} (${cfg.prMaint.mode} mode, authors ${cfg.prMaint.authors.join(', ')})`);
 
       if (cfg.randomization?.enabled) {
         console.log('   Randomization: enabled');

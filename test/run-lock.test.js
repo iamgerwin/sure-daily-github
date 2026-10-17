@@ -86,6 +86,22 @@ test('release does not remove a lock that now belongs to someone else', (t) => {
   assert.equal(fs.existsSync(filePath), true);
 });
 
+test('acquireRunLock with a filePath is independent of the shared run lock', (t) => {
+  const filePath = useTmpLockFile(t);
+  const other = path.join(path.dirname(filePath), 'pr-maint.lock');
+
+  const shared = acquireRunLock();
+  const separate = acquireRunLock({ filePath: other });
+  assert.equal(shared.acquired, true);
+  assert.equal(separate.acquired, true);
+  assert.equal(acquireRunLock({ filePath: other }).acquired, false);
+
+  separate.release();
+  assert.equal(fs.existsSync(other), false);
+  assert.equal(fs.existsSync(filePath), true);
+  shared.release();
+});
+
 test('executor.execute skips when another process holds the lock', async (t) => {
   const filePath = useTmpLockFile(t);
   writeForeignLock(filePath);

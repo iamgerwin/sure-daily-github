@@ -339,6 +339,52 @@ test('validate rejects invalid babysit settings', () => {
   }
 });
 
+test('validate defaults the prMaint block to disabled shadow mode for iamgerwin', () => {
+  const cfg = config.validate({ repositories: [baseRepo] });
+  assert.deepEqual(cfg.prMaint, {
+    enabled: false,
+    mode: 'shadow',
+    authors: ['iamgerwin'],
+    rateLimits: { writesPerPrPerTick: 20, writesPerHour: 200 },
+    budgets: { claudeRunsPerPrPerDay: 6, claudeRunsPerDay: 40, pushesPerPrPerDay: 4, mergesPerDay: 3 }
+  });
+});
+
+test('validate keeps configured prMaint settings and fills in nested defaults', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    prMaint: { enabled: true, mode: 'act', authors: ['someone', 'dependabot[bot]'], rateLimits: { writesPerHour: 50 }, budgets: { mergesPerDay: 1 } }
+  });
+  assert.equal(cfg.prMaint.enabled, true);
+  assert.equal(cfg.prMaint.mode, 'act');
+  assert.deepEqual(cfg.prMaint.authors, ['someone', 'dependabot[bot]']);
+  assert.deepEqual(cfg.prMaint.rateLimits, { writesPerPrPerTick: 20, writesPerHour: 50 });
+  assert.equal(cfg.prMaint.budgets.mergesPerDay, 1);
+  assert.equal(cfg.prMaint.budgets.claudeRunsPerDay, 40);
+});
+
+test('validate rejects invalid prMaint settings', () => {
+  const cases = [
+    [[], /prMaint must be a mapping/],
+    [{ enabled: 'yes' }, /prMaint\.enabled must be true or false/],
+    [{ mode: 'yolo' }, /prMaint\.mode must be one of: shadow, act, autonomous/],
+    [{ authors: [] }, /prMaint\.authors must be a non-empty list of GitHub logins/],
+    [{ authors: 'iamgerwin' }, /prMaint\.authors must be a non-empty list of GitHub logins/],
+    [{ authors: ['bad login'] }, /prMaint\.authors\[0\] must be a GitHub login/],
+    [{ rateLimits: [] }, /prMaint\.rateLimits must be a mapping/],
+    [{ rateLimits: { writesPerHour: 0 } }, /prMaint\.rateLimits\.writesPerHour must be a positive whole number/],
+    [{ rateLimits: { writesPerDay: 5 } }, /prMaint\.rateLimits\.writesPerDay is not a known setting/],
+    [{ budgets: { mergesPerDay: 1.5 } }, /prMaint\.budgets\.mergesPerDay must be a positive whole number/]
+  ];
+  for (const [prMaint, pattern] of cases) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], prMaint }),
+      pattern,
+      `${JSON.stringify(prMaint)} should be rejected`
+    );
+  }
+});
+
 test('validate rejects an empty or non-string repository testCommand', () => {
   for (const testCommand of ['', '  ', 42, ['npm', 'test']]) {
     assert.throws(

@@ -44,8 +44,8 @@ function isStale(holder, now) {
 // Acquires an exclusive cross-process lock so concurrent executions (e.g. the
 // scheduler service plus a manual `run`) cannot race on the state files.
 // Returns { acquired: true, release } or { acquired: false, holder }.
-export function acquireRunLock({ now = Date.now() } = {}) {
-  const filePath = lockFilePath();
+// `filePath` selects a separate lock (pr-maint ticks must not wait on `run`).
+export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
   for (let attempt = 0; attempt < 2; attempt++) {
