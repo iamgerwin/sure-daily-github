@@ -111,31 +111,56 @@ export function isTestFile(file) {
   return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
 }
 
-// `text` with comments and single-line '...'/"..." strings blanked out, so a
-// test( mentioned there is not mistaken for a registration. Template literals
-// are left alone and an unclosed block comment stops the stripping, so a
+const blankOut = (text) => text.replace(/[^\n]/g, ' ');
+
+// `text` with comments, '...'/"..." strings and the literal text of `...`
+// templates blanked out (newlines kept), so a test( mentioned there is inert
+// and not mistaken for a registration. ${...} inside a template is code and is
+// kept. An unclosed comment, string or template stops the stripping, so a
 // misread keeps the text and fails closed.
 function stripCommentsAndStrings(text) {
   let out = '';
+  // Brace depth inside each open ${...}, innermost last
+  const interpolations = [];
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1];
     if (ch === '/' && next === '/') {
-      const end = text.indexOf('\n', i);
-      i = end === -1 ? text.length : end;
+      const newline = text.indexOf('\n', i);
+      const end = newline === -1 ? text.length : newline;
+      out += blankOut(text.slice(i, end));
+      i = end;
     } else if (ch === '/' && next === '*') {
       const end = text.indexOf('*/', i + 2);
       if (end === -1) return out + text.slice(i);
-      out += text.slice(i, end + 2).replace(/[^\n]/g, ' ');
+      out += blankOut(text.slice(i, end + 2));
       i = end + 2;
     } else if (ch === "'" || ch === '"') {
       let j = i + 1;
       while (j < text.length && text[j] !== ch && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
-      const end = Math.min(text[j] === ch ? j + 1 : j, text.length);
-      out += ' '.repeat(end - i);
-      i = end;
+      if (j >= text.length || text[j] !== ch) return out + text.slice(i);
+      out += blankOut(text.slice(i, j + 1));
+      i = j + 1;
+    } else if (ch === '`' || (ch === '}' && interpolations.at(-1) === 0)) {
+      // Opening a template, or closing a ${...} and resuming its template
+      if (ch === '}') interpolations.pop();
+      let j = i + 1;
+      while (j < text.length && text[j] !== '`' && !(text[j] === '$' && text[j + 1] === '{')) {
+        j += text[j] === '\\' ? 2 : 1;
+      }
+      if (j >= text.length) return out + text.slice(i);
+      if (text[j] === '`') {
+        out += blankOut(text.slice(i, j + 1));
+        i = j + 1;
+      } else {
+        out += blankOut(text.slice(i, j + 2));
+        interpolations.push(0);
+        i = j + 2;
+      }
     } else {
+      if (interpolations.length && ch === '{') interpolations[interpolations.length - 1]++;
+      if (interpolations.length && ch === '}') interpolations[interpolations.length - 1]--;
       out += ch;
       i++;
     }

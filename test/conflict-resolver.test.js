@@ -150,6 +150,31 @@ test('countTests ignores test( mentioned only in comments or strings', () => {
   assert.equal(countTests("/* unclosed\nexport default test('a', () => {});\n"), null);
 });
 
+test('countTests does not let template literal text hide a real registration', () => {
+  assert.equal(countTests("const url = `https://example.com`;\nvoid test('a', () => {});\n"), null);
+  assert.equal(
+    countTests("const open = `/*`;\nvoid test('a', () => {});\nconst close = `*/`;\n"),
+    null
+  );
+  assert.equal(countTests("const path = `a//b`;\nvoid test('a', () => {});\n"), null);
+  assert.equal(countTests("const quote = `it's`;\nvoid test('a', () => {});\n"), null);
+  assert.equal(
+    countTests("const msg = `n=${items.map(x => ({ x })).length}`;\nvoid test('a', () => {});\n"),
+    null
+  );
+  assert.equal(countTests("const msg = `${void test('a', () => {})}`;\n"), null);
+});
+
+// A test( inside a template's literal text or a comment is inert, not code
+test('countTests ignores test( mentioned only in template literal text or comments', () => {
+  const text = [
+    'export const doc = `call test(x) or\n',
+    '  use it(y) to register`;\n',
+    '// test(z) lives elsewhere\n'
+  ].join('');
+  assert.equal(countTests(text), 0);
+});
+
 test('unionHunk keeps every added line from both sides, ours before theirs', () => {
   const union = unionHunk({
     base: [],
