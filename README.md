@@ -219,7 +219,7 @@ repositorySelection:
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `owner` | string | ✅ | GitHub username/organization |
-| `repo` | string | ✅ | Repository name |
+| `repo` | string | ✅ | Repository name (each `owner/repo` may appear only once, case-insensitive) |
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
 | `branch` | string | ❌ | Target branch (default: the repository's default branch) |
 | `dailyTarget` | number or range | ❌ | Override global target |
