@@ -34,7 +34,7 @@ babysit:
   engine: opencode            # opencode | claude
   model: openai/gpt-6.1-sol   # engine model
   ownPRsOnly: true            # only PRs authored by the token's user
-  maxPrsPerRun: 5             # across all repositories
+  maxPrsPerRun: 5             # across all repositories, round-robin across runs
   testTimeoutMinutes: 15      # test gate timeout
   engineTimeoutMinutes: 30    # per engine invocation
 
@@ -49,18 +49,76 @@ them, and other repositories are never queried.
 
 ### Engines
 
-| `engine`   | Command run in the PR checkout |
+| `engine`   | Command run in the PR checkout (prompt on stdin) |
 |------------|--------------------------------|
-| `opencode` | `opencode run --auto --model <model> <prompt>` |
-| `claude`   | `claude --model <model> -p <prompt> --permission-mode acceptEdits` |
+| `opencode` | `opencode run --auto --model <model>` with `OPENCODE_CONFIG_CONTENT=<policy>` and `OPENCODE_DISABLE_PROJECT_CONFIG=1` |
+| `claude`   | `claude --model <model> -p --permission-mode dontAsk --setting-sources user --strict-mcp-config --allowedTools … --disallowedTools …` |
 
-Commands are spawned with an argument array and no shell, so review text in
-the prompt cannot be interpreted as shell syntax. The engine may run the PR's
-code (its tests), so it and the test gate run with an allowlisted environment
-only (`PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_*`, `CI`): `GITHUB_TOKEN`,
-cloud credentials, and provider API key variables are not passed. Each engine
-must find its credentials through its own config under `HOME` (for example
-`opencode auth login` or `claude` login).
+Commands are spawned with an argument array and no shell. The prompt, which
+embeds untrusted review text, goes to the engine's **stdin**, never into argv,
+so it cannot be read as shell syntax or hit the OS argument-size limit
+(`E2BIG`). Comments are also **batched**: one engine call gets at most about
+100,000 characters of comment bodies (a comment is never split from its id),
+and large reviews take several calls whose results are merged.
+
+The engine may run the PR's code (its tests), so it and the test gate run with
+an allowlisted environment only (`PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`,
+`LC_*`, `CI`): `GITHUB_TOKEN`, cloud credentials, and provider API key
+variables are not passed. Each engine must find its credentials through its
+own config under `HOME` (for example `opencode auth login` or `claude` login).
+
+### Engine permission policy
+
+The prompt tells the engine not to push or touch git config, but review text
+is untrusted, so the boundary is **enforced by the engine's own permission
+system**, not by the prompt:
+
+- **opencode.** The policy is passed as inline config. bash is allowed except
+  for an explicit deny list, and opencode never auto-approves a denied
+  command, even with `--auto`. Rules are evaluated last match wins, so the
+  catch-all `*` comes first. Denied:
+  - `git push/pull/fetch/remote/clone/submodule/config/credential`
+  - `gh`
+  - network tools: `curl`, `wget`, `ssh`, `scp`, `sftp`, `rsync`, `nc`,
+    `ncat`, `socat`, `telnet`, `ftp`
+  - `sudo`
+  - bypass forms: `git -c/-C/--git-dir/--work-tree/...`, `*/git …`, `env`,
+    `eval`, `exec`, `command`, `xargs`, `bash/sh/zsh -c`
+
+  `edit` is allowed, `external_directory` is denied (edits and reads stay in
+  the checkout), and `webfetch` and `websearch` are denied.
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1` makes opencode ignore the PR's own
+  `opencode.json` and `.opencode/` (agents, plugins, permission rules), which
+  could otherwise re-order or widen the policy.
+- **claude.** `dontAsk` mode allows only what is listed in `--allowedTools`
+  and refuses everything else without a prompt. The allowed tools are
+  `Read`, `Glob`, `Grep`, `Edit`, `Write`, `TodoWrite`, and local git
+  (`status`, `diff`, `log`, `show`, `add`, `commit`). `--disallowedTools`
+  additionally denies push, pull, fetch, remote, clone, config, `gh`, the
+  network tools, `WebFetch`, and `WebSearch`. `--setting-sources user` and
+  `--strict-mcp-config` ignore the PR's `.claude/settings.json` (permissions,
+  hooks) and `.mcp.json`.
+- **Both engines.** On top of the scrubbed environment, the engine gets:
+  - `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`: no global or
+    system credential helpers or `insteadOf` rules
+  - `credential.helper` reset, so a helper planted in the clone's
+    `.git/config` cannot read `~/.git-credentials`
+  - the `ssh`, `ext`, and `git` protocols set to `never`, plus
+    `GIT_SSH_COMMAND=false`
+  - `GH_CONFIG_DIR=/dev/null`
+
+  So even a command the policy misses finds no git or `gh` credential under
+  `HOME`.
+
+**Residual risk.** opencode's bash policy matches command prefixes. It allows
+arbitrary interpreters (`node -e`, `python -c`, `npm run`), which the engine
+needs to run the PR's tests, and those can still open network connections or
+read files under `HOME` (for example `~/.ssh` keys) directly. The environment
+lockdown removes the git and `gh` credentials those programs would normally
+pick up, and the engine never has the GitHub token. Full isolation of
+arbitrary PR code needs an OS sandbox (container or dedicated user), which is
+outside babysit. claude does not have this gap: Bash is limited to the
+allowlist.
 
 ## How a pull request is handled
 
@@ -68,7 +126,13 @@ must find its credentials through its own config under `HOME` (for example
    pull requests. With `ownPRsOnly`, it keeps only those authored by the
    token's user. Drafts are handled like any other PR. Closed PRs are skipped.
    A PR whose head branch is in a fork cannot be pushed to, so it gets one
-   comment explaining that and is skipped from then on.
+   comment explaining that and is skipped from then on. When there are more
+   candidates than `maxPrsPerRun`, the scan goes **round-robin**: it starts
+   right after the last PR the previous full scan visited (the cursor is
+   stored in the ledger), so idle or fork PRs early in the list cannot starve
+   the rest. `--repo`/`--pr` scans neither use nor move the cursor. Before
+   scanning, replies left pending by earlier runs are delivered (see
+   [Reply delivery](#reply-delivery)).
 2. **Collect.** Fetches inline review comments, review bodies, and issue
    comments. Babysit skips its own replies (they carry a hidden
    `<!-- sdg-babysit -->` marker), comments by the token's user, empty review
@@ -83,8 +147,13 @@ must find its credentials through its own config under `HOME` (for example
    discarded.
 5. **Implement** (only if there are `fix` items). The engine applies the
    fixes, adds tests, and commits with conventional messages. If it leaves
-   uncommitted edits (for example, `claude` in `acceptEdits` mode cannot run
-   git), babysit commits them as `fix: address review feedback on #N`.
+   uncommitted edits, babysit commits them as
+   `fix: address review feedback on #N`. The engine must write a report with
+   an explicit `status` (`implemented` or `failed`) for **every** item. Only
+   `implemented` items are settled once the push succeeds. A `failed` item
+   is charged an attempt. An item the report leaves out stays pending without
+   being charged. A missing or invalid report is treated as an
+   infrastructure failure: nothing is pushed, settled, or charged.
 6. **Verify.** The new commits must descend linearly from the PR head (no
    rewritten history, no merges). `Co-Authored-By` and `Generated with` lines
    are stripped from their messages, keeping authors and trees. The working
@@ -98,7 +167,9 @@ must find its credentials through its own config under `HOME` (for example
    bare repository the PR code never touched, with the `ext`, `ssh`, `git`,
    and `file` protocols disabled. It is a plain push, which only
    fast-forwards: it never force-pushes, and if the branch moved in the
-   meantime the push is rejected.
+   meantime the push is rejected. A rejected push is not the comment's fault,
+   so it is rescheduled: the comment stays pending, without being charged an
+   attempt, and is handled against the new head on the next run.
 8. **Reply.** Each inline thread gets one reply:
    - `fix`: the commit SHA, what changed, the `file:line` locations, and a
      re-review request
@@ -109,7 +180,42 @@ must find its credentials through its own config under `HOME` (for example
    Review bodies and issue comments cannot be replied to individually, so
    they share one summary PR comment that lists each disposition. Bot authors
    (`user.type == "Bot"`) are mentioned (`@coderabbitai`, with `[bot]`
-   removed) with an explicit re-review request. Humans are never mentioned.
+   removed). A bot is asked to re-review only when this run pushed a commit,
+   and only once per pushed head, even if it opened several threads. Humans
+   are never mentioned.
+
+## Reply delivery
+
+Deciding an outcome and delivering its reply are separate steps:
+
+1. As soon as the push succeeds, before any reply is sent, every outcome and
+   every reply body is written to the ledger in one save. Pushed fixes are
+   recorded as `pushed` with the commit SHA.
+2. Each reply is posted, and its comments are settled when the post succeeds.
+3. If a post fails, its comments settle with `replyPending` (a pushed fix
+   becomes `addressed`), and the reply stays queued.
+
+Each later run first retries queued replies. It only posts them and never
+runs the engine again. A `pushed` entry (the process died between the push
+and the reply) is delivered only if the PR head is still the pushed SHA. If
+the branch has moved on, the comment is settled as `addressed` with a note
+and no reply is sent. Give-up notices are queued and retried the same way. A
+reply that fails 10 times is dropped with a note.
+
+## Interrupts
+
+On `SIGINT`/`SIGTERM`, babysit:
+
+1. Kills the engine and test process groups, including grandchildren (SIGTERM,
+   then SIGKILL after a grace period).
+2. Marks the interruption on the PR in the ledger. The interrupted PR's
+   comments were not charged an attempt.
+3. Removes the temporary clone and push repository.
+4. Releases the run lock.
+5. Exits `130` (`SIGINT`) or `143` (`SIGTERM`).
+
+A second signal is ignored. Nothing is pushed after the interrupt, and
+replies for an already pushed fix stay queued in the ledger.
 
 ## Per-comment memory (ledger)
 
@@ -121,13 +227,19 @@ backed up to `.bak` and the ledger starts fresh.
 
 | State       | Meaning | Reprocessed? |
 |-------------|---------|--------------|
-| `addressed` | fix pushed and replied | never |
-| `deferred`  | replied with the deferral reasoning | never |
-| `wontfix`   | replied declining, with evidence | never |
-| `noted`     | acknowledged once | never |
-| `failed`    | triage, engine, tests, or reply failed | retried once more; after 2 failures the thread gets a "leaving this for manual follow-up" reply and is left alone |
+| `pushed`    | fix pushed, reply not yet attempted | never; only the reply is delivered |
+| `addressed` | fix pushed (and replied, unless `replyPending`) | never |
+| `deferred`  | deferral reasoning decided (and replied, unless `replyPending`) | never |
+| `wontfix`   | declined with evidence (and replied, unless `replyPending`) | never |
+| `noted`     | acknowledged (and replied, unless `replyPending`) | never |
+| `failed`    | triage, the engine (exit or timeout), tests, or a reported `failed` fix | retried once more; after 2 failures the thread gets a "leaving this for manual follow-up" reply and is left alone |
 
-A failure in the current run makes the command exit `1`.
+Queued replies live under `deliveries`, and the round-robin position under
+`cursor`. Some failures are not charged against a comment and leave it
+pending: an engine that cannot be spawned (`E2BIG`, `ENOENT`, `EACCES`), a
+missing or invalid implement report, an item the report left out, a push
+rejected because the branch moved, and an interrupt. A failure in the
+current run (except a rescheduled push) makes the command exit `1`.
 
 ## Safety model
 
@@ -146,7 +258,9 @@ A failure in the current run makes the command exit `1`.
   call that reads the clone's (untrusted) config.
 - **Shared run lock.** Babysit uses the same lock as `run` and the scheduler.
   If another process holds it, the scan is skipped.
-- **Untrusted input.** Review comments are passed to the engine as data, and
-  the prompts tell it not to follow instructions inside them. The PR's code
+- **Untrusted input.** Review comments are passed to the engine as stdin
+  data, and the engine's enforced permission policy (see
+  [Engine permission policy](#engine-permission-policy)) keeps them from
+  reaching push, `gh`, network, or credential tools. The PR's code
   (its tests) runs on your machine. Keep `ownPRsOnly: true` unless you trust
   every author who can push a labeled branch to the repository.

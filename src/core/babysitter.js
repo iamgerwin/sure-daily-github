@@ -6,9 +6,10 @@ import config from '../config/loader.js';
 import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import { runGit, gitAuthEnv, scrubEnv } from '../utils/git.js';
-import { detectTestCommand, runTestCommand, tailLines } from '../utils/test-detector.js';
-import { BabysitterLedger, MAX_ATTEMPTS } from '../utils/babysitter-ledger.js';
+import { detectTestCommand, runTestCommand, killActiveTests, tailLines } from '../utils/test-detector.js';
+import { BabysitterLedger, MAX_ATTEMPTS, PUSHED_STATE } from '../utils/babysitter-ledger.js';
 import { createReviewEngine } from '../utils/review-engine.js';
+import { killActiveEngines } from '../utils/process.js';
 import { isFreshPushConfig } from './conflict-fixer.js';
 
 // Threat model: the engine runs inside the PR checkout and may execute PR code
@@ -30,6 +31,13 @@ const ACTION_STATES = { fix: 'addressed', defer: 'deferred', wontfix: 'wontfix',
 const STATE_LABELS = { addressed: 'fixed', deferred: 'deferred', wontfix: "won't fix", noted: 'noted' };
 const MAX_HUNK_CHARS = 2000;
 const OUTPUT_TAIL_LINES = 15;
+const SIGNALS = ['SIGINT', 'SIGTERM'];
+
+class InterruptedError extends Error {
+  constructor() {
+    super('babysit run was interrupted');
+  }
+}
 
 function emptyCounts() {
   return { addressed: 0, deferred: 0, wontfix: 0, noted: 0, failed: 0 };
@@ -129,7 +137,7 @@ export function selectRepositories(repositories, requested = []) {
 function summarize(results) {
   const summary = { prs: 0, skipped: 0, ...emptyCounts() };
   for (const result of results) {
-    if (result.number !== undefined) summary.prs++;
+    if (result.number !== undefined && !result.delivery) summary.prs++;
     if (result.skipped) summary.skipped++;
     if (result.error) summary.failed++;
     for (const key of Object.keys(emptyCounts())) {
@@ -155,14 +163,18 @@ function fixDetail(comment, decision, fix) {
   return `Fixed in ${fix.commitSha.slice(0, 12)}: ${summary}${changed}`;
 }
 
-export function inlineReplyBody(comment, decision, fix) {
+// `reReview: false` drops the re-review request for a bot already asked to
+// re-review this head elsewhere in the same run
+export function inlineReplyBody(comment, decision, fix, { reReview = true } = {}) {
   const mention = mentionFor(comment.user);
   const lead = mention ? `${mention} ` : '';
   let text;
   switch (decision.action) {
-    case 'fix':
-      text = `${fixDetail(comment, decision, fix)}\n\n${mention ? `${mention} please re-review.` : 'Please re-review.'}`;
+    case 'fix': {
+      const request = mention ? `${mention} please re-review.` : 'Please re-review.';
+      text = reReview ? `${fixDetail(comment, decision, fix)}\n\n${request}` : fixDetail(comment, decision, fix);
       break;
+    }
     case 'defer':
       text = `${lead}Deferring this: ${decision.reasoning}${decision.plan ? `\n\nFollow-up: ${decision.plan}` : ''}`;
       break;
@@ -185,8 +197,10 @@ function giveUpReplyBody(comment, error) {
 }
 
 // One PR comment covering review bodies and issue comments, which (unlike
-// inline threads) cannot be replied to individually
-export function summaryCommentBody(entries, fix) {
+// inline threads) cannot be replied to individually. Bots are only asked to
+// re-review when this run pushed a commit (`fix`), and only those not already
+// asked (`asked`) for that head.
+export function summaryCommentBody(entries, fix, asked = new Set()) {
   const bots = new Set();
   const lines = entries.map(({ comment, decision, failed, error }) => {
     const mention = mentionFor(comment.user);
@@ -201,8 +215,9 @@ export function summaryCommentBody(entries, fix) {
   });
 
   const parts = ['Babysit update for review feedback on this PR:', '', ...lines];
-  if (bots.size) {
-    parts.push('', `${[...bots].join(' ')} please re-review the latest changes.`);
+  const reReview = fix?.commitSha ? [...bots].filter(mention => !asked.has(mention)) : [];
+  if (reReview.length) {
+    parts.push('', `${reReview.join(' ')} please re-review the latest changes.`);
   }
   parts.push('', REPLY_MARKER);
   return parts.join('\n');
@@ -232,9 +247,54 @@ async function isAncestor(run, ancestor, descendant) {
 
 export class Babysitter {
   // options (all injectable for tests): client, engine, ledger, token, git,
-  // runCommand, remoteUrl(owner, repo), tmpDir, acquireLock
+  // runCommand, remoteUrl(owner, repo), tmpDir, acquireLock, killTests,
+  // killEngines, exit
   constructor(options = {}) {
     this.options = options;
+    this.lock = null;
+    this.ctx = null;
+    this.activePrKey = null;
+    this.activeDirs = new Set();
+    this.interrupted = false;
+  }
+
+  checkInterrupted() {
+    if (this.interrupted) throw new InterruptedError();
+  }
+
+  // Engines and test commands run in their own process groups and would
+  // outlive this process, still writing to the clone. Kills them (SIGKILL
+  // after a grace period), notes the interruption in the ledger, removes the
+  // temp dirs, releases the lock, and exits. The current PR's comments were
+  // not charged an attempt, and anything already pushed has its replies in
+  // the ledger, so the next run picks up from there. A repeated signal is ignored.
+  async interrupt(signal) {
+    if (this.interrupted) return;
+    this.interrupted = true;
+    // Captured now: the main flow unwinds (and clears these) once engines die
+    const { activePrKey, ctx } = this;
+    logger.warn('Babysit interrupted', { signal, pr: activePrKey });
+    (this.options.killTests || killActiveTests)();
+    try {
+      await (this.options.killEngines || killActiveEngines)();
+    } catch (error) {
+      logger.error('Failed to stop engine processes', { error: error.message });
+    }
+    try {
+      if (activePrKey && ctx) ctx.ledger.markInterrupted(activePrKey, { signal });
+    } catch (error) {
+      logger.error('Failed to record the interruption', { error: error.message });
+    }
+    for (const dir of this.activeDirs) fs.rmSync(dir, { recursive: true, force: true });
+    this.activeDirs.clear();
+    this.lock?.release();
+    (this.options.exit || ((code) => process.exit(code)))(signal === 'SIGINT' ? 130 : 143);
+  }
+
+  installSignalHandlers() {
+    const handlers = SIGNALS.map(signal => [signal, () => { this.interrupt(signal); }]);
+    handlers.forEach(([signal, handler]) => process.on(signal, handler));
+    return () => handlers.forEach(([signal, handler]) => process.off(signal, handler));
   }
 
   get git() {
@@ -267,9 +327,15 @@ export class Babysitter {
       return { success: true, locked: true, error, results: [], summary: summarize([]) };
     }
 
+    this.lock = lock;
+    this.interrupted = false;
+    const removeSignalHandlers = this.installSignalHandlers();
     try {
       return await this.run(cfg, opts);
     } finally {
+      removeSignalHandlers();
+      this.lock = null;
+      this.ctx = null;
       lock.release();
     }
   }
@@ -297,42 +363,65 @@ export class Babysitter {
         })
       };
 
+      this.ctx = ctx;
+
       logger.info('Starting babysit scan', {
         repositories: selected.length, label: settings.label, engine: settings.engine, dryRun
       });
 
-      let budget = settings.maxPrsPerRun;
-      for (const repoCfg of selected) {
-        if (budget <= 0) break;
-        const { owner, repo } = repoCfg;
+      // Replies that failed (or never ran) on an earlier run go out before
+      // any new work, without running the engine again
+      if (!dryRun) await this.retryDeliveries(ctx, selected, pr, results);
 
-        let candidates;
+      const candidates = [];
+      for (const [repoIndex, repoCfg] of selected.entries()) {
+        const { owner, repo } = repoCfg;
         try {
           const issues = unwrap(
             await client.listLabeledPullRequests(owner, repo, settings.label),
             `List ${settings.label} pull requests for ${owner}/${repo}`
           );
-          candidates = issues
+          issues
             .filter(issue => pr === null || issue.number === pr)
             .filter(issue => !settings.ownPRsOnly || sameLogin(issue.user?.login, me.login))
-            .sort((a, b) => a.number - b.number);
+            .sort((a, b) => a.number - b.number)
+            .forEach(issue => candidates.push({ repoCfg, repoIndex, number: issue.number }));
         } catch (error) {
           results.push({ owner, repo, success: false, error: error.message, counts: emptyCounts() });
-          continue;
         }
+      }
 
-        for (const issue of candidates) {
-          if (budget <= 0) break;
-          budget--;
-          let result;
-          try {
-            result = await this.processPullRequest(ctx, repoCfg, issue.number);
-          } catch (error) {
-            logger.error('Babysit failed for pull request', { owner, repo, number: issue.number, error: error.message });
-            result = { success: false, error: error.message, counts: emptyCounts() };
-          }
-          results.push({ owner, repo, number: issue.number, ...result });
+      // Round-robin: when the budget cannot cover every candidate, start right
+      // after the PR the previous full scan stopped at, so no PR (idle or not)
+      // is starved. Filtered scans neither use nor move the cursor.
+      const fullScan = repos.length === 0 && pr === null;
+      const budget = settings.maxPrsPerRun;
+      let queue = candidates;
+      const cursor = fullScan ? ctx.ledger.getCursor() : null;
+      if (cursor && candidates.length > budget) {
+        const cursorRepo = selected.findIndex(r => `${r.owner}/${r.repo}`.toLowerCase() === cursor.repo);
+        const start = candidates.findIndex(c =>
+          c.repoIndex > cursorRepo || (c.repoIndex === cursorRepo && c.number > cursor.number));
+        if (start > 0) queue = [...candidates.slice(start), ...candidates.slice(0, start)];
+      }
+      queue = queue.slice(0, Math.max(budget, 0));
+
+      for (const { repoCfg, number } of queue) {
+        if (this.interrupted) break;
+        const { owner, repo } = repoCfg;
+        let result;
+        try {
+          result = await this.processPullRequest(ctx, repoCfg, number);
+        } catch (error) {
+          logger.error('Babysit failed for pull request', { owner, repo, number, error: error.message });
+          result = { success: false, error: error.message, counts: emptyCounts() };
         }
+        results.push({ owner, repo, number, ...result });
+      }
+
+      if (fullScan && !dryRun && queue.length && !this.interrupted) {
+        const last = queue[queue.length - 1];
+        ctx.ledger.setCursor({ repo: `${last.repoCfg.owner}/${last.repoCfg.repo}`.toLowerCase(), number: last.number });
       }
     } catch (error) {
       logger.error('Babysit scan failed', { error: error.message });
@@ -378,14 +467,19 @@ export class Babysitter {
     }
 
     logger.info('Babysitting pull request', { owner, repo, number, comments: pending.length });
-    const workspace = await this.prepareWorkspace(ctx, repoCfg, pr);
+    this.activePrKey = BabysitterLedger.prKey(owner, repo, number);
     try {
-      if (workspace.headMoved) {
-        return { success: true, skipped: true, reason: 'PR head moved during the scan; retrying next run', counts };
+      const workspace = await this.prepareWorkspace(ctx, repoCfg, pr);
+      try {
+        if (workspace.headMoved) {
+          return { success: true, skipped: true, reason: 'PR head moved during the scan; retrying next run', counts };
+        }
+        return await this.handleComments(ctx, repoCfg, pr, pending, workspace, counts);
+      } finally {
+        workspace.cleanup();
       }
-      return await this.handleComments(ctx, repoCfg, pr, pending, workspace, counts);
     } finally {
-      workspace.cleanup();
+      this.activePrKey = null;
     }
   }
 
@@ -398,7 +492,11 @@ export class Babysitter {
     const baseRef = pr.base.ref;
     const workRoot = this.options.tmpDir || os.tmpdir();
     const root = fs.mkdtempSync(path.join(workRoot, 'sdg-babysit-'));
-    const cleanup = () => fs.rmSync(root, { recursive: true, force: true });
+    this.activeDirs.add(root);
+    const cleanup = () => {
+      fs.rmSync(root, { recursive: true, force: true });
+      this.activeDirs.delete(root);
+    };
 
     try {
       const dir = path.join(root, 'repo');
@@ -484,12 +582,18 @@ export class Babysitter {
       outputFile: path.join(workspace.scratch, 'triage.json'),
       env: scrubEnv(process.env)
     });
+    this.checkInterrupted();
     // Triage is read-only; discard anything the engine changed anyway
     await workspace.resetToHead();
 
     const plan = [];
     const failures = [];
-    if (!triage.ok) {
+    // Not charged an attempt: the engine could not start, the push raced
+    // another push, or the implement report did not cover the comment
+    const retrying = [];
+    if (!triage.ok && triage.infra) {
+      for (const comment of pending) retrying.push({ comment, error: `triage failed: ${triage.error}` });
+    } else if (!triage.ok) {
       for (const comment of pending) failures.push({ comment, action: null, error: `triage failed: ${triage.error}` });
     } else {
       const byId = new Map(triage.decisions.map(d => [d.id, d]));
@@ -519,46 +623,83 @@ export class Babysitter {
     }
 
     const fixItems = plan.filter(p => p.decision.action === 'fix');
+    const fixed = new Set();
     let fix = null;
     if (fixItems.length) {
       try {
         fix = await this.applyFixes(ctx, repoCfg, pr, prInfo, workspace, fixItems);
       } catch (error) {
+        if (error instanceof InterruptedError) throw error;
         fix = { ok: false, error: error.message };
       }
+      this.checkInterrupted();
       if (!fix.ok) {
         logger.warn('Babysit fix was not pushed', { owner, repo, number: pr.number, error: fix.error });
-        for (const { comment } of fixItems) failures.push({ comment, action: 'fix', error: fix.error });
       } else {
         logger.info('Babysit fix pushed', { owner, repo, number: pr.number, commit: fix.commitSha });
       }
+
+      // Only an explicit "implemented" settles a fix; an explicit "failed" (or
+      // a failed gate/push) is charged an attempt; an id the report left out
+      // stays pending
+      const reported = new Map((fix.report?.fixes || []).map(f => [f.id, f]));
+      for (const item of fixItems) {
+        const { comment } = item;
+        const entry = reported.get(comment.id);
+        if (fix.infra || fix.reschedule || (fix.report && !entry)) {
+          retrying.push({ comment, reschedule: Boolean(fix.reschedule), error: entry || !fix.report ? fix.error : 'implement report did not cover this comment' });
+        } else if (fix.ok && entry.status === 'implemented') {
+          fixed.add(item);
+        } else {
+          const error = fix.ok ? `engine could not fix this: ${entry.summary || 'no reason given'}` : fix.error;
+          failures.push({ comment, action: 'fix', error });
+        }
+      }
     }
 
-    const settled = plan.filter(p => p.decision.action !== 'fix' || fix?.ok);
-    await this.postReplies(ctx, repoCfg, pr, workspace.headSha, settled, failures, fix, counts);
+    // A push race is not a failure: the comment is retried against the new head
+    for (const item of retrying) if (!item.reschedule) counts.failed++;
+    const settled = plan.filter(p => p.decision.action !== 'fix' || fixed.has(p));
+    await this.postReplies(ctx, repoCfg, pr, workspace.headSha, settled, failures, fix?.ok ? fix : null, counts);
 
     return {
       success: counts.failed === 0,
       counts,
       commitSha: fix?.ok ? fix.commitSha : null,
-      failures: failures.map(f => ({ id: f.comment.id, error: f.error }))
+      failures: failures.map(f => ({ id: f.comment.id, error: f.error })),
+      retrying: retrying.map(r => ({ id: r.comment.id, error: r.error }))
     };
   }
 
+  // Runs the engine, then commits, verifies, tests, and pushes. The report
+  // travels with every outcome so the caller knows which items it covered.
   async applyFixes(ctx, repoCfg, pr, prInfo, workspace, fixItems) {
-    const { git, run, dir, headSha } = workspace;
-
     const implement = await ctx.engine.implement({
-      cwd: dir,
+      cwd: workspace.dir,
       pr: prInfo,
       items: fixItems,
       reportFile: path.join(workspace.scratch, 'implement.json'),
       env: scrubEnv(process.env)
     });
-    if (!implement.ok) return { ok: false, error: `engine failed: ${implement.error}` };
+    this.checkInterrupted();
+    if (!implement.ok) return { ok: false, infra: Boolean(implement.infra), error: `engine failed: ${implement.error}` };
+    const report = implement.report;
+    if (!report || !Array.isArray(report.fixes)) {
+      return { ok: false, infra: true, error: 'engine did not write a valid implement report' };
+    }
+    if (!report.fixes.some(f => f.status === 'implemented')) {
+      return { ok: false, report, error: 'engine reported no fix as implemented' };
+    }
 
-    // Engines without shell access (claude in acceptEdits mode) can edit files
-    // but not commit, so leftovers are committed here
+    const result = await this.verifyAndPush(ctx, repoCfg, pr, workspace);
+    return { ...result, report };
+  }
+
+  async verifyAndPush(ctx, repoCfg, pr, workspace) {
+    const { git, run, dir, headSha } = workspace;
+
+    // Engines that may not commit (claude without the git allowlist) can edit
+    // files but leave them uncommitted, so leftovers are committed here
     if ((await git(['status', '--porcelain'])).trim()) {
       await git(['add', '-A']);
       await git(['commit', '-q', '--no-verify', '-m', `fix: address review feedback on #${pr.number}`]);
@@ -600,10 +741,11 @@ export class Babysitter {
     }
 
     const changedFiles = (await git(['diff', '--name-only', headSha, finalHead])).trim().split('\n').filter(Boolean);
+    this.checkInterrupted();
     const pushed = await this.pushPinned(ctx, workspace, finalHead, pr.head.ref);
     if (!pushed.ok) return pushed;
 
-    return { ok: true, commitSha: finalHead, report: implement.report, changedFiles };
+    return { ok: true, commitSha: finalHead, changedFiles };
   }
 
   // Same pattern as fix-conflicts: the authenticated push runs from a fresh
@@ -613,6 +755,7 @@ export class Babysitter {
   async pushPinned(ctx, workspace, sha, headRef) {
     const { run, git, remoteUrl } = workspace;
     const pushDir = fs.mkdtempSync(path.join(workspace.workRoot, 'sdg-babysit-push-'));
+    this.activeDirs.add(pushDir);
     try {
       await git(['init', '-q', '--bare', pushDir], { cwd: pushDir });
       // Runs with the untrusted clone config, but without any credential
@@ -633,13 +776,15 @@ export class Babysitter {
       if (push.code !== 0) {
         const stderr = String(push.stderr).trim();
         if (/rejected|non-fast-forward|fetch first/.test(stderr)) {
-          return { ok: false, error: 'PR branch changed before push' };
+          // Someone else pushed: not this comment's fault, so retry next run
+          return { ok: false, reschedule: true, error: 'PR branch changed before push' };
         }
         return { ok: false, error: `git push failed: ${stderr}` };
       }
       return { ok: true };
     } finally {
       fs.rmSync(pushDir, { recursive: true, force: true });
+      this.activeDirs.delete(pushDir);
     }
   }
 
@@ -699,75 +844,147 @@ export class Babysitter {
   }
 
   // One reply per inline thread; review bodies and issue comments share one
-  // summary comment. Each ledger entry is written right after its reply so a
-  // crash cannot cause a second reply on the next run.
+  // summary comment. Outcomes are decided separately from delivering them:
+  // every outcome and every reply body is written to the ledger (pushed fixes
+  // as 'pushed') in one save before any reply is sent. A failed or interrupted
+  // reply is then retried on later runs on its own, never by re-running the fix.
+  // `fix` is the pushed fix, or null when nothing was pushed.
   async postReplies(ctx, repoCfg, pr, headSha, settled, failures, fix, counts) {
     const { owner, repo } = repoCfg;
-    const { client, ledger } = ctx;
+    const { ledger } = ctx;
     const number = pr.number;
     const keyFor = (comment) => BabysitterLedger.commentKey(owner, repo, number, comment.id);
+    const base = { owner, repo, pr: number, pushedSha: fix?.commitSha || null };
+    const deliveries = [];
     const summaryEntries = [];
-
-    const recordReplyFailure = (comment, decision, record, error) => {
-      counts.failed++;
-      if (decision.action === 'fix') {
-        // The fix is already pushed; settle it so it is not applied twice
-        ledger.recordOutcome(keyFor(comment), { ...record, replyId: null });
-        counts.addressed++;
-      } else {
-        ledger.recordFailure(keyFor(comment), { pr: number, headSha, action: decision.action, error: `reply failed: ${error}` });
-      }
-    };
+    // Bots asked to re-review the pushed head; each is asked once per head
+    const asked = new Set();
 
     for (const { comment, decision } of settled) {
-      const record = {
-        state: ACTION_STATES[decision.action],
+      const key = keyFor(comment);
+      const state = ACTION_STATES[decision.action];
+      ledger.recordOutcome(key, {
+        state: decision.action === 'fix' ? PUSHED_STATE : state,
         pr: number,
         headSha,
         action: decision.action,
         reasoning: decision.reasoning,
         commitSha: decision.action === 'fix' ? fix.commitSha : null
-      };
+      }, { save: false });
       if (comment.kind !== 'review_comment') {
-        summaryEntries.push({ comment, decision, record });
+        summaryEntries.push({ comment, decision, key, state });
         continue;
       }
-      const reply = await client.replyToReviewComment(owner, repo, number, comment.replyToId,
-        inlineReplyBody(comment, decision, fix));
-      if (reply.success) {
-        ledger.recordOutcome(keyFor(comment), { ...record, replyId: reply.data.id });
-        counts[record.state]++;
-      } else {
-        recordReplyFailure(comment, decision, record, reply.error);
-      }
+      const mention = mentionFor(comment.user);
+      const reReview = decision.action === 'fix' && !(mention && asked.has(mention));
+      if (reReview && mention) asked.add(mention);
+      deliveries.push({
+        ...base,
+        id: `${key}#reply`,
+        kind: 'inline',
+        replyToId: comment.replyToId,
+        body: inlineReplyBody(comment, decision, fix, { reReview }),
+        keys: [key],
+        states: { [key]: state }
+      });
     }
 
     for (const { comment, action, error } of failures) {
-      const entry = ledger.recordFailure(keyFor(comment), { pr: number, headSha, action, error });
+      const key = keyFor(comment);
+      const entry = ledger.recordFailure(key, { pr: number, headSha, action, error }, { save: false });
       counts.failed++;
       if (!entry.exhausted) continue;
       // Giving up: tell the reviewer once instead of going silent
       if (comment.kind === 'review_comment') {
-        const reply = await client.replyToReviewComment(owner, repo, number, comment.replyToId,
-          giveUpReplyBody(comment, error));
-        if (reply.success) ledger.setReplyId(keyFor(comment), reply.data.id);
+        deliveries.push({
+          ...base,
+          id: `${key}#reply`,
+          kind: 'inline',
+          replyToId: comment.replyToId,
+          body: giveUpReplyBody(comment, error),
+          keys: [key],
+          states: { [key]: 'failed' }
+        });
       } else {
-        summaryEntries.push({ comment, failed: true, error });
+        summaryEntries.push({ comment, failed: true, error, key, state: 'failed' });
       }
     }
 
-    if (summaryEntries.length === 0) return;
+    if (summaryEntries.length) {
+      deliveries.push({
+        ...base,
+        id: `${summaryEntries[0].key}#summary`,
+        kind: 'summary',
+        body: summaryCommentBody(summaryEntries, fix, asked),
+        keys: summaryEntries.map(e => e.key),
+        states: Object.fromEntries(summaryEntries.map(e => [e.key, e.state]))
+      });
+    }
 
-    const reply = await client.createIssueComment(owner, repo, number, summaryCommentBody(summaryEntries, fix));
-    for (const entry of summaryEntries) {
-      if (entry.failed) {
-        if (reply.success) ledger.setReplyId(keyFor(entry.comment), reply.data.id);
-      } else if (reply.success) {
-        ledger.recordOutcome(keyFor(entry.comment), { ...entry.record, replyId: reply.data.id });
-        counts[entry.record.state]++;
-      } else {
-        recordReplyFailure(entry.comment, entry.decision, entry.record, reply.error);
+    ledger.addDeliveries(deliveries);
+    for (const delivery of deliveries) await this.deliver(ctx, delivery, counts);
+  }
+
+  // Posts one reply and settles the comments it covers. On failure the
+  // comments keep a pending reply that later runs retry.
+  async deliver(ctx, delivery, counts) {
+    const { client, ledger } = ctx;
+    const { owner, repo, pr: number } = delivery;
+    const reply = delivery.kind === 'inline'
+      ? await client.replyToReviewComment(owner, repo, number, delivery.replyToId, delivery.body)
+      : await client.createIssueComment(owner, repo, number, delivery.body);
+    if (reply.success) {
+      ledger.completeDelivery(delivery.id, reply.data.id);
+      for (const key of delivery.keys) {
+        const state = delivery.states?.[key];
+        if (state && state !== 'failed') counts[state]++;
       }
+      return true;
+    }
+    const failed = ledger.failDelivery(delivery.id, reply.error);
+    counts.failed++;
+    logger.warn('Babysit reply failed', {
+      owner, repo, number, delivery: delivery.id, error: reply.error, attempts: failed?.attempts, abandoned: failed?.exhausted
+    });
+    return false;
+  }
+
+  // Delivery-only pass for replies left pending by earlier runs: a failed post,
+  // or a crash between the push and the replies. The engine never runs here.
+  async retryDeliveries(ctx, selected, prFilter, results) {
+    const { client, ledger } = ctx;
+    const wanted = new Set(selected.map(r => `${r.owner}/${r.repo}`.toLowerCase()));
+    for (const delivery of ledger.getDeliveries()) {
+      if (this.interrupted) return;
+      const { owner, repo, pr: number } = delivery;
+      if (!wanted.has(`${owner}/${repo}`.toLowerCase())) continue;
+      if (prFilter !== null && number !== prFilter) continue;
+
+      const counts = emptyCounts();
+      const result = { owner, repo, number, delivery: true, counts };
+      try {
+        // Replies for a push that was never acknowledged only go out while the
+        // branch still points at the pushed commit
+        const unacknowledged = delivery.keys.some(key => ledger.getComment(key)?.state === PUSHED_STATE);
+        if (unacknowledged) {
+          const current = unwrap(await client.getPullRequest(owner, repo, number), `Get pull request #${number}`);
+          if (current.head?.sha !== delivery.pushedSha) {
+            logger.warn('PR branch moved after an unacknowledged push; settling without a reply', {
+              owner, repo, number, pushed: delivery.pushedSha, head: current.head?.sha
+            });
+            ledger.completeDelivery(delivery.id, null, { note: `branch moved after push (now ${current.head?.sha || 'unknown'}); reply not delivered` });
+            result.reason = 'branch moved after push; reply not delivered';
+            results.push({ ...result, success: true });
+            continue;
+          }
+        }
+        await this.deliver(ctx, delivery, counts);
+      } catch (error) {
+        ledger.failDelivery(delivery.id, error.message);
+        counts.failed++;
+        logger.warn('Babysit reply retry failed', { owner, repo, number, delivery: delivery.id, error: error.message });
+      }
+      results.push({ ...result, success: counts.failed === 0 });
     }
   }
 }

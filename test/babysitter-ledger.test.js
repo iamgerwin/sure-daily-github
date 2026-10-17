@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { BabysitterLedger, MAX_ATTEMPTS } from '../src/utils/babysitter-ledger.js';
+import { BabysitterLedger, MAX_ATTEMPTS, MAX_DELIVERY_ATTEMPTS, PUSHED_STATE } from '../src/utils/babysitter-ledger.js';
 
 function tmpLedgerPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-ledger-'));
@@ -100,7 +100,7 @@ test('a corrupt ledger is backed up and replaced with an empty one', (t) => {
 
   for (const raw of ['[]', 'null', '42']) {
     fs.writeFileSync(filePath, raw);
-    assert.deepEqual(new BabysitterLedger({ filePath }).data, { version: 1, comments: {}, prs: {} });
+    assert.deepEqual(new BabysitterLedger({ filePath }).data, { version: 1, comments: {}, prs: {}, deliveries: {}, cursor: null });
   }
 });
 
@@ -111,6 +111,52 @@ test('the ledger path defaults to SDG_BABYSITTER_STATE_FILE', (t) => {
 
   new BabysitterLedger().recordOutcome(key, { state: 'noted', pr: 7 });
   assert.equal(fs.existsSync(filePath), true);
+});
+
+test('a pushed fix is not reprocessed and settles when its reply is delivered', () => {
+  const filePath = tmpLedgerPath();
+  const ledger = new BabysitterLedger({ filePath });
+  ledger.recordOutcome(key, { state: PUSHED_STATE, pr: 7, action: 'fix', commitSha: 'def' }, { save: false });
+  ledger.addDeliveries([{ id: `${key}#reply`, kind: 'inline', owner: 'me', repo: 'demo', pr: 7, pushedSha: 'def', body: 'b', keys: [key], states: { [key]: 'addressed' } }]);
+
+  // Durable before any reply goes out
+  const reloaded = new BabysitterLedger({ filePath });
+  assert.equal(reloaded.getComment(key).state, PUSHED_STATE);
+  assert.equal(reloaded.shouldProcess(key), false);
+  assert.deepEqual(reloaded.getDeliveries().map(d => d.id), [`${key}#reply`]);
+
+  const failed = reloaded.failDelivery(`${key}#reply`, 'HTTP 502');
+  assert.equal(failed.exhausted, false);
+  assert.equal(reloaded.getComment(key).state, 'addressed');
+  assert.equal(reloaded.getComment(key).replyPending, true);
+  assert.equal(reloaded.getDeliveries().length, 1);
+
+  reloaded.completeDelivery(`${key}#reply`, 42);
+  assert.equal(reloaded.getComment(key).replyId, 42);
+  assert.equal(reloaded.getComment(key).replyPending, undefined);
+  assert.deepEqual(reloaded.getDeliveries(), []);
+});
+
+test('a delivery that keeps failing is eventually dropped with a note', () => {
+  const ledger = new BabysitterLedger({ filePath: tmpLedgerPath() });
+  ledger.recordOutcome(key, { state: 'noted', pr: 7 }, { save: false });
+  ledger.addDeliveries([{ id: 'd', kind: 'summary', owner: 'me', repo: 'demo', pr: 7, body: 'b', keys: [key], states: { [key]: 'noted' } }]);
+  let last;
+  for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i++) last = ledger.failDelivery('d', 'gone');
+  assert.equal(last.exhausted, true);
+  assert.deepEqual(ledger.getDeliveries(), []);
+  assert.match(ledger.getComment(key).note, /reply abandoned after 10 attempts: gone/);
+});
+
+test('the scan cursor and interruption marks persist', () => {
+  const filePath = tmpLedgerPath();
+  const ledger = new BabysitterLedger({ filePath });
+  assert.equal(ledger.getCursor(), null);
+  ledger.setCursor({ repo: 'me/demo', number: 8 });
+  ledger.markInterrupted('me/demo#8', { signal: 'SIGTERM' });
+  const reloaded = new BabysitterLedger({ filePath });
+  assert.deepEqual(reloaded.getCursor(), { repo: 'me/demo', number: 8 });
+  assert.equal(reloaded.getPr('me/demo#8').interrupted.signal, 'SIGTERM');
 });
 
 test('save throws instead of silently dropping a record', () => {
