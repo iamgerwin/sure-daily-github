@@ -1,0 +1,191 @@
+# Conflict Fixer (`fix-conflicts`)
+
+## Goal
+
+Make conflicted open pull requests mergeable again across the configured repositories without a human doing the merge. For each conflicted PR, the base branch is merged into the PR branch and every conflicting hunk keeps the newer change. The result is pushed only if the repository's own tests pass, so no regression is ever pushed automatically, and nothing is touched on a repository that was not explicitly approved.
+
+## Safety model
+
+A resolved branch is pushed only when **every** check below passes. Otherwise the PR is reported and left alone.
+
+Never auto-pushed:
+
+- **Ties**: both sides of a hunk were committed at the same second.
+- **Non-text conflicts**: delete/modify, rename, binary, submodule or symlink conflicts. Also hunks that cannot be located unambiguously, and resolutions that still contain conflict markers.
+- **No tests**: no `testCommand`, no usable `npm test` script, and no `make test` target.
+- **Test failures**: dependency install or test failure, or a timeout (`testTimeoutMinutes`).
+- **Fork PRs**: the head lives in another repository. Fork PRs are also never tested, because tests run PR-branch code.
+- **Dry runs**: `--dry-run` or `general.dryRun: true`.
+- **Non-fast-forward rejections**: pushes are never forced. If the branch moved, the push is rejected and reported as `head-moved`.
+- **Repo gate**: repositories that are not allowed (see below). The default is an empty allowlist, so nothing is fixed until you opt in.
+
+Other guarantees:
+
+- Each run uses throwaway clones in the OS temp directory, which are deleted afterwards.
+- Your global and system git config (hooks, signing, merge drivers) is ignored.
+- The GitHub token never appears in URLs, `.git/config`, the process list or logs, and it is removed from the environment the tests run in.
+
+## Repo gating
+
+The gate is evaluated per repository. The **first** matching rule decides:
+
+| # | Rule | Result |
+|---|------|--------|
+| 1 | `repositories[].conflictFixer: false` | skipped, `disabled-per-repo` |
+| 2 | `repositories[].conflictFixer: true` | allowed (wins over both lists and the mode) |
+| 3 | repo is in `denylist` | skipped, `denylisted` |
+| 4 | `mode: allowlist` and repo is not in `allowlist` | skipped, `not-allowlisted` |
+| 5 | `mode: denylist` or `mode: all` | allowed |
+
+- List entries are `owner/repo` and are matched case-insensitively.
+- Gated-out repositories are never queried, so they cost no API calls.
+- `--repo` only narrows the run. It never bypasses the gate: a gated repo passed via `--repo` is shown as a `skipped` row with its reason, and so is every gated repo in `--scan-only` output.
+
+**Allowlist (default, opt-in):**
+
+```yaml
+conflictFixer:
+  mode: "allowlist"
+  allowlist:
+    - "yourusername/web"
+    - "yourusername/api"
+```
+
+**Denylist (every configured repo except these):**
+
+```yaml
+conflictFixer:
+  mode: "denylist"
+  denylist:
+    - "yourusername/legacy-repo"
+```
+
+**All (every configured repo; the denylist still applies):**
+
+```yaml
+conflictFixer:
+  mode: "all"
+  denylist:
+    - "yourusername/legacy-repo"
+```
+
+**Per-repo override (beats mode and both lists):**
+
+```yaml
+repositories:
+  - owner: "yourusername"
+    repo: "api"
+    conflictFixer: true     # always eligible
+  - owner: "yourusername"
+    repo: "docs"
+    conflictFixer: false    # never touched
+```
+
+With no `conflictFixer` block at all, the mode is `allowlist` and the allowlist is empty, so **nothing is fixed**.
+
+## How a PR is fixed
+
+1. List open PRs through GraphQL, including `mergeable` and `mergeStateStatus`. A PR is conflicted when it is `CONFLICTING` or `DIRTY`.
+2. Fetch the base and head branches into a temp repo. Continue only if the head is still at the SHA GitHub reported.
+3. Run `git merge --no-ff --no-commit` with `merge.conflictStyle=diff3`. A clean merge means GitHub's status was stale (`stale-status`).
+4. For each conflicting hunk, find its lines on both sides and take the newest `git blame` committer time for each. The newer side wins. If one side deleted the hunk, that side's newest commit to the file since the merge base is used instead.
+5. Commit the merge: `Merge branch '<base>' into <head>`.
+6. Run the regression gate: the repo's `testCommand`, else `npm test` (after `npm ci` when `package-lock.json` exists and `installDeps` is on), else `make test`.
+7. Push `HEAD:refs/heads/<head>` without force.
+
+## Idempotency
+
+Four layers stop overlapping or repeated work:
+
+1. **Run lock**: shared with `run` and the scheduler (`data/run.lock`). A second invocation exits at once with a lock-held error and does no work.
+2. **Head SHA pinning**: work is tied to the head SHA captured during the scan, and the push is fast-forward only. If someone else fixed the PR first, the push is rejected (`head-moved`) and not retried.
+3. **Attempt ledger**: `data/conflict-fixer-state.json`, overridable with `SDG_CONFLICT_FIXER_STATE_FILE`. It stores one entry per `owner/repo#number` with `headSha`, `status`, `startedAt` and `finishedAt`, written atomically before and after each attempt. Before cloning, a PR is skipped when:
+   - its entry is `in-progress` on the same SHA and younger than `attemptTtlMinutes` (default 60): reason `already-in-progress`;
+   - its entry is finished (`fixed`, `needs-manual-review` or `failed`) on the same SHA and within `retryCooldownMinutes` (default 240): reason `already-attempted`.
+
+   A different head SHA, or an expired TTL or cooldown, makes the PR eligible again. `--scan-only` and dry runs never write the ledger. Outcomes that are not attempts (`stale-status`, `head-moved`) remove the entry.
+4. **Signals**: on SIGINT or SIGTERM, this run's in-progress entries are marked `interrupted`, the current temp clone is removed, and the process exits with 130 (SIGINT) or 143 (SIGTERM). Interrupted attempts are eligible on the next run.
+
+Long test suites hold the run lock for the whole run. Raise `SDG_RUN_LOCK_STALE_MS` (default 2 hours) if a full pass can take longer.
+
+## Scan budget
+
+`conflictFixer.scanTimeoutSeconds` (default 120), or `--scan-timeout <seconds>` for a single run, caps the whole gather phase: GraphQL pagination over every allowed repo plus the re-polls for `UNKNOWN` mergeability.
+
+- The budget is checked before each repo, before each further page, and before each re-poll. A re-poll is skipped when the remaining budget is shorter than its 2 s sleep.
+- When the budget runs out, scanning stops. PRs already collected are still processed normally. Repos that were not fully listed, including one cut off mid-pagination, get a `scan-timeout` row with reason `scan budget exhausted`.
+- `scan-timeout` does not cause a non-zero exit.
+
+## Configuration
+
+```yaml
+conflictFixer:
+  mode: "allowlist"          # allowlist | denylist | all
+  allowlist: ["yourusername/web"]
+  denylist: []
+  testTimeoutMinutes: 15     # per install/test command
+  installDeps: true          # npm ci first when package-lock.json exists
+  scanTimeoutSeconds: 120
+  attemptTtlMinutes: 60
+  retryCooldownMinutes: 240
+
+repositories:
+  - owner: "yourusername"
+    repo: "web"
+    testCommand: "npm run test:unit"   # optional; overrides detection
+    conflictFixer: true                # optional per-repo gate override
+```
+
+All numbers must be positive whole numbers. Invalid values fail `validate` and config loading.
+
+## CLI reference
+
+```
+sure-daily-github fix-conflicts [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Resolve and test locally, but never push or write the ledger |
+| `--scan-only` | Only list conflicted PRs and gated-out repos; nothing is cloned |
+| `--repo <owner/repo>` | Only process this configured repository (repeatable); filter only, never bypasses the gate |
+| `--pr <number>` | Only process this PR (requires exactly one `--repo`) |
+| `--scan-timeout <seconds>` | Gather-phase budget for this run (overrides `scanTimeoutSeconds`) |
+| `--config <path>` | Path to the configuration file |
+
+Examples:
+
+```bash
+# See what is conflicted and which repos are gated out
+sure-daily-github fix-conflicts --scan-only
+
+# Rehearse on one repository without pushing
+sure-daily-github fix-conflicts --repo yourusername/web --dry-run
+
+# Fix a single PR
+sure-daily-github fix-conflicts --repo yourusername/web --pr 42
+
+# Give a slow organisation more scan time
+sure-daily-github fix-conflicts --scan-timeout 300
+```
+
+## Result statuses
+
+| Status | Meaning | Exit code |
+|--------|---------|-----------|
+| `fixed` | Conflicts resolved, tests passed, branch pushed | 0 |
+| `would-fix` | Same as `fixed`, but a dry run, so nothing was pushed | 0 |
+| `conflicted` | Listed by `--scan-only` | 0 |
+| `needs-manual-review` | Tie, non-text conflict, unlocatable hunk, leftover markers, no test command, install or test failure, or timeout | 0 |
+| `skipped` | Reasons: `disabled-per-repo`, `denylisted`, `not-allowlisted`, `fork pull request`, `already-in-progress`, `already-attempted` | 0 |
+| `stale-status` | Merges cleanly locally; GitHub's mergeability was out of date | 0 |
+| `head-moved` | Branch changed after the scan or before the push; nothing was pushed | 0 |
+| `scan-timeout` | Repo not fully listed within the scan budget | 0 |
+| `unknown` | GitHub still reported `UNKNOWN` mergeability after the re-polls | 0 |
+| `error` | Listing failed or an unexpected git error occurred | **1** |
+
+The command also exits 1 when the run itself fails: a held lock, a configuration error, an invalid `--scan-timeout`, or a bad `--repo` or `--pr` value.
+
+## Cost
+
+The fixer runs only `git` and the target repository's own install and test commands, plus GitHub API calls for listing. It makes no LLM or other paid API calls. The opt-in repo gate makes sure neither compute nor any future automation built on this command spends anything on repositories you have not approved.
