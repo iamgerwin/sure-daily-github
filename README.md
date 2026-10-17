@@ -144,10 +144,13 @@ the result (never forced) only if the repository's own tests pass
 (`testCommand`, else `npm test`, else a `test` rule in the makefile). Source
 hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
 `escalate`) can send them to manual review instead. Test files
-(`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
-both sides, and a test-count guard leaves the PR for review if a resolved test
+(`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) keep both sides when the
+conflict is purely additive; hunks that modify or remove existing lines are
+left for manual review. A test-count guard leaves the PR for review if a resolved test
 file has fewer tests than either parent. Nothing runs until a repository is
-allowed in the `conflictFixer:` block (default: empty allowlist). Runs are
+allowed through the gate — configured via the top-level `conflictFixer:` block
+or per-repository `conflictFixer` setting (default: empty allowlist, so
+repositories are skipped without an explicit allow). Runs are
 idempotent via the run lock and a per-PR head-SHA ledger. See
 [docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md).
 
@@ -230,7 +233,7 @@ randomization:
     weekly: { min: 50, max: 150 }
 ```
 
-Ranges must be whole numbers ≥ 1 with `min` ≤ `max`; invalid ranges are rejected when the configuration loads.
+Enabled randomization ranges must be whole numbers ≥ 1 with `min` ≤ `max` (time-variation ranges are checked when time variations are enabled); invalid ranges are rejected when the configuration loads.
 
 #### Repository Selection (Optional)
 
