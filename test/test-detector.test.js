@@ -50,6 +50,28 @@ test('detectTestCommand falls back to a Makefile test target', (t) => {
   assert.deepEqual(detectTestCommand(dir), { install: null, test: 'make test' });
 });
 
+test('detectTestCommand finds test in a multi-target or double-colon rule', (t) => {
+  for (const rule of ['unit test: build', 'test lint:', 'test::', 'test :']) {
+    const dir = repoDir(t, { Makefile: `build:\n\tcc x.c\n\n${rule}\n\t./run\n` });
+    assert.deepEqual(detectTestCommand(dir), { install: null, test: 'make test' }, rule);
+  }
+});
+
+test('detectTestCommand ignores test variables, prerequisites, and similar names', (t) => {
+  for (const line of ['test := 1', 'test ::= 1', 'test:=1', 'test-unit:', 'mytest:', '.PHONY: test', '# test:', 'all:\n\ttest: x']) {
+    const dir = repoDir(t, { Makefile: `${line}\n` });
+    assert.equal(detectTestCommand(dir), null, line);
+  }
+});
+
+test('detectTestCommand reads only the makefile that make itself would use', (t) => {
+  const shadowed = repoDir(t, { GNUmakefile: 'build:\n\tcc x.c\n', Makefile: 'test:\n\t./run\n' });
+  assert.equal(detectTestCommand(shadowed), null);
+
+  const gnu = repoDir(t, { GNUmakefile: 'test:\n\t./run\n', Makefile: 'build:\n\tcc x.c\n' });
+  assert.deepEqual(detectTestCommand(gnu), { install: null, test: 'make test' });
+});
+
 test('detectTestCommand returns null without a runnable suite', (t) => {
   assert.equal(detectTestCommand(repoDir(t, { Makefile: 'build:\n\tcc x.c\n' })), null);
   assert.equal(detectTestCommand(repoDir(t)), null);

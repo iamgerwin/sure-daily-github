@@ -12,7 +12,7 @@ Never auto-pushed:
 
 - **Ties**: both sides of a hunk were committed at the same second.
 - **Non-text conflicts**: delete/modify, rename, binary, submodule or symlink conflicts. Also hunks that cannot be located unambiguously, and resolutions that still contain conflict markers.
-- **No tests**: no `testCommand`, no usable `npm test` script, and no `make test` target.
+- **No tests**: no `testCommand`, no usable `npm test` script, and no `test` rule in the makefile `make` would read (the first of `GNUmakefile`, `makefile`, `Makefile`; `test := ...` variables do not count).
 - **Test failures**: dependency install or test failure, or a timeout (`testTimeoutMinutes`).
 - **Tampering tests**: the tests moved `HEAD` (for example by committing) or left changes to tracked files. Untracked files such as `node_modules` are fine.
 - **Fork PRs**: the head lives in another repository. Fork PRs are also never tested, because tests run PR-branch code.
