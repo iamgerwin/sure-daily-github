@@ -15,8 +15,12 @@ const BINARY_SNIFF_CHARS = 8000;
 // Conflicts in these files keep both sides instead of the newer one, so tests
 // added on the older side are never dropped
 const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.test\.js$/, /\.spec\.js$/];
-// A test(...) or it(...) call at the start of a line, including .only/.skip/.todo
-const TEST_CALL = /^[ \t]*(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\(/gm;
+// A test(...) or it(...) registration at the start of a line: optionally
+// awaited, optionally on a receiver (t.test, suite.it), including .only/.skip/.todo
+const TEST_CALL = /^[ \t]*(?:await[ \t]+)?(?:[A-Za-z_$][\w$]*\.)?(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\(/gm;
+// Any test(...) or it(...) call, wherever it sits; seeing one when TEST_CALL
+// counts nothing means the file registers tests in a form we cannot count
+const ANY_TEST_CALL = /\b(?:test|it)\b(?:\.\w+)*[ \t]*\(/;
 export const SOURCE_HUNK_STRATEGIES = ['push', 'claude', 'escalate'];
 
 // Raised for anything the newer-wins rule must not guess at; the PR is then
@@ -107,8 +111,74 @@ export function isTestFile(file) {
   return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
 }
 
+// Number of test registrations in `text`, or null when it cannot be told
 export function countTests(text) {
-  return (text.match(TEST_CALL) || []).length;
+  const count = (text.match(TEST_CALL) || []).length;
+  return count === 0 && ANY_TEST_CALL.test(text) ? null : count;
+}
+
+const indentOf = (line) => /^[ \t]*/.exec(line)[0].length;
+const isBlank = (line) => normalize(line).trim() === '';
+
+// Splits added lines into top-level blocks (a whole test(...) call with its
+// body and closing line). A block starts at a least-indented line that does not
+// close a bracket and takes the blank lines just before it.
+function splitBlocks(lines) {
+  const filled = lines.filter(line => !isBlank(line));
+  const minIndent = Math.min(...filled.map(indentOf));
+  const blocks = [];
+  let blanks = [];
+  for (const line of lines) {
+    if (isBlank(line)) {
+      blanks.push(line);
+      continue;
+    }
+    if (blocks.length === 0 || (indentOf(line) === minIndent && !/^[ \t]*[)\]}]/.test(line))) {
+      blocks.push([...blanks, line]);
+    } else {
+      blocks[blocks.length - 1].push(...blanks, line);
+    }
+    blanks = [];
+  }
+  if (blanks.length) {
+    if (blocks.length) blocks[blocks.length - 1].push(...blanks);
+    else blocks.push(blanks);
+  }
+  return blocks.map(block => ({ lines: block, key: block.filter(line => !isBlank(line)).map(normalize).join('\n') }));
+}
+
+// Merges two sides' additions to one slot: blocks both sides added identically
+// appear once (ours' copy), everything else is kept with ours before theirs
+// between shared blocks. Throws when the shared blocks cannot be lined up.
+function mergeSlot(ours, theirs) {
+  if (sameLines(ours, theirs)) return [...ours];
+  if (ours.length === 0 || theirs.length === 0) return [...ours, ...theirs];
+
+  const oursBlocks = splitBlocks(ours);
+  const theirsBlocks = splitBlocks(theirs);
+  const tally = (blocks, key) => blocks.filter(block => block.key === key).length;
+  const shared = oursBlocks.filter(block => block.key !== '' && tally(theirsBlocks, block.key) > 0).map(block => block.key);
+  for (const key of shared) {
+    if (tally(oursBlocks, key) !== 1 || tally(theirsBlocks, key) !== 1) {
+      throw new ManualReviewError('shared addition repeats on one side, cannot line it up');
+    }
+  }
+  const theirsShared = theirsBlocks.filter(block => shared.includes(block.key)).map(block => block.key);
+  if (theirsShared.some((key, i) => key !== shared[i])) {
+    throw new ManualReviewError('shared additions appear in a different order on each side');
+  }
+
+  const lines = [];
+  let t = 0;
+  for (const block of oursBlocks) {
+    if (shared.includes(block.key)) {
+      while (theirsBlocks[t].key !== block.key) lines.push(...theirsBlocks[t++].lines);
+      t++;
+    }
+    lines.push(...block.lines);
+  }
+  while (t < theirsBlocks.length) lines.push(...theirsBlocks[t++].lines);
+  return lines;
 }
 
 // The lines `side` inserted around the base lines, grouped by slot (slot i sits
@@ -127,8 +197,9 @@ export function additionsBySlot(base, side) {
 }
 
 // Union of a purely additive hunk: the base lines stay in place and each slot
-// gets ours' additions, then theirs' (once if both added the same lines).
-// Returns null when either side modified a base line.
+// gets ours' additions, then theirs' (blocks both added identically only once).
+// Returns null when either side modified a base line; throws ManualReviewError
+// when shared additions cannot be lined up.
 export function unionHunk({ base, ours, theirs }) {
   const oursSlots = additionsBySlot(base, ours);
   const theirsSlots = additionsBySlot(base, theirs);
@@ -136,8 +207,7 @@ export function unionHunk({ base, ours, theirs }) {
 
   const lines = [];
   for (let i = 0; i <= base.length; i++) {
-    lines.push(...oursSlots[i]);
-    if (!sameLines(oursSlots[i], theirsSlots[i])) lines.push(...theirsSlots[i]);
+    lines.push(...mergeSlot(oursSlots[i], theirsSlots[i]));
     if (i < base.length) lines.push(base[i]);
   }
   return lines;
@@ -239,7 +309,13 @@ async function resolveFile(git, cwd, file, info, mergeBase, sourceHunks) {
     if (segment.type !== 'conflict') continue;
 
     if (testFile) {
-      const union = unionHunk(segment);
+      let union;
+      try {
+        union = unionHunk(segment);
+      } catch (error) {
+        if (!(error instanceof ManualReviewError)) throw error;
+        throw new ManualReviewError(`${file}: test hunk ${winners.length + 1}: ${error.message}`, { file });
+      }
       if (!union) {
         const modified = ['ours', 'theirs'].filter(name => !additionsBySlot(segment.base, segment[name]));
         throw new ManualReviewError(
@@ -295,9 +371,13 @@ async function resolveFile(git, cwd, file, info, mergeBase, sourceHunks) {
   }
   // Safety net for the union: the merged file must keep at least as many tests
   // as either parent. Fails, for example, when one side cleanly deleted tests.
+  // A count we cannot establish fails closed.
   if (testFile) {
-    const floor = Math.max(countTests(ours), countTests(theirs));
-    const remaining = countTests(resolved);
+    const counts = [ours, theirs, resolved].map(countTests);
+    if (counts.includes(null)) {
+      throw new ManualReviewError(`${file}: could not count tests reliably, left for review`, { file });
+    }
+    const [floor, remaining] = [Math.max(counts[0], counts[1]), counts[2]];
     if (remaining < floor) {
       throw new ManualReviewError(`${file}: resolution keeps ${remaining} tests, fewer than the ${floor} on one side`, { file });
     }

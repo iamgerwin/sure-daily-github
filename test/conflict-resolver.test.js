@@ -117,6 +117,25 @@ test('countTests counts test and it calls at line start, including modifiers', (
   assert.equal(countTests(text), 4);
 });
 
+test('countTests counts awaited and member test registrations', () => {
+  const text = [
+    "await test('a', async (t) => {\n",
+    "  await t.test('b', () => {});\n",
+    "  t.test.skip('c', () => {});\n",
+    "});\n",
+    "await it.only('d', () => {});\n",
+    "suite.it('e', () => {});\n"
+  ].join('');
+  assert.equal(countTests(text), 5);
+});
+
+test('countTests returns null when tests are registered in a form it cannot count', () => {
+  assert.equal(countTests("export default test('a', () => {});\n"), null);
+  assert.equal(countTests("void it('a', () => {});\n"), null);
+  assert.equal(countTests('const value = 1;\n'), 0);
+  assert.equal(countTests(''), 0);
+});
+
 test('unionHunk keeps every added line from both sides, ours before theirs', () => {
   const union = unionHunk({
     base: [],
@@ -141,6 +160,36 @@ test('unionHunk keeps base lines in place and orders base, ours, theirs per slot
 
 test('unionHunk keeps lines both sides added identically only once', () => {
   assert.deepEqual(unionHunk({ base: [], ours: ['same\n'], theirs: ['same'] }), ['same\n']);
+});
+
+test('unionHunk keeps a shared multi-line test once alongside each side\'s own tests', () => {
+  const block = (name) => [`test('${name}', () => {\n`, `  assert.ok('${name}');\n`, '});\n'];
+  const union = unionHunk({
+    base: [],
+    ours: [...block('shared'), '\n', ...block('ours')],
+    theirs: ['\n', ...block('shared'), '\n', ...block('theirs')]
+  });
+  assert.deepEqual(union, [...block('shared'), '\n', ...block('ours'), '\n', ...block('theirs')]);
+});
+
+test('unionHunk orders distinct blocks ours before theirs around a shared block', () => {
+  const union = unionHunk({
+    base: [],
+    ours: ["test('o1');\n", "test('shared');\n", "test('o2');\n"],
+    theirs: ["test('t1');\n", "test('shared');\n", "test('t2');\n"]
+  });
+  assert.deepEqual(union, ["test('o1');\n", "test('t1');\n", "test('shared');\n", "test('o2');\n", "test('t2');\n"]);
+});
+
+test('unionHunk escalates shared additions it cannot line up', () => {
+  assert.throws(
+    () => unionHunk({ base: [], ours: ["test('a');\n", "test('b');\n"], theirs: ["test('b');\n", "test('a');\n"] }),
+    (error) => error instanceof ManualReviewError && /different order/.test(error.message)
+  );
+  assert.throws(
+    () => unionHunk({ base: [], ours: ["test('a');\n", "test('a');\n"], theirs: ["test('a');\n", "test('b');\n"] }),
+    (error) => error instanceof ManualReviewError && /repeats on one side/.test(error.message)
+  );
 });
 
 test('unionHunk returns null when a side modified or removed a base line', () => {
