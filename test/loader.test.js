@@ -224,3 +224,15 @@ test('validate keeps positive weights and defaults a missing weight to 1', () =>
   assert.equal(cfg.repositories[0].weight, 2.5);
   assert.equal(cfg.repositories[1].weight, 1);
 });
+
+test('validate rejects duplicate repositories, ignoring case', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo, { owner: 'other', repo: 'demo' }, { owner: 'Me', repo: 'Demo' }] }),
+    /Repository 2: duplicate of repository 0 \(Me\/Demo\)/
+  );
+});
+
+test('validate accepts the same repo name under different owners', () => {
+  const cfg = config.validate({ repositories: [baseRepo, { owner: 'other', repo: 'demo' }] });
+  assert.equal(cfg.repositories.length, 2);
+});

@@ -99,6 +99,9 @@ class ConfigLoader {
     } else if (config.repositories.length === 0) {
       errors.push('At least one repository must be configured');
     } else {
+      // State is keyed by owner/repo (and GitHub names are case-insensitive), so
+      // duplicate entries would share one daily counter and double-process the repo
+      const seenRepos = new Map();
       config.repositories.forEach((repo, idx) => {
         // A bare "-" list item parses to null and would crash the checks below
         if (!repo || typeof repo !== 'object' || Array.isArray(repo)) {
@@ -112,6 +115,14 @@ class ConfigLoader {
         }
         if (repo.repo && !/^[a-zA-Z0-9._-]+$/.test(repo.repo)) {
           errors.push(`Repository ${idx}: invalid repo format`);
+        }
+        if (typeof repo.owner === 'string' && typeof repo.repo === 'string') {
+          const key = `${repo.owner}/${repo.repo}`.toLowerCase();
+          if (seenRepos.has(key)) {
+            errors.push(`Repository ${idx}: duplicate of repository ${seenRepos.get(key)} (${repo.owner}/${repo.repo})`);
+          } else {
+            seenRepos.set(key, idx);
+          }
         }
         if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
           const { min, max } = repo.intervalMinutes;
