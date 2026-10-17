@@ -112,8 +112,7 @@ export class StateManager {
     if (counters.daily.key !== keys.daily) {
       counters.daily.key = keys.daily;
       counters.daily.count = 0;
-      // Maintain legacy daily fields
-      repoState.lastCommitDate = keys.daily;
+      // Maintain legacy daily counter; lastCommitDate only moves when a commit is recorded
       repoState.commitsToday = 0;
     }
     if (counters.weekly.key !== keys.weekly) {
@@ -159,6 +158,7 @@ export class StateManager {
     if (type === 'commit') {
       repoState.totals.commits += 1;
       // Maintain legacy fields for backward compatibility
+      repoState.lastCommitDate = counters.daily.key;
       repoState.commitsToday = (repoState.commitsToday || 0) + 1;
       repoState.totalCommits = (repoState.totalCommits || 0) + 1;
     } else {
