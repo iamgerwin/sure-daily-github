@@ -358,6 +358,51 @@ test('does not push when the push repository config was tampered with', async (t
   }
 });
 
+// Runs the fixer with a remote URL, capturing every push that names that remote.
+// Only the credential push names the remote; the untrusted push names the push repo.
+async function capturePushArgs(fx, remoteUrl) {
+  const pushes = [];
+  const { fixer } = makeFixer(fx, [fx.pr], {
+    remoteUrl: () => remoteUrl,
+    git: async (args, options) => {
+      const isRemotePush = args.includes('push') && args.includes(remoteUrl);
+      if (isRemotePush) pushes.push({ args, options });
+      // An https remote is unreachable here, so the push is stubbed out
+      if (isRemotePush && remoteUrl !== fx.remote) return { code: 1, stdout: '', stderr: 'stubbed push' };
+      return runGit(args.map(arg => (arg === remoteUrl ? fx.remote : arg)), options);
+    }
+  });
+  const result = await fixer.run(config());
+  return { result, pushes };
+}
+
+function neverAllowed(args) {
+  return args.filter((arg, i) => args[i - 1] === '-c' && arg.endsWith('.allow=never')).sort();
+}
+
+test('the credential push locks protocols down, leaving file open only for local remotes', async (t) => {
+  const fx = await fixture(t);
+  process.env.GIT_CONFIG_PARAMETERS = "'protocol.file.allow'='always'";
+  t.after(() => delete process.env.GIT_CONFIG_PARAMETERS);
+
+  const remote = await capturePushArgs(fx, 'https://github.com/me/demo.git');
+  assert.equal(remote.pushes.length, 1);
+  assert.deepEqual(neverAllowed(remote.pushes[0].args), [
+    'protocol.ext.allow=never', 'protocol.file.allow=never', 'protocol.git.allow=never', 'protocol.ssh.allow=never'
+  ]);
+  assert.equal(remote.pushes[0].options.baseEnv.GIT_CONFIG_PARAMETERS, undefined);
+  assert.match(remote.result.results[0].reason, /stubbed push/);
+
+  // A fresh fixture, since the failed attempt above is in the ledger for this head
+  const other = await fixture(t);
+  const local = await capturePushArgs(other, other.remote);
+  assert.equal(local.pushes.length, 1);
+  assert.deepEqual(neverAllowed(local.pushes[0].args), [
+    'protocol.ext.allow=never', 'protocol.git.allow=never', 'protocol.ssh.allow=never'
+  ]);
+  assert.equal(local.result.results[0].status, 'fixed', local.result.results[0].reason);
+});
+
 test('pushes exactly the merge commit the tests ran against', async (t) => {
   const fx = await fixture(t);
   let tested;

@@ -349,6 +349,8 @@ class ConflictFixer {
     // For the clone once tested code has run in it: its .git/config is no longer
     // trusted (core.fsmonitor, http.proxy, ...), so no credential goes near it
     const untrusted = { env: {}, baseEnv: scrubEnv(process.env) };
+    // Credential-bearing calls drop ambient GIT_* settings (GIT_CONFIG_PARAMETERS etc.)
+    const authScrubbed = { env: this.authEnv, baseEnv: scrubEnv(process.env) };
     const must = async (args, options) => {
       const result = await git(args, options);
       if (result.code !== 0) {
@@ -364,7 +366,7 @@ class ConflictFixer {
       await must(['config', 'user.email', identity.email]);
       await must(['fetch', '-q', '--no-tags', url,
         `+refs/heads/${base}:refs/remotes/origin/${base}`,
-        `+refs/heads/${head}:refs/remotes/origin/${head}`]);
+        `+refs/heads/${head}:refs/remotes/origin/${head}`], authScrubbed);
 
       // Only fix the exact commit GitHub reported as conflicting
       const fetchedHead = (await must(['rev-parse', `refs/remotes/origin/${head}`])).trim();
@@ -437,7 +439,7 @@ class ConflictFixer {
       const lockdown = PUSH_BLOCKED_PROTOCOLS
         .filter(protocol => !(protocol === 'file' && path.isAbsolute(url)))
         .flatMap(protocol => ['-c', `protocol.${protocol}.allow=never`]);
-      const push = await git([...lockdown, 'push', '-q', url, `${mergeSha}:refs/heads/${head}`], { cwd: pushDir });
+      const push = await git([...lockdown, 'push', '-q', url, `${mergeSha}:refs/heads/${head}`], { ...authScrubbed, cwd: pushDir });
       if (push.code !== 0) {
         const stderr = String(push.stderr).trim();
         if (/rejected|non-fast-forward|fetch first/.test(stderr)) {
