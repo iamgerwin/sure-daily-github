@@ -10,9 +10,15 @@ const LOG_LEVELS = {
   debug: 3
 };
 
+// Unknown values (e.g. "verbose") would otherwise compare against undefined and
+// silence every log line, errors included
+export function resolveLogLevel(value) {
+  const level = String(value ?? '').trim().toLowerCase();
+  return Object.hasOwn(LOG_LEVELS, level) ? level : 'info';
+}
+
 class Logger {
   constructor() {
-    this.level = process.env.LOG_LEVEL || 'info';
     this.logDir = path.join(__dirname, '../../logs');
     this.ensureLogDir();
   }
@@ -21,6 +27,12 @@ class Logger {
     if (!fs.existsSync(this.logDir)) {
       fs.mkdirSync(this.logDir, { recursive: true });
     }
+  }
+
+  // Read on every call: this module is imported before loader.js runs
+  // dotenv.config(), so LOG_LEVEL from .env is not set at construction time
+  get level() {
+    return resolveLogLevel(process.env.LOG_LEVEL);
   }
 
   shouldLog(level) {
