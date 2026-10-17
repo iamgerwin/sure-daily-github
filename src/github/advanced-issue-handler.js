@@ -390,8 +390,10 @@ class AdvancedIssueHandler {
       });
     }
     
+    // The CLI renders these instants in the configured timezone, not the host's
     return {
       lastDailyReset: state.lastDailyReset,
+      timezone,
       repositories: statuses
     };
   }

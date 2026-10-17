@@ -8,6 +8,7 @@ import scheduler from './core/scheduler.js';
 import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import config from './config/loader.js';
+import { getTemplateDateParts } from './utils/template-date.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -180,6 +181,8 @@ program
         
         // Check if it's the advanced handler format (has repositories array)
         if (result.status.repositories && Array.isArray(result.status.repositories)) {
+          // Show times in general.timezone, the same clock the daily reset uses
+          const timezone = result.status.timezone || 'UTC';
           console.log('┌─────────────────────────────────┬────────────┬───────┬──────────────────────┐');
           console.log('│ Repository                      │ Target     │ Today │ Next Issue           │');
           console.log('├─────────────────────────────────┼────────────┼───────┼──────────────────────┤');
@@ -191,12 +194,7 @@ program
             let nextIssue = 'Any time';
             
             if (repo.nextIssueTime && repo.nextIssueTime !== 'Any time') {
-              const nextDate = new Date(repo.nextIssueTime);
-              nextIssue = nextDate.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit',
-                hour12: false 
-              });
+              nextIssue = getTemplateDateParts(timezone, new Date(repo.nextIssueTime)).time.slice(0, 5);
             }
             
             nextIssue = nextIssue.padStart(20);
@@ -207,8 +205,8 @@ program
           console.log('└─────────────────────────────────┴────────────┴───────┴──────────────────────┘\n');
           
           if (result.status.lastDailyReset) {
-            const resetDate = new Date(result.status.lastDailyReset);
-            console.log(`Last daily reset: ${resetDate.toLocaleString()}\n`);
+            const { date, time } = getTemplateDateParts(timezone, new Date(result.status.lastDailyReset));
+            console.log(`Last daily reset: ${date} ${time} (${timezone})\n`);
           }
         } 
         // Legacy format
