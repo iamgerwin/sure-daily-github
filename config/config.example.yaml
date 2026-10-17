@@ -114,6 +114,22 @@ schedule:
 #   retryCooldownMinutes: 240  # Skip re-attempting the same head SHA this long
 
 # ========================================
+# Babysit (Optional) - see docs/BABYSIT.md
+# ========================================
+# Addresses review comments on open PRs carrying the label: triages each
+# comment with an AI engine, pushes tested fixes, and replies on every thread.
+# Never merges. Run ad hoc with `sure-daily-github babysit`.
+babysit:
+  enabled: false              # Also scan on every scheduler tick
+  label: babysit              # Label that marks a PR for babysitting
+  engine: opencode            # opencode | claude
+  model: openai/gpt-6.1-sol   # Passed to the engine as --model
+  ownPRsOnly: true            # Only PRs authored by the token's user
+  maxPrsPerRun: 5
+  testTimeoutMinutes: 15      # Test gate timeout (uses repositories[].testCommand)
+  engineTimeoutMinutes: 30    # Per engine invocation
+
+# ========================================
 # Repositories
 # ========================================
 repositories:
@@ -127,7 +143,7 @@ repositories:
     commitMessage: "docs: daily update ${date}"
     labels: ["automated"]  # For issue mode
     weight: 1              # For weighted selection
-    # testCommand: "npm run test:unit"  # fix-conflicts: overrides test detection
+    # testCommand: "npm run test:unit"  # fix-conflicts and babysit test gate: overrides test detection
     # conflictFixer: true    # fix-conflicts: per-repo opt in (true) / out (false); beats mode and lists
 
   # Example with range-based target

@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import executor from './executor.js';
+import babysitter from './babysitter.js';
 
 class Scheduler {
   constructor() {
@@ -30,6 +31,7 @@ class Scheduler {
       } else if (!result?.success) {
         logger.error('Scheduled task failed', { error: result?.error });
       }
+      await this.runScheduledBabysit(config);
       return result;
     } catch (error) {
       logger.error('Scheduled task failed', { error: error.message });
@@ -37,6 +39,24 @@ class Scheduler {
     } finally {
       this.executing = false;
       this.executionStartedAt = null;
+    }
+  }
+
+  // Opt-in babysit scan on the same cadence. Runs after the execution has
+  // released the run lock, and its failures never affect the execution result.
+  async runScheduledBabysit(config) {
+    if (!config.babysit?.enabled) return null;
+    try {
+      const result = await babysitter.execute(config);
+      if (result?.locked) {
+        logger.warn('Another process holds the run lock, skipped babysit scan', { error: result.error });
+      } else if (!result?.success || result.summary?.failed > 0) {
+        logger.error('Scheduled babysit scan had failures', { error: result?.error, summary: result?.summary });
+      }
+      return result;
+    } catch (error) {
+      logger.error('Scheduled babysit scan failed', { error: error.message });
+      return { success: false, error: error.message };
     }
   }
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import scheduler from '../src/core/scheduler.js';
 import executor from '../src/core/executor.js';
+import babysitter from '../src/core/babysitter.js';
 import { createOctokit } from '../src/github/octokit.js';
 
 test('runScheduledTask skips a tick while the previous execution is in flight', async () => {
@@ -44,6 +45,39 @@ test('runScheduledTask releases the guard when execution throws', async () => {
   } finally {
     executor.execute = original;
   }
+});
+
+test('runScheduledTask runs a babysit scan after the execution only when babysit is enabled', async (t) => {
+  const originalExecute = executor.execute;
+  const originalBabysit = babysitter.execute;
+  const order = [];
+  executor.execute = async () => { order.push('execute'); return { success: true }; };
+  babysitter.execute = async () => { order.push('babysit'); return { success: true, summary: { failed: 0 } }; };
+  t.after(() => {
+    executor.execute = originalExecute;
+    babysitter.execute = originalBabysit;
+  });
+
+  assert.deepEqual(await scheduler.runScheduledTask({}), { success: true });
+  assert.deepEqual(await scheduler.runScheduledTask({ babysit: { enabled: false } }), { success: true });
+  assert.deepEqual(order, ['execute', 'execute']);
+
+  assert.deepEqual(await scheduler.runScheduledTask({ babysit: { enabled: true } }), { success: true });
+  assert.deepEqual(order, ['execute', 'execute', 'execute', 'babysit']);
+});
+
+test('a failing babysit scan does not change the scheduled execution result', async (t) => {
+  const originalExecute = executor.execute;
+  const originalBabysit = babysitter.execute;
+  executor.execute = async () => ({ success: true });
+  babysitter.execute = async () => { throw new Error('engine exploded'); };
+  t.after(() => {
+    executor.execute = originalExecute;
+    babysitter.execute = originalBabysit;
+  });
+
+  assert.deepEqual(await scheduler.runScheduledTask({ babysit: { enabled: true } }), { success: true });
+  assert.equal(scheduler.executing, false);
 });
 
 test('GitHub requests are aborted after GITHUB_REQUEST_TIMEOUT_MS', async () => {
