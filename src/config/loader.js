@@ -125,6 +125,11 @@ class ConfigLoader {
         if (repo.dailyTarget !== undefined && repo.dailyTarget !== null) {
           validateDailyTarget(repo.dailyTarget, `Repository ${idx}: dailyTarget`, errors);
         }
+        // A zero or negative weight skews weighted selection toward the first repo
+        if (repo.weight !== undefined && repo.weight !== null
+          && (typeof repo.weight !== 'number' || !Number.isFinite(repo.weight) || repo.weight <= 0)) {
+          errors.push(`Repository ${idx}: weight must be a positive number`);
+        }
       });
     }
 
@@ -172,6 +177,12 @@ class ConfigLoader {
       const validStrategies = ['random', 'weighted', 'round-robin', 'sequential'];
       if (config.repositorySelection.strategy && !validStrategies.includes(config.repositorySelection.strategy)) {
         errors.push(`repositorySelection.strategy must be one of: ${validStrategies.join(', ')}`);
+      }
+      // A non-positive cap would otherwise drop repos (slice(0, -1)) or select none
+      const { maxPerExecution } = config.repositorySelection;
+      if (maxPerExecution !== undefined && maxPerExecution !== null
+        && (!Number.isInteger(maxPerExecution) || maxPerExecution < 1)) {
+        errors.push('repositorySelection.maxPerExecution must be a positive whole number or null');
       }
     }
 
@@ -227,7 +238,8 @@ class ConfigLoader {
           owner: repo.owner,
           repo: repo.repo,
           enabled: repo.enabled !== false,
-          branch: repo.branch || 'main',
+          // Unset means the repository's default branch, resolved by GitHub
+          branch: repo.branch || null,
           dailyTarget: normalizeDailyTarget(repoTarget),
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',

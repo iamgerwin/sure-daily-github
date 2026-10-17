@@ -56,8 +56,35 @@ test('repo already at its daily limit is reported as skipped, not failed', async
   assert.equal(calls.length, 0);
   assert.equal(results[0].success, true);
   assert.equal(results[0].skipped, true);
-  assert.equal(results[0].skippedCount, 1);
+  assert.equal(results[0].reason, 'limit_reached');
   assert.deepEqual(summarize(results), { successful: 0, skipped: 1, failed: 0 });
+});
+
+test('maxPerExecution slot goes to a repo still within its limits', async () => {
+  for (let i = 0; i < 3; i++) state.recordAction('me', 'done-first');
+  const { handler, calls } = createHandler();
+  const config = { repositorySelection: { strategy: 'sequential', maxPerExecution: 1 } };
+
+  const results = await handler.processRepositories(
+    [repoConfig('done-first'), repoConfig('open-second'), repoConfig('open-third')], {}, false, config
+  );
+
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(c => c.repo === 'open-second'));
+  const byRepo = Object.fromEntries(results.map(r => [r.repo, r]));
+  assert.equal(byRepo['done-first'].reason, 'limit_reached');
+  assert.equal(byRepo['open-second'].successful, 3);
+  assert.equal(byRepo['open-third'].reason, 'not_selected');
+  assert.deepEqual(summarize(results), { successful: 1, skipped: 2, failed: 0 });
+});
+
+test('disabled repos are neither selected nor reported as limit reached', async () => {
+  const { handler, calls } = createHandler();
+
+  const results = await handler.processRepositories([{ ...repoConfig('off'), enabled: false }], {}, false, {});
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(results, []);
 });
 
 test('partial run that hits the limit counts as successful only', async () => {
