@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 
@@ -189,6 +190,9 @@ class ConfigLoader {
     // Validate schedule
     if (config.schedule?.enabled && !config.schedule.cron) {
       errors.push('Cron expression is required when schedule is enabled');
+    } else if (config.schedule?.enabled && !cron.validate(config.schedule.cron)) {
+      // Otherwise `validate` passes and the scheduler only throws once `start` runs
+      errors.push(`schedule.cron is not a valid cron expression: ${config.schedule.cron}`);
     }
 
     if (errors.length > 0) {
