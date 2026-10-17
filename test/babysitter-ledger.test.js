@@ -100,7 +100,7 @@ test('a corrupt ledger is backed up and replaced with an empty one', (t) => {
 
   for (const raw of ['[]', 'null', '42']) {
     fs.writeFileSync(filePath, raw);
-    assert.deepEqual(new BabysitterLedger({ filePath }).data, { version: 1, comments: {}, prs: {}, deliveries: {}, cursor: null });
+    assert.deepEqual(new BabysitterLedger({ filePath }).data, { version: 1, comments: {}, prs: {}, deliveries: {}, pushIntents: {}, cursor: null });
   }
 });
 

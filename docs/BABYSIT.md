@@ -118,7 +118,9 @@ lockdown removes the git and `gh` credentials those programs would normally
 pick up, and the engine never has the GitHub token. Full isolation of
 arbitrary PR code needs an OS sandbox (container or dedicated user), which is
 outside babysit. claude does not have this gap: Bash is limited to the
-allowlist.
+allowlist. In short, the enforceable boundary covers git, `gh`, and network
+(egress) commands plus directories outside the checkout; closing the
+interpreter gap completely requires running the engine in a container.
 
 ## How a pull request is handled
 
@@ -128,11 +130,13 @@ allowlist.
    A PR whose head branch is in a fork cannot be pushed to, so it gets one
    comment explaining that and is skipped from then on. When there are more
    candidates than `maxPrsPerRun`, the scan goes **round-robin**: it starts
-   right after the last PR the previous full scan visited (the cursor is
-   stored in the ledger), so idle or fork PRs early in the list cannot starve
-   the rest. `--repo`/`--pr` scans neither use nor move the cursor. Before
-   scanning, replies left pending by earlier runs are delivered (see
-   [Reply delivery](#reply-delivery)).
+   right after the last PR the previous scan visited (the cursor is stored in
+   the ledger), so idle or fork PRs early in the list cannot starve the rest.
+   Candidates are ordered by the configured repository order, so full and
+   `--repo`/`--pr` scans share the one cursor; a cursor outside the selected
+   repositories starts the scan at its first candidate. Before scanning,
+   earlier pushes are reconciled and replies left pending by earlier runs are
+   delivered (see [Reply delivery](#reply-delivery)).
 2. **Collect.** Fetches inline review comments, review bodies, and issue
    comments. Babysit skips its own replies (they carry a hidden
    `<!-- sdg-babysit -->` marker), comments by the token's user, empty review
@@ -151,9 +155,13 @@ allowlist.
    `fix: address review feedback on #N`. The engine must write a report with
    an explicit `status` (`implemented` or `failed`) for **every** item. Only
    `implemented` items are settled once the push succeeds. A `failed` item
-   is charged an attempt. An item the report leaves out stays pending without
-   being charged. A missing or invalid report is treated as an
-   infrastructure failure: nothing is pushed, settled, or charged.
+   is charged an attempt. An item the report leaves out, or lists twice with
+   conflicting statuses, stays pending without being charged. A missing or
+   invalid report is treated as an infrastructure failure: nothing is pushed,
+   settled, or charged. When comments are split into several engine calls, a
+   failed call only affects its own items (charged when the engine failed,
+   uncharged when it could not be started or wrote no report); the other
+   calls' results are kept.
 6. **Verify.** The new commits must descend linearly from the PR head (no
    rewritten history, no merges). `Co-Authored-By` and `Generated with` lines
    are stripped from their messages, keeping authors and trees. The working
@@ -167,9 +175,11 @@ allowlist.
    bare repository the PR code never touched, with the `ext`, `ssh`, `git`,
    and `file` protocols disabled. It is a plain push, which only
    fast-forwards: it never force-pushes, and if the branch moved in the
-   meantime the push is rejected. A rejected push is not the comment's fault,
-   so it is rescheduled: the comment stays pending, without being charged an
-   attempt, and is handled against the new head on the next run.
+   meantime the push is rejected. A push rejected as `non-fast-forward` or
+   `fetch first` lost a race and is not the comment's fault, so it is
+   rescheduled: the comment stays pending, without being charged an attempt,
+   and is handled against the new head on the next run. Any other rejection
+   (a declined hook, a protected branch) is a failure that uses an attempt.
 8. **Reply.** Each inline thread gets one reply:
    - `fix`: the commit SHA, what changed, the `file:line` locations, and a
      re-review request
@@ -199,8 +209,19 @@ Each later run first retries queued replies. It only posts them and never
 runs the engine again. A `pushed` entry (the process died between the push
 and the reply) is delivered only if the PR head is still the pushed SHA. If
 the branch has moved on, the comment is settled as `addressed` with a note
-and no reply is sent. Give-up notices are queued and retried the same way. A
-reply that fails 10 times is dropped with a note.
+and no reply is sent. If the PR lookup itself fails (for example a `503`),
+the reply stays queued without using a delivery attempt; a `404` drops it
+with a note. Give-up notices are queued and retried the same way. A reply
+that fails to post 10 times is dropped with a note.
+
+Right before the push, a **push intent** is saved: the expected pushed SHA,
+the source head, and every outcome and reply the push would settle. It is
+removed in the same save that records the outcomes. If the run dies or is
+interrupted in between, the next run checks the PR first: if its head is the
+expected SHA, the push landed, so the stored outcomes are recorded and their
+replies delivered without running the engine again. Otherwise the push never
+landed and the comments stay pending. While the PR lookup fails, the intent
+is kept and the PR is not processed.
 
 ## Interrupts
 
@@ -215,7 +236,10 @@ On `SIGINT`/`SIGTERM`, babysit:
 5. Exits `130` (`SIGINT`) or `143` (`SIGTERM`).
 
 A second signal is ignored. Nothing is pushed after the interrupt, and
-replies for an already pushed fix stay queued in the ledger.
+replies for an already pushed fix stay queued in the ledger (or in its push
+intent, when the interrupt came right after the push). Process groups stay
+tracked until every member has exited, so a background grandchild outliving
+its group leader is still killed.
 
 ## Per-comment memory (ledger)
 
@@ -234,8 +258,8 @@ backed up to `.bak` and the ledger starts fresh.
 | `noted`     | acknowledged (and replied, unless `replyPending`) | never |
 | `failed`    | triage, the engine (exit or timeout), tests, or a reported `failed` fix | retried once more; after 2 failures the thread gets a "leaving this for manual follow-up" reply and is left alone |
 
-Queued replies live under `deliveries`, and the round-robin position under
-`cursor`. Some failures are not charged against a comment and leave it
+Queued replies live under `deliveries`, unreconciled pushes under
+`pushIntents`, and the round-robin position under `cursor`. Some failures are not charged against a comment and leave it
 pending: an engine that cannot be spawned (`E2BIG`, `ENOENT`, `EACCES`), a
 missing or invalid implement report, an item the report left out, a push
 rejected because the branch moved, and an interrupt. A failure in the

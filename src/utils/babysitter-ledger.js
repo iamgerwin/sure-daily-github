@@ -17,7 +17,7 @@ export const MAX_ATTEMPTS = 2;
 export const MAX_DELIVERY_ATTEMPTS = 10;
 
 function emptyLedger() {
-  return { version: 1, comments: {}, prs: {}, deliveries: {}, cursor: null };
+  return { version: 1, comments: {}, prs: {}, deliveries: {}, pushIntents: {}, cursor: null };
 }
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -42,6 +42,7 @@ export class BabysitterLedger {
         comments: parsed.comments && typeof parsed.comments === 'object' ? parsed.comments : {},
         prs: parsed.prs && typeof parsed.prs === 'object' ? parsed.prs : {},
         deliveries: isObject(parsed.deliveries) ? parsed.deliveries : {},
+        pushIntents: isObject(parsed.pushIntents) ? parsed.pushIntents : {},
         cursor: isObject(parsed.cursor) ? parsed.cursor : null
       };
     } catch (error) {
@@ -204,6 +205,29 @@ export class BabysitterLedger {
   markInterrupted(prKey, { signal = null, now = new Date() } = {}) {
     this.data.prs[prKey] = { ...(this.getPr(prKey) || {}), interrupted: { signal, at: now.toISOString() } };
     this.save();
+  }
+
+  // Written before the remote push and removed in the same save that records
+  // its outcomes. One left behind means the run died around the push: if the
+  // branch head is `expectedSha` the push landed and the stored outcomes are
+  // applied, otherwise the comments are simply still pending.
+  recordPushIntent(prKey, intent, { now = new Date() } = {}) {
+    this.data.pushIntents[prKey] = { ...intent, createdAt: now.toISOString() };
+    this.save();
+  }
+
+  getPushIntent(prKey) {
+    return this.data.pushIntents[prKey] || null;
+  }
+
+  getPushIntents() {
+    return Object.entries(this.data.pushIntents).map(([prKey, intent]) => ({ prKey, ...intent }));
+  }
+
+  clearPushIntent(prKey, { save = true } = {}) {
+    if (!this.data.pushIntents[prKey]) return;
+    delete this.data.pushIntents[prKey];
+    if (save) this.save();
   }
 
   // Round-robin position across scans: the last PR visited, as { repo, number }

@@ -500,6 +500,188 @@ test('the scan resumes after the last visited PR, so idle PRs cannot starve the 
   assert.deepEqual([...new Set(visited.flat())].sort(), [7, 8, 9]);
 });
 
+test('a --repo scan rotates through the shared cursor, so filtered runs reach every PR', async (t) => {
+  useTmpState(t);
+  const remote = setupRemote();
+  const issues = [7, 8, 9].map(number => ({ number, user: { login: 'me' }, pull_request: {} }));
+  const pulls = Object.fromEntries([7, 8, 9].map(number => [number, pull(remote.headSha, { number })]));
+  const visited = [];
+
+  for (let run = 0; run < 2; run++) {
+    const { client, calls } = stubClient({ issues, pulls });
+    await babysitter(remote, client, stubEngine().engine).execute(makeConfig({ maxPrsPerRun: 2 }), { repos: ['me/demo'] });
+    visited.push(calls.getPullRequest);
+  }
+  assert.deepEqual(visited, [[7, 8], [9, 7]]);
+});
+
+// Wraps the babysitter's push so `after(result)` runs right after it returns
+function onPush(sitter, after) {
+  const push = sitter.pushPinned.bind(sitter);
+  sitter.pushPinned = async (...args) => {
+    const result = await push(...args);
+    await after(result);
+    return result;
+  };
+}
+
+test('a crash right after the remote push is reconciled from the push intent, not re-implemented', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const pulls = { 7: pull(remote.headSha) };
+  const { client, calls } = stubClient({ pulls, reviewComments: [inlineAlice], issueComments: [bobComment] });
+  const { engine, calls: engineCalls } = stubEngine({ actions: { 'review_comment:11': 'fix', 'issue_comment:31': 'note' }, implement: simpleFix });
+
+  const sitter = babysitter(remote, client, engine);
+  let snapshot;
+  // What a crash right after the push leaves on disk
+  onPush(sitter, () => { snapshot = fs.readFileSync(state.ledgerFile, 'utf8'); });
+  await sitter.execute(makeConfig());
+  fs.writeFileSync(state.ledgerFile, snapshot);
+  calls.replies.length = 0;
+  calls.issueComments.length = 0;
+
+  const pushed = remote.remote('rev-parse', 'refs/heads/feature');
+  assert.notEqual(pushed, remote.headSha);
+  assert.equal(state.ledger().pushIntents['me/demo#7'].expectedSha, pushed);
+  assert.deepEqual(state.ledger().comments, {}, 'no outcome was recorded before the crash');
+
+  pulls[7] = pull(pushed);
+  const second = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(getBabysitExitCode(second), 0);
+  assert.equal(engineCalls.implement, 1, 'not re-implemented');
+  assert.equal(engineCalls.triage.length, 1, 'not re-triaged');
+  assert.equal(calls.replies.length, 1);
+  assert.ok(calls.replies[0].body.includes(`Fixed in ${pushed.slice(0, 12)}`));
+  assert.equal(calls.issueComments.length, 1);
+  const ledger = state.ledger();
+  assert.equal(ledger.comments['me/demo#7/review_comment:11'].state, 'addressed');
+  assert.equal(ledger.comments['me/demo#7/review_comment:11'].commitSha, pushed);
+  assert.equal(ledger.comments['me/demo#7/issue_comment:31'].state, 'noted');
+  assert.deepEqual(ledger.pushIntents, {});
+  assert.equal(remote.remote('rev-parse', 'refs/heads/feature'), pushed, 'nothing pushed twice');
+});
+
+test('an interrupt right after a successful push is reconciled on the next run', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const pulls = { 7: pull(remote.headSha) };
+  const { client, calls } = stubClient({ pulls, reviewComments: [inlineAlice] });
+  const { engine, calls: engineCalls } = stubEngine({ actions: { 'review_comment:11': 'fix' }, implement: simpleFix });
+
+  const sitter = new Babysitter({
+    client, engine, token: null, remoteUrl: () => remote.bare, tmpDir: remote.root,
+    killEngines: async () => {}, killTests: () => {}, exit: () => {}
+  });
+  let interrupting;
+  onPush(sitter, () => { interrupting = sitter.interrupt('SIGTERM'); });
+  await sitter.execute(makeConfig());
+  await interrupting;
+
+  const pushed = remote.remote('rev-parse', 'refs/heads/feature');
+  assert.notEqual(pushed, remote.headSha);
+  let ledger = state.ledger();
+  assert.equal(ledger.pushIntents['me/demo#7'].expectedSha, pushed);
+  assert.equal(ledger.comments['me/demo#7/review_comment:11'], undefined);
+  assert.equal(calls.replies.length, 0);
+
+  pulls[7] = pull(pushed);
+  const second = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(getBabysitExitCode(second), 0);
+  assert.equal(engineCalls.implement, 1, 'not re-implemented');
+  assert.equal(calls.replies.length, 1);
+  ledger = state.ledger();
+  assert.equal(ledger.comments['me/demo#7/review_comment:11'].state, 'addressed');
+  assert.deepEqual(ledger.pushIntents, {});
+});
+
+test('a push intent whose SHA never reached the branch leaves the comments pending', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const pulls = { 7: pull(remote.headSha) };
+  const { client, calls } = stubClient({ pulls, reviewComments: [inlineAlice] });
+  const { engine, calls: engineCalls } = stubEngine({ actions: { 'review_comment:11': 'fix' }, implement: simpleFix });
+
+  const sitter = babysitter(remote, client, engine);
+  let snapshot;
+  onPush(sitter, () => { snapshot = fs.readFileSync(state.ledgerFile, 'utf8'); });
+  await sitter.execute(makeConfig());
+  fs.writeFileSync(state.ledgerFile, snapshot);
+  // As if the push never landed
+  remote.remote('update-ref', 'refs/heads/feature', remote.headSha);
+  calls.replies.length = 0;
+
+  const second = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.match(second.results[0].reason, /did not land/);
+  assert.equal(engineCalls.implement, 2, 'handled again as unprocessed');
+  assert.equal(calls.replies.length, 1);
+  assert.equal(state.ledger().comments['me/demo#7/review_comment:11'].state, 'addressed');
+  assert.deepEqual(state.ledger().pushIntents, {});
+});
+
+test('a failed head lookup leaves a pending reply untouched and uncharged', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const pulls = { 7: pull(remote.headSha) };
+  const { client, calls } = stubClient({ pulls, reviewComments: [inlineAlice], throwReplies: true });
+  const { engine, calls: engineCalls } = stubEngine({ actions: { 'review_comment:11': 'fix' }, implement: simpleFix });
+
+  await babysitter(remote, client, engine).execute(makeConfig());
+  const pushed = remote.remote('rev-parse', 'refs/heads/feature');
+  pulls[7] = pull(pushed);
+
+  const getPullRequest = client.getPullRequest;
+  client.getPullRequest = async () => ({ success: false, error: 'HTTP 503', status: 503 });
+  const second = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(getBabysitExitCode(second), 1);
+  let ledger = state.ledger();
+  const [delivery] = Object.values(ledger.deliveries);
+  assert.equal(delivery.attempts, 0, 'no delivery attempt consumed');
+  assert.equal(ledger.comments['me/demo#7/review_comment:11'].state, 'pushed', 'delivery guard kept');
+  assert.equal(calls.replies.length, 0);
+
+  client.getPullRequest = getPullRequest;
+  const third = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(getBabysitExitCode(third), 0);
+  assert.equal(engineCalls.implement, 1);
+  assert.equal(calls.replies.length, 1);
+  ledger = state.ledger();
+  assert.equal(ledger.comments['me/demo#7/review_comment:11'].state, 'addressed');
+  assert.deepEqual(ledger.deliveries, {});
+});
+
+for (const infra of [false, true]) {
+  test(`a ${infra ? 'spawn' : 'genuine'} failure in a later engine batch only affects that batch's items`, async (t) => {
+    const state = useTmpState(t);
+    const remote = setupRemote();
+    const { client, calls } = stubClient({ pulls: { 7: pull(remote.headSha) }, reviewComments: [inlineAlice, inlineBot] });
+    const { engine } = stubEngine({
+      actions: { 'review_comment:11': 'fix', 'review_comment:12': 'fix' },
+      implement: ({ cwd, items }) => {
+        commitFile(cwd, 'fix.txt', 'fix: first batch');
+        const report = implemented(items, ['review_comment:11']);
+        return { ok: true, report: { ...report, batchFailures: [{ ids: ['review_comment:12'], infra, error: 'opencode exited with code 1' }] } };
+      }
+    });
+
+    const result = await babysitter(remote, client, engine).execute(makeConfig());
+    const pr = result.results[0];
+    assert.equal(pr.counts.addressed, 1);
+    assert.deepEqual(calls.replies.map(r => r.commentId), [11]);
+    assert.equal(remote.remote('rev-parse', 'refs/heads/feature'), pr.commitSha);
+    const ledger = state.ledger().comments;
+    assert.equal(ledger['me/demo#7/review_comment:11'].state, 'addressed');
+    if (infra) {
+      assert.deepEqual(pr.retrying.map(r => r.id), ['review_comment:12']);
+      assert.equal(ledger['me/demo#7/review_comment:12'], undefined, 'not charged');
+    } else {
+      assert.match(pr.failures[0].error, /engine failed: opencode exited with code 1/);
+      assert.equal(ledger['me/demo#7/review_comment:12'].state, 'failed');
+      assert.equal(ledger['me/demo#7/review_comment:12'].attempts, 1);
+    }
+  });
+}
+
 test('a failed inline reply for a pushed fix is retried next run without re-running the fix', async (t) => {
   const state = useTmpState(t);
   const remote = setupRemote();
@@ -720,6 +902,27 @@ test('a push rejected because the branch moved is rescheduled, not charged', asy
   assert.equal(calls.replies.length, 0);
   const ledger = fs.existsSync(state.ledgerFile) ? state.ledger().comments : {};
   assert.equal(ledger['me/demo#7/review_comment:11'], undefined, 'still pending, no attempt used');
+});
+
+test('a push declined by a server hook is a charged failure that ends in a give-up notice', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  fs.writeFileSync(path.join(remote.bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "protected branch" >&2\nexit 1\n', { mode: 0o755 });
+  const { client, calls } = stubClient({ pulls: { 7: pull(remote.headSha) }, reviewComments: [inlineAlice] });
+  const { engine } = stubEngine({ actions: { 'review_comment:11': 'fix' }, implement: simpleFix });
+
+  const first = await babysitter(remote, client, engine).execute(makeConfig());
+  const pr = first.results[0];
+  assert.equal(getBabysitExitCode(first), 1);
+  assert.deepEqual(pr.retrying, []);
+  assert.match(pr.failures[0].error, /git push failed: .*hook declined/s);
+  assert.equal(state.ledger().comments['me/demo#7/review_comment:11'].attempts, 1);
+  assert.deepEqual(state.ledger().pushIntents, {});
+  assert.equal(remote.remote('rev-parse', 'refs/heads/feature'), remote.headSha);
+
+  await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(calls.replies.length, 1);
+  assert.match(calls.replies[0].body, /Automated handling failed after 2 attempts \(git push failed/);
 });
 
 test('bots are asked to re-review once per pushed head', async (t) => {

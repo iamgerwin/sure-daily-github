@@ -50,6 +50,11 @@ function unwrap(result, what) {
   return result.data;
 }
 
+// Engine batch failures ({ ids, infra, error }) keyed by comment id
+function batchFailureMap(batchFailures = []) {
+  return new Map(batchFailures.flatMap(failure => failure.ids.map(id => [id, failure])));
+}
+
 const sameLogin = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 
 // Like `run`: exits 1 when the scan errored or any comment/PR failed this run
@@ -266,8 +271,9 @@ export class Babysitter {
   // outlive this process, still writing to the clone. Kills them (SIGKILL
   // after a grace period), notes the interruption in the ledger, removes the
   // temp dirs, releases the lock, and exits. The current PR's comments were
-  // not charged an attempt, and anything already pushed has its replies in
-  // the ledger, so the next run picks up from there. A repeated signal is ignored.
+  // not charged an attempt, and anything already pushed has its replies (or
+  // its push intent) in the ledger, so the next run picks up from there. A
+  // repeated signal is ignored.
   async interrupt(signal) {
     if (this.interrupted) return;
     this.interrupted = true;
@@ -371,11 +377,18 @@ export class Babysitter {
 
       // Replies that failed (or never ran) on an earlier run go out before
       // any new work, without running the engine again
-      if (!dryRun) await this.retryDeliveries(ctx, selected, pr, results);
+      if (!dryRun) {
+        await this.reconcilePushIntents(ctx, selected, pr, results);
+        await this.retryDeliveries(ctx, selected, pr, results);
+      }
 
+      // Candidates are ordered by the configured repository order (not the
+      // --repo order), so the cursor means the same in filtered and full scans
+      const repoIndexOf = (name) => cfg.repositories.findIndex(r => `${r.owner}/${r.repo}`.toLowerCase() === name);
       const candidates = [];
-      for (const [repoIndex, repoCfg] of selected.entries()) {
+      for (const repoCfg of selected) {
         const { owner, repo } = repoCfg;
+        const repoIndex = repoIndexOf(`${owner}/${repo}`.toLowerCase());
         try {
           const issues = unwrap(
             await client.listLabeledPullRequests(owner, repo, settings.label),
@@ -392,14 +405,15 @@ export class Babysitter {
       }
 
       // Round-robin: when the budget cannot cover every candidate, start right
-      // after the PR the previous full scan stopped at, so no PR (idle or not)
-      // is starved. Filtered scans neither use nor move the cursor.
-      const fullScan = repos.length === 0 && pr === null;
+      // after the PR the previous scan stopped at, so no PR (idle or not) is
+      // starved. Full and --repo/--pr scans share one cursor: a position
+      // outside the selected subset just starts it from its first candidate.
+      candidates.sort((a, b) => a.repoIndex - b.repoIndex || a.number - b.number);
       const budget = settings.maxPrsPerRun;
       let queue = candidates;
-      const cursor = fullScan ? ctx.ledger.getCursor() : null;
+      const cursor = ctx.ledger.getCursor();
       if (cursor && candidates.length > budget) {
-        const cursorRepo = selected.findIndex(r => `${r.owner}/${r.repo}`.toLowerCase() === cursor.repo);
+        const cursorRepo = repoIndexOf(cursor.repo);
         const start = candidates.findIndex(c =>
           c.repoIndex > cursorRepo || (c.repoIndex === cursorRepo && c.number > cursor.number));
         if (start > 0) queue = [...candidates.slice(start), ...candidates.slice(0, start)];
@@ -419,7 +433,7 @@ export class Babysitter {
         results.push({ owner, repo, number, ...result });
       }
 
-      if (fullScan && !dryRun && queue.length && !this.interrupted) {
+      if (!dryRun && queue.length && !this.interrupted) {
         const last = queue[queue.length - 1];
         ctx.ledger.setCursor({ repo: `${last.repoCfg.owner}/${last.repoCfg.repo}`.toLowerCase(), number: last.number });
       }
@@ -437,6 +451,11 @@ export class Babysitter {
     const { owner, repo } = repoCfg;
     const { client, ledger, settings, me, dryRun } = ctx;
     const counts = emptyCounts();
+
+    // Until it is reconciled, the comments may already be fixed on the branch
+    if (ledger.getPushIntent(BabysitterLedger.prKey(owner, repo, number))) {
+      return { success: true, skipped: true, reason: 'a push from an earlier run is not reconciled yet', counts };
+    }
 
     const pr = unwrap(await client.getPullRequest(owner, repo, number), `Get pull request #${number}`);
     if (pr.state !== 'open') {
@@ -597,9 +616,14 @@ export class Babysitter {
       for (const comment of pending) failures.push({ comment, action: null, error: `triage failed: ${triage.error}` });
     } else {
       const byId = new Map(triage.decisions.map(d => [d.id, d]));
+      // A failed triage batch only affects its own comments
+      const failedBatch = batchFailureMap(triage.batchFailures);
       for (const comment of pending) {
+        const batch = failedBatch.get(comment.id);
         const decision = byId.get(comment.id);
-        if (decision) plan.push({ comment, decision });
+        if (batch?.infra) retrying.push({ comment, error: `triage failed: ${batch.error}` });
+        else if (batch) failures.push({ comment, action: null, error: `triage failed: ${batch.error}` });
+        else if (decision) plan.push({ comment, decision });
         else failures.push({ comment, action: null, error: 'triage returned no decision for this comment' });
       }
     }
@@ -623,57 +647,95 @@ export class Babysitter {
     }
 
     const fixItems = plan.filter(p => p.decision.action === 'fix');
-    const fixed = new Set();
-    let fix = null;
-    if (fixItems.length) {
-      try {
-        fix = await this.applyFixes(ctx, repoCfg, pr, prInfo, workspace, fixItems);
-      } catch (error) {
-        if (error instanceof InterruptedError) throw error;
-        fix = { ok: false, error: error.message };
-      }
-      this.checkInterrupted();
-      if (!fix.ok) {
-        logger.warn('Babysit fix was not pushed', { owner, repo, number: pr.number, error: fix.error });
-      } else {
-        logger.info('Babysit fix pushed', { owner, repo, number: pr.number, commit: fix.commitSha });
-      }
-
-      // Only an explicit "implemented" settles a fix; an explicit "failed" (or
-      // a failed gate/push) is charged an attempt; an id the report left out
-      // stays pending
+    // Only an explicit "implemented" settles a fix; an explicit "failed" (or
+    // a failed gate/push, or a genuinely failed engine batch) is charged an
+    // attempt; an id the report left out or contradicted stays pending
+    const outcomes = (fix) => {
       const reported = new Map((fix.report?.fixes || []).map(f => [f.id, f]));
+      const conflicting = new Set(fix.report?.conflicting || []);
+      const failedBatch = batchFailureMap(fix.report?.batchFailures);
+      const fixed = new Set();
+      const fixFailures = [];
+      const fixRetrying = [];
       for (const item of fixItems) {
         const { comment } = item;
         const entry = reported.get(comment.id);
-        if (fix.infra || fix.reschedule || (fix.report && !entry)) {
-          retrying.push({ comment, reschedule: Boolean(fix.reschedule), error: entry || !fix.report ? fix.error : 'implement report did not cover this comment' });
+        const batch = failedBatch.get(comment.id);
+        if (batch?.infra) {
+          fixRetrying.push({ comment, error: `engine failed: ${batch.error}` });
+        } else if (batch) {
+          fixFailures.push({ comment, action: 'fix', error: `engine failed: ${batch.error}` });
+        } else if (fix.infra || fix.reschedule || (fix.report && !entry)) {
+          const uncovered = conflicting.has(comment.id)
+            ? 'implement report gave conflicting statuses for this comment'
+            : 'implement report did not cover this comment';
+          fixRetrying.push({ comment, reschedule: Boolean(fix.reschedule), error: entry || !fix.report ? fix.error : uncovered });
         } else if (fix.ok && entry.status === 'implemented') {
           fixed.add(item);
         } else {
           const error = fix.ok ? `engine could not fix this: ${entry.summary || 'no reason given'}` : fix.error;
-          failures.push({ comment, action: 'fix', error });
+          fixFailures.push({ comment, action: 'fix', error });
         }
       }
+      return {
+        settled: plan.filter(p => p.decision.action !== 'fix' || fixed.has(p)),
+        failures: [...failures, ...fixFailures],
+        retrying: fixRetrying
+      };
+    };
+
+    const prKey = BabysitterLedger.prKey(owner, repo, pr.number);
+    let fix = null;
+    let outcome = { settled: plan, failures, retrying: [] };
+    if (fixItems.length) {
+      // Everything the replies need, stored before the remote push so a run
+      // that dies right after it can still settle (see reconcilePushIntents)
+      const beforePush = (pushed) => {
+        const expected = outcomes(pushed);
+        ctx.ledger.recordPushIntent(prKey, {
+          owner, repo, pr: pr.number,
+          expectedSha: pushed.commitSha,
+          sourceHead: workspace.headSha,
+          settled: expected.settled,
+          failures: expected.failures,
+          fix: pushed
+        });
+      };
+      try {
+        fix = await this.applyFixes(ctx, repoCfg, pr, prInfo, workspace, fixItems, beforePush);
+      } catch (error) {
+        if (error instanceof InterruptedError) throw error;
+        fix = { ok: false, error: error.message };
+      }
+      // An interrupted run keeps its push intent for the next run to reconcile
+      this.checkInterrupted();
+      if (!fix.ok) {
+        ctx.ledger.clearPushIntent(prKey);
+        logger.warn('Babysit fix was not pushed', { owner, repo, number: pr.number, error: fix.error });
+      } else {
+        logger.info('Babysit fix pushed', { owner, repo, number: pr.number, commit: fix.commitSha });
+      }
+      outcome = outcomes(fix);
     }
 
+    const allRetrying = [...retrying, ...outcome.retrying];
     // A push race is not a failure: the comment is retried against the new head
-    for (const item of retrying) if (!item.reschedule) counts.failed++;
-    const settled = plan.filter(p => p.decision.action !== 'fix' || fixed.has(p));
-    await this.postReplies(ctx, repoCfg, pr, workspace.headSha, settled, failures, fix?.ok ? fix : null, counts);
+    for (const item of allRetrying) if (!item.reschedule) counts.failed++;
+    await this.postReplies(ctx, repoCfg, pr, workspace.headSha, outcome.settled, outcome.failures, fix?.ok ? fix : null, counts);
 
     return {
       success: counts.failed === 0,
       counts,
       commitSha: fix?.ok ? fix.commitSha : null,
-      failures: failures.map(f => ({ id: f.comment.id, error: f.error })),
-      retrying: retrying.map(r => ({ id: r.comment.id, error: r.error }))
+      failures: outcome.failures.map(f => ({ id: f.comment.id, error: f.error })),
+      retrying: allRetrying.map(r => ({ id: r.comment.id, error: r.error }))
     };
   }
 
   // Runs the engine, then commits, verifies, tests, and pushes. The report
   // travels with every outcome so the caller knows which items it covered.
-  async applyFixes(ctx, repoCfg, pr, prInfo, workspace, fixItems) {
+  // `beforePush(fix)` gets the would-be pushed fix right before the push.
+  async applyFixes(ctx, repoCfg, pr, prInfo, workspace, fixItems, beforePush = null) {
     const implement = await ctx.engine.implement({
       cwd: workspace.dir,
       pr: prInfo,
@@ -691,11 +753,11 @@ export class Babysitter {
       return { ok: false, report, error: 'engine reported no fix as implemented' };
     }
 
-    const result = await this.verifyAndPush(ctx, repoCfg, pr, workspace);
+    const result = await this.verifyAndPush(ctx, repoCfg, pr, workspace, (pushed) => beforePush?.({ ...pushed, report }));
     return { ...result, report };
   }
 
-  async verifyAndPush(ctx, repoCfg, pr, workspace) {
+  async verifyAndPush(ctx, repoCfg, pr, workspace, beforePush = null) {
     const { git, run, dir, headSha } = workspace;
 
     // Engines that may not commit (claude without the git allowlist) can edit
@@ -742,10 +804,12 @@ export class Babysitter {
 
     const changedFiles = (await git(['diff', '--name-only', headSha, finalHead])).trim().split('\n').filter(Boolean);
     this.checkInterrupted();
+    const fix = { ok: true, commitSha: finalHead, changedFiles };
+    beforePush?.(fix);
     const pushed = await this.pushPinned(ctx, workspace, finalHead, pr.head.ref);
     if (!pushed.ok) return pushed;
 
-    return { ok: true, commitSha: finalHead, changedFiles };
+    return fix;
   }
 
   // Same pattern as fix-conflicts: the authenticated push runs from a fresh
@@ -775,7 +839,9 @@ export class Babysitter {
       });
       if (push.code !== 0) {
         const stderr = String(push.stderr).trim();
-        if (/rejected|non-fast-forward|fetch first/.test(stderr)) {
+        // Only a lost race is rescheduled; any other rejection (a declined
+        // hook, a protected branch) is a real failure that uses an attempt
+        if (/non-fast-forward|fetch first/.test(stderr)) {
           // Someone else pushed: not this comment's fault, so retry next run
           return { ok: false, reschedule: true, error: 'PR branch changed before push' };
         }
@@ -921,6 +987,8 @@ export class Babysitter {
       });
     }
 
+    // The push intent goes in the same save that records the pushed outcomes
+    ledger.clearPushIntent(BabysitterLedger.prKey(owner, repo, number), { save: false });
     ledger.addDeliveries(deliveries);
     for (const delivery of deliveries) await this.deliver(ctx, delivery, counts);
   }
@@ -949,6 +1017,62 @@ export class Babysitter {
     return false;
   }
 
+  // The current head of a PR: { head }, { gone } on a 404, or { error } for
+  // any other (transient) lookup failure
+  async lookupHead(client, owner, repo, number) {
+    let current;
+    try {
+      current = await client.getPullRequest(owner, repo, number);
+    } catch (error) {
+      current = { success: false, error: error.message };
+    }
+    if (current?.success) return { head: current.data?.head?.sha || null };
+    if (current?.status === 404) return { gone: true };
+    return { error: `Get pull request #${number}: ${current?.error || 'unknown error'}` };
+  }
+
+  // A push intent left by a run that died around its push. If the branch head
+  // is the expected SHA, the push landed: its stored outcomes are recorded and
+  // their replies delivered, without running the engine again. Otherwise the
+  // push never happened and the comments stay pending. A failed lookup keeps
+  // the intent (and keeps the PR from being processed) until the next run.
+  async reconcilePushIntents(ctx, selected, prFilter, results) {
+    const { client, ledger } = ctx;
+    const wanted = new Set(selected.map(r => `${r.owner}/${r.repo}`.toLowerCase()));
+    for (const intent of ledger.getPushIntents()) {
+      if (this.interrupted) return;
+      const { prKey, owner, repo, pr: number } = intent;
+      if (!wanted.has(`${owner}/${repo}`.toLowerCase())) continue;
+      if (prFilter !== null && number !== prFilter) continue;
+
+      const counts = emptyCounts();
+      const result = { owner, repo, number, delivery: true, counts };
+      const current = await this.lookupHead(client, owner, repo, number);
+      if (current.error) {
+        logger.warn('Could not reconcile an earlier push; retrying next run', { owner, repo, number, error: current.error });
+        results.push({ ...result, success: false, error: current.error });
+        continue;
+      }
+      if (current.head !== intent.expectedSha) {
+        logger.warn('An earlier push did not land; its comments stay pending', {
+          owner, repo, number, expected: intent.expectedSha, head: current.head
+        });
+        ledger.clearPushIntent(prKey);
+        results.push({ ...result, success: true, reason: 'earlier push did not land; comments stay pending' });
+        continue;
+      }
+
+      logger.info('Reconciling a push from an earlier run', { owner, repo, number, commit: intent.expectedSha });
+      try {
+        await this.postReplies(ctx, { owner, repo }, { number }, intent.sourceHead, intent.settled, intent.failures, intent.fix, counts);
+        results.push({ ...result, reconciled: true, commitSha: intent.expectedSha, success: counts.failed === 0 });
+      } catch (error) {
+        logger.error('Failed to reconcile an earlier push', { owner, repo, number, error: error.message });
+        results.push({ ...result, success: false, error: error.message });
+      }
+    }
+  }
+
   // Delivery-only pass for replies left pending by earlier runs: a failed post,
   // or a crash between the push and the replies. The engine never runs here.
   async retryDeliveries(ctx, selected, prFilter, results) {
@@ -962,22 +1086,33 @@ export class Babysitter {
 
       const counts = emptyCounts();
       const result = { owner, repo, number, delivery: true, counts };
-      try {
-        // Replies for a push that was never acknowledged only go out while the
-        // branch still points at the pushed commit
-        const unacknowledged = delivery.keys.some(key => ledger.getComment(key)?.state === PUSHED_STATE);
-        if (unacknowledged) {
-          const current = unwrap(await client.getPullRequest(owner, repo, number), `Get pull request #${number}`);
-          if (current.head?.sha !== delivery.pushedSha) {
-            logger.warn('PR branch moved after an unacknowledged push; settling without a reply', {
-              owner, repo, number, pushed: delivery.pushedSha, head: current.head?.sha
-            });
-            ledger.completeDelivery(delivery.id, null, { note: `branch moved after push (now ${current.head?.sha || 'unknown'}); reply not delivered` });
-            result.reason = 'branch moved after push; reply not delivered';
-            results.push({ ...result, success: true });
-            continue;
-          }
+      // Replies for a push that was never acknowledged only go out while the
+      // branch still points at the pushed commit
+      const unacknowledged = delivery.keys.some(key => ledger.getComment(key)?.state === PUSHED_STATE);
+      if (unacknowledged) {
+        const current = await this.lookupHead(client, owner, repo, number);
+        if (current.error) {
+          // No reply was attempted: the delivery stays pending and uncharged
+          logger.warn('Could not check the PR head for a pending reply; retrying next run', {
+            owner, repo, number, delivery: delivery.id, error: current.error
+          });
+          results.push({ ...result, success: false, error: current.error });
+          continue;
         }
+        if (current.gone || current.head !== delivery.pushedSha) {
+          const note = current.gone
+            ? 'pull request not found; reply not delivered'
+            : `branch moved after push (now ${current.head || 'unknown'}); reply not delivered`;
+          logger.warn('Settling an unacknowledged push without a reply', {
+            owner, repo, number, pushed: delivery.pushedSha, head: current.head, gone: Boolean(current.gone)
+          });
+          ledger.completeDelivery(delivery.id, null, { note });
+          result.reason = current.gone ? 'pull request not found; reply not delivered' : 'branch moved after push; reply not delivered';
+          results.push({ ...result, success: true });
+          continue;
+        }
+      }
+      try {
         await this.deliver(ctx, delivery, counts);
       } catch (error) {
         ledger.failDelivery(delivery.id, error.message);
