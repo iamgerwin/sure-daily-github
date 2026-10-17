@@ -242,3 +242,29 @@ test('processes every ready repository when repositorySelection is omitted', asy
 
   assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c']);
 });
+
+test('renders ${date} and ${time} in the configured timezone', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-14T23:30:05Z');
+  const tzConfig = {
+    general: { timezone: 'Asia/Manila' },
+    randomization: {},
+    contentTemplates: [{ title: 'Update ${date} ${time}', body: 'At ${timestamp} on ${date}' }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo(), tzConfig, now);
+
+  assert.equal(title, 'Update 2026-10-15 07:30:05');
+  assert.equal(body, 'At 2026-10-14T23:30:05.000Z on 2026-10-15');
+});
+
+test('default issue title uses the configured timezone and falls back to UTC', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-15T00:05:00Z');
+
+  const la = handler.generateIssueContent(repo(), { general: { timezone: 'America/Los_Angeles' } }, now);
+  assert.equal(la.title, 'Automated Issue - 2026-10-14 17:05:00');
+
+  const utc = handler.generateIssueContent(repo(), {}, now);
+  assert.equal(utc.title, 'Automated Issue - 2026-10-15 00:05:00');
+});
