@@ -42,6 +42,18 @@ function validateDailyTarget(target, label, errors) {
   }
 }
 
+// A { min, max } range of positive whole numbers, with no upper bound
+function validateCountRange(range, label, errors) {
+  if (!range || typeof range !== 'object' || Array.isArray(range)
+    || range.min === undefined || range.min === null || range.max === undefined || range.max === null) {
+    errors.push(`${label} must have min and max values`);
+  } else if (!Number.isInteger(range.min) || !Number.isInteger(range.max) || range.min < 1 || range.max < 1) {
+    errors.push(`${label} must be positive whole numbers`);
+  } else if (range.min > range.max) {
+    errors.push(`${label} min cannot be greater than max`);
+  }
+}
+
 class ConfigLoader {
   constructor() {
     this.config = null;
@@ -160,15 +172,19 @@ class ConfigLoader {
       validateDailyTarget(general.dailyTarget, 'dailyTarget', errors);
     }
 
-    // Validate randomization settings
+    // Validate randomization settings; a fractional or inverted range would
+    // otherwise throw from randomInt partway through an issue-mode run
     if (config.randomization?.enabled) {
       const rand = config.randomization;
       if (rand.issueCount) {
-        if (!rand.issueCount.min || !rand.issueCount.max) {
-          errors.push('randomization.issueCount must have min and max values');
-        }
-        if (rand.issueCount.min > rand.issueCount.max) {
-          errors.push('randomization.issueCount min cannot be greater than max');
+        validateCountRange(rand.issueCount, 'randomization.issueCount', errors);
+      }
+      const timeVar = rand.timeVariations;
+      if (timeVar?.enabled) {
+        for (const period of ['hourly', 'daily', 'weekly']) {
+          if (timeVar[period] !== undefined && timeVar[period] !== null) {
+            validateCountRange(timeVar[period], `randomization.timeVariations.${period}`, errors);
+          }
         }
       }
     }

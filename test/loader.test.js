@@ -224,3 +224,58 @@ test('validate keeps positive weights and defaults a missing weight to 1', () =>
   assert.equal(cfg.repositories[0].weight, 2.5);
   assert.equal(cfg.repositories[1].weight, 1);
 });
+
+test('validate rejects fractional or non-positive randomization.issueCount instead of crashing at run time', () => {
+  for (const issueCount of [{ min: 1.5, max: 4 }, { min: 0, max: 4 }, { min: -2, max: 4 }, { min: '2', max: 4 }]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount } }),
+      /randomization\.issueCount must (be positive whole numbers|have min and max values)/
+    );
+  }
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount: { min: 9, max: 3 } } }),
+    /randomization\.issueCount min cannot be greater than max/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount: { min: 3 } } }),
+    /randomization\.issueCount must have min and max values/
+  );
+});
+
+test('validate rejects invalid randomization.timeVariations ranges when enabled', () => {
+  const withTimeVariations = (timeVariations) => ({
+    repositories: [baseRepo],
+    randomization: { enabled: true, timeVariations: { enabled: true, ...timeVariations } }
+  });
+  assert.throws(
+    () => config.validate(withTimeVariations({ daily: { min: 30, max: 10 } })),
+    /randomization\.timeVariations\.daily min cannot be greater than max/
+  );
+  assert.throws(
+    () => config.validate(withTimeVariations({ hourly: { min: 1, max: 2.5 } })),
+    /randomization\.timeVariations\.hourly must be positive whole numbers/
+  );
+  assert.throws(
+    () => config.validate(withTimeVariations({ weekly: { min: 50 } })),
+    /randomization\.timeVariations\.weekly must have min and max values/
+  );
+});
+
+test('validate accepts valid randomization ranges and ignores disabled sections', () => {
+  const randomization = {
+    enabled: true,
+    issueCount: { min: 12, max: 50 },
+    timeVariations: { enabled: true, hourly: { min: 1, max: 5 }, daily: { min: 10, max: 10 }, weekly: { min: 50, max: 150 } }
+  };
+  assert.deepEqual(config.validate({ repositories: [baseRepo], randomization }).randomization, randomization);
+
+  // Bad ranges in disabled sections are never used, so they are not rejected
+  assert.doesNotThrow(() => config.validate({
+    repositories: [baseRepo],
+    randomization: { enabled: true, timeVariations: { enabled: false, daily: { min: 30, max: 10 } } }
+  }));
+  assert.doesNotThrow(() => config.validate({
+    repositories: [baseRepo],
+    randomization: { enabled: false, issueCount: { min: 1.5, max: 4 } }
+  }));
+});
