@@ -94,3 +94,72 @@ test('createOrUpdateFile targets the configured branch for both lookup and write
   assert.equal(calls.getContent[0].ref, 'master');
   assert.equal(calls.put[0].branch, 'master');
 });
+
+test('listOpenPullRequests follows GraphQL pagination', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  const pages = [
+    { nodes: [{ number: 1, mergeable: 'CONFLICTING' }], pageInfo: { hasNextPage: true, endCursor: 'c1' } },
+    { nodes: [{ number: 2, mergeable: 'MERGEABLE' }], pageInfo: { hasNextPage: false, endCursor: 'c2' } }
+  ];
+  client.octokit = {
+    graphql: async (query, variables) => {
+      calls.push(variables);
+      return { repository: { pullRequests: pages[calls.length - 1] } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo');
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.map(pr => pr.number), [1, 2]);
+  assert.deepEqual(calls, [
+    { owner: 'me', repo: 'demo', cursor: null },
+    { owner: 'me', repo: 'demo', cursor: 'c1' }
+  ]);
+});
+
+test('listOpenPullRequests reports API failures', async () => {
+  const client = new GitHubClient('ghp_test');
+  client.octokit = { graphql: async () => { throw new Error('Could not resolve to a Repository'); } };
+
+  const result = await client.listOpenPullRequests('me', 'missing');
+
+  assert.deepEqual(result, { success: false, error: 'Could not resolve to a Repository' });
+});
+
+test('listOpenPullRequests stops before the next page when shouldContinue is false', async () => {
+  const client = new GitHubClient('ghp_test');
+  let pages = 0;
+  client.octokit = {
+    graphql: async () => {
+      pages++;
+      return { repository: { pullRequests: { nodes: [{ number: pages }], pageInfo: { hasNextPage: true, endCursor: `c${pages}` } } } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => pages < 2 });
+
+  assert.equal(pages, 2);
+  assert.deepEqual(result, {
+    success: true, data: [{ number: 1 }, { number: 2 }], timedOut: true, error: 'scan budget exhausted'
+  });
+});
+
+test('listOpenPullRequests keeps the first page when the budget expires before page 2', async () => {
+  const client = new GitHubClient('ghp_test');
+  let pages = 0;
+  client.octokit = {
+    graphql: async () => {
+      pages++;
+      return { repository: { pullRequests: { nodes: [{ number: pages }], pageInfo: { hasNextPage: true, endCursor: `c${pages}` } } } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => false });
+
+  assert.equal(pages, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(result.data, [{ number: 1 }]);
+});

@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import executor, { describeFailures, getRunExitCode } from './core/executor.js';
 import scheduler from './core/scheduler.js';
+import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import config from './config/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -161,6 +162,59 @@ program
         console.error('❌ Failed to get status:', result.error);
         process.exit(1);
       }
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+      process.exit(1);
+    }
+  });
+
+// Fix-conflicts command - merge the base branch into conflicted open PRs
+program
+  .command('fix-conflicts')
+  .description('Resolve merge conflicts on open pull requests (newer change wins, pushed only if tests pass)')
+  .option('--dry-run', 'Resolve and test locally without pushing')
+  .option('--scan-only', 'Only list conflicted pull requests')
+  .option('--repo <owner/repo>', 'Only process this configured repository (repeatable)', (value, list) => [...list, value], [])
+  .option('--pr <number>', 'Only process this pull request (requires one --repo)')
+  .option('--scan-timeout <seconds>', 'Time budget for listing pull requests (overrides conflictFixer.scanTimeoutSeconds)')
+  .option('--config <path>', 'Path to configuration file')
+  .action(async (options) => {
+    try {
+      const scanTimeoutSeconds = options.scanTimeout === undefined ? null : parseScanTimeout(options.scanTimeout);
+      const cfg = config.load(options.config);
+      const fixer = new ConflictFixer(config.getGitHubToken());
+      const result = await fixer.run(cfg, {
+        repos: options.repo,
+        pr: options.pr ?? null,
+        dryRun: Boolean(options.dryRun),
+        scanOnly: Boolean(options.scanOnly),
+        scanTimeoutSeconds
+      });
+
+      if (!result.success) {
+        console.error('❌ Conflict fixer failed:', result.error);
+        process.exit(1);
+      }
+
+      if (result.results.length === 0) {
+        console.log('\n✅ No conflicted pull requests found\n');
+      } else {
+        console.log('\n🔧 Conflicted Pull Requests\n');
+        result.results.forEach(r => {
+          const target = `${r.owner}/${r.repo}${r.pr ? `#${r.pr}` : ''}`.padEnd(36);
+          console.log(`${target} ${r.status.padEnd(20)} ${r.reason || r.error || ''}`);
+          if (r.output) {
+            console.log(r.output.split('\n').map(line => `    ${line}`).join('\n'));
+          }
+        });
+      }
+
+      console.log(`\nFixed:               ${result.summary.fixed}`);
+      console.log(`Needs manual review: ${result.summary.needsManualReview}`);
+      console.log(`Skipped:             ${result.summary.skipped}`);
+      console.log(`Scan timeout:        ${result.summary.scanTimeout}`);
+      console.log(`Failed:              ${result.summary.failed}\n`);
+      process.exit(getRunExitCode(result));
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);

@@ -81,6 +81,39 @@ schedule:
   # 0 9,17 * * *     - Twice daily (9 AM and 5 PM)
 
 # ========================================
+# Conflict Fixer (Optional)
+# ========================================
+# Used by `sure-daily-github fix-conflicts`: merges the base branch into every
+# open PR with merge conflicts, keeps the newer change per conflicting hunk,
+# and pushes only if the repository's tests pass. Anything else is reported
+# as needs-manual-review. Long test runs share the run lock, so raise
+# SDG_RUN_LOCK_STALE_MS if a full pass can exceed 2 hours.
+#
+# Each attempt is recorded per PR head SHA in data/conflict-fixer-state.json
+# (SDG_CONFLICT_FIXER_STATE_FILE overrides the path), so the same commit is
+# not cloned and tested again while an attempt is running or cooling down.
+#
+# Repo gate (opt-in): with no configuration NOTHING is fixed. Per repo, the
+# first matching rule wins: repositories[].conflictFixer false -> skipped;
+# true -> allowed; listed in denylist -> skipped; mode "allowlist" and not in
+# allowlist -> skipped; otherwise allowed. --repo only filters, it never
+# bypasses the gate. See docs/CONFLICT_FIXER.md.
+# conflictFixer:
+#   mode: "allowlist"          # "allowlist" (default) | "denylist" | "all"
+#   allowlist:                 # Repos fixed in allowlist mode (default: none)
+#     - "yourusername/your-repo"
+#   denylist:                  # Always skipped, in every mode
+#     - "yourusername/legacy-repo"
+#   testTimeoutMinutes: 15     # Per install/test command
+#   installDeps: true          # Run "npm ci" first when package-lock.json exists
+#   scanTimeoutSeconds: 120    # Budget for listing PRs across all repos
+#                              # (incl. UNKNOWN re-polls); override per run
+#                              # with --scan-timeout <seconds>. Unscanned
+#                              # repos are reported as scan-timeout.
+#   attemptTtlMinutes: 60      # An in-progress attempt older than this is stale
+#   retryCooldownMinutes: 240  # Skip re-attempting the same head SHA this long
+
+# ========================================
 # Repositories
 # ========================================
 repositories:
@@ -94,6 +127,8 @@ repositories:
     commitMessage: "docs: daily update ${date}"
     labels: ["automated"]  # For issue mode
     weight: 1              # For weighted selection
+    # testCommand: "npm run test:unit"  # fix-conflicts: overrides test detection
+    # conflictFixer: true    # fix-conflicts: per-repo opt in (true) / out (false); beats mode and lists
 
   # Example with range-based target
   # - owner: "yourusername"

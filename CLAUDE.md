@@ -13,3 +13,9 @@
 ## Project
 
 Node.js tool. Test suite: `npm test` (`node --test`). Keep changes minimal and behavior-focused; follow the commit message style in `git log`.
+
+## Conflict Fixer (fix-conflicts)
+
+- `fix-conflicts` scans configured repos' open PRs and auto-resolves merge conflicts (newer change per hunk) behind a mandatory test gate. It pushes nothing unless the target repo's tests pass and the repo is explicitly allowed (`conflictFixer` block: allowlist/denylist/per-repo; default is allowlist-empty = nothing runs).
+- Full spec: docs/CONFLICT_FIXER.md — read it before touching src/core/conflict-fixer.js, src/core/conflict-resolver.js, or src/utils/fixer-ledger.js.
+- Idempotent by design (run lock + per-PR headSHA ledger); never add a code path that bypasses the test gate, the repo gate, or the ledger.
