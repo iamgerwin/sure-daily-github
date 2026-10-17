@@ -141,5 +141,25 @@ test('listOpenPullRequests stops before the next page when shouldContinue is fal
   const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => pages < 2 });
 
   assert.equal(pages, 2);
-  assert.deepEqual(result, { success: false, timedOut: true, error: 'scan budget exhausted' });
+  assert.deepEqual(result, {
+    success: true, data: [{ number: 1 }, { number: 2 }], timedOut: true, error: 'scan budget exhausted'
+  });
+});
+
+test('listOpenPullRequests keeps the first page when the budget expires before page 2', async () => {
+  const client = new GitHubClient('ghp_test');
+  let pages = 0;
+  client.octokit = {
+    graphql: async () => {
+      pages++;
+      return { repository: { pullRequests: { nodes: [{ number: pages }], pageInfo: { hasNextPage: true, endCursor: `c${pages}` } } } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => false });
+
+  assert.equal(pages, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(result.data, [{ number: 1 }]);
 });

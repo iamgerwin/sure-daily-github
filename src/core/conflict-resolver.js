@@ -64,12 +64,17 @@ export function parseConflicts(text) {
   return segments;
 }
 
-export function renderResolution(segments, winners) {
+// `kept` optionally gives, per conflict, the winning side's lines as stored in
+// its blob. Prefer it: the parsed lines carry the newline git adds before a
+// marker even when the side's last line has none.
+export function renderResolution(segments, winners, kept = []) {
   let conflictIndex = 0;
   return segments
-    .map(segment => (segment.type === 'text'
-      ? segment.lines
-      : segment[winners[conflictIndex++]]).join(''))
+    .map(segment => {
+      if (segment.type === 'text') return segment.lines.join('');
+      const index = conflictIndex++;
+      return (kept[index] ?? segment[winners[index]]).join('');
+    })
     .join('');
 }
 
@@ -171,6 +176,7 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
     theirs: { rev: 'MERGE_HEAD', lines: splitLines(theirs), cursor: 0 }
   };
   const winners = [];
+  const kept = [];
 
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i];
@@ -179,6 +185,7 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
     const before = segments[i - 1]?.type === 'text' ? segments[i - 1].lines.slice(-CONTEXT_LINES) : [];
     const after = segments[i + 1]?.type === 'text' ? segments[i + 1].lines.slice(0, CONTEXT_LINES) : [];
     const times = {};
+    const originals = { ours: [], theirs: [] };
 
     for (const [name, side] of Object.entries(sides)) {
       const block = segment[name];
@@ -191,6 +198,7 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
         throw new ManualReviewError(`${file}: could not locate conflict hunk ${winners.length + 1} (${name})`);
       }
       side.cursor = index + block.length;
+      originals[name] = side.lines.slice(index, index + block.length);
       times[name] = await blameTime(git, side.rev, file, index, block.length);
     }
 
@@ -199,13 +207,14 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
       throw new ManualReviewError(`${file}: conflict hunk ${winners.length + 1} changed at the same time on both sides`);
     }
     winners.push(winner);
+    kept.push(originals[winner]);
   }
 
   if (winners.length === 0) {
     throw new ManualReviewError(`${file}: unmerged without conflict markers`);
   }
 
-  const resolved = renderResolution(segments, winners);
+  const resolved = renderResolution(segments, winners, kept);
   if (hasConflictMarkers(resolved)) {
     throw new ManualReviewError(`${file}: conflict markers left after resolution`);
   }

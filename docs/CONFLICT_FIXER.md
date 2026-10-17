@@ -14,6 +14,7 @@ Never auto-pushed:
 - **Non-text conflicts**: delete/modify, rename, binary, submodule or symlink conflicts. Also hunks that cannot be located unambiguously, and resolutions that still contain conflict markers.
 - **No tests**: no `testCommand`, no usable `npm test` script, and no `make test` target.
 - **Test failures**: dependency install or test failure, or a timeout (`testTimeoutMinutes`).
+- **Tampering tests**: the tests moved `HEAD` (for example by committing) or left changes to tracked files. Untracked files such as `node_modules` are fine.
 - **Fork PRs**: the head lives in another repository. Fork PRs are also never tested, because tests run PR-branch code.
 - **Dry runs**: `--dry-run` or `general.dryRun: true`.
 - **Non-fast-forward rejections**: pushes are never forced. If the branch moved, the push is rejected and reported as `head-moved`.
@@ -22,8 +23,9 @@ Never auto-pushed:
 Other guarantees:
 
 - Each run uses throwaway clones in the OS temp directory, which are deleted afterwards.
-- Your global and system git config (hooks, signing, merge drivers) is ignored.
-- The GitHub token never appears in URLs, `.git/config`, the process list or logs, and it is removed from the environment the tests run in.
+- Your global and system git config (hooks, signing, merge drivers) is ignored, and every git command runs with `core.hooksPath` pointed at the null device on the command line, so hooks planted by the tested code never run.
+- The GitHub token never appears in URLs, `.git/config`, the process list or logs. Tests run with only `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_*` and `CI=true` in their environment; every other variable (tokens, cloud credentials) is dropped.
+- After the tests have run, the clone's config is no longer trusted: the authenticated push is made from a fresh repository that receives only the pinned merge commit.
 
 ## Repo gating
 
@@ -89,9 +91,10 @@ With no `conflictFixer` block at all, the mode is `allowlist` and the allowlist 
 2. Fetch the base and head branches into a temp repo. Continue only if the head is still at the SHA GitHub reported.
 3. Run `git merge --no-ff --no-commit` with `merge.conflictStyle=diff3`. A clean merge means GitHub's status was stale (`stale-status`).
 4. For each conflicting hunk, find its lines on both sides and take the newest `git blame` committer time for each. The newer side wins. If one side deleted the hunk, that side's newest commit to the file since the merge base is used instead.
-5. Commit the merge: `Merge branch '<base>' into <head>`.
-6. Run the regression gate: the repo's `testCommand`, else `npm test` (after `npm ci` when `package-lock.json` exists and `installDeps` is on), else `make test`.
-7. Push `HEAD:refs/heads/<head>` without force.
+5. Commit the merge: `Merge branch '<base>' into <head>`, and pin its SHA.
+6. Run the regression gate: the repo's `testCommand`, else `npm test`, else `make test`. `npm ci` runs first when `package-lock.json` exists and `installDeps` is on, including before a `testCommand`.
+7. Check that `HEAD` is still the pinned merge commit and that tracked files are unchanged.
+8. Push `<merge SHA>:refs/heads/<head>` without force.
 
 ## Idempotency
 
@@ -104,7 +107,7 @@ Four layers stop overlapping or repeated work:
    - its entry is finished (`fixed`, `needs-manual-review` or `failed`) on the same SHA and within `retryCooldownMinutes` (default 240): reason `already-attempted`.
 
    A different head SHA, or an expired TTL or cooldown, makes the PR eligible again. `--scan-only` and dry runs never write the ledger. Outcomes that are not attempts (`stale-status`, `head-moved`) remove the entry.
-4. **Signals**: on SIGINT or SIGTERM, this run's in-progress entries are marked `interrupted`, the current temp clone is removed, and the process exits with 130 (SIGINT) or 143 (SIGTERM). Interrupted attempts are eligible on the next run.
+4. **Signals**: on SIGINT or SIGTERM, a running install or test command is killed with its whole process group, this run's in-progress entries are marked `interrupted`, the current temp clone is removed, and the process exits with 130 (SIGINT) or 143 (SIGTERM). Interrupted attempts are eligible on the next run.
 
 Long test suites hold the run lock for the whole run. Raise `SDG_RUN_LOCK_STALE_MS` (default 2 hours) if a full pass can take longer.
 
@@ -113,7 +116,7 @@ Long test suites hold the run lock for the whole run. Raise `SDG_RUN_LOCK_STALE_
 `conflictFixer.scanTimeoutSeconds` (default 120), or `--scan-timeout <seconds>` for a single run, caps the whole gather phase: GraphQL pagination over every allowed repo plus the re-polls for `UNKNOWN` mergeability.
 
 - The budget is checked before each repo, before each further page, and before each re-poll. A re-poll is skipped when the remaining budget is shorter than its 2 s sleep.
-- When the budget runs out, scanning stops. PRs already collected are still processed normally. Repos that were not fully listed, including one cut off mid-pagination, get a `scan-timeout` row with reason `scan budget exhausted`.
+- When the budget runs out, scanning stops. PRs already collected are still processed normally, including those from the pages already fetched for a repo cut off mid-pagination. Every repo that was not fully listed also gets one `scan-timeout` row with reason `scan budget exhausted`, after its PR rows.
 - `scan-timeout` does not cause a non-zero exit.
 
 ## Configuration
@@ -149,7 +152,7 @@ sure-daily-github fix-conflicts [options]
 | `--dry-run` | Resolve and test locally, but never push or write the ledger |
 | `--scan-only` | Only list conflicted PRs and gated-out repos; nothing is cloned |
 | `--repo <owner/repo>` | Only process this configured repository (repeatable); filter only, never bypasses the gate |
-| `--pr <number>` | Only process this PR (requires exactly one `--repo`) |
+| `--pr <number>` | Only process this PR (a positive integer; requires exactly one `--repo`) |
 | `--scan-timeout <seconds>` | Gather-phase budget for this run (overrides `scanTimeoutSeconds`) |
 | `--config <path>` | Path to the configuration file |
 
@@ -176,7 +179,7 @@ sure-daily-github fix-conflicts --scan-timeout 300
 | `fixed` | Conflicts resolved, tests passed, branch pushed | 0 |
 | `would-fix` | Same as `fixed`, but a dry run, so nothing was pushed | 0 |
 | `conflicted` | Listed by `--scan-only` | 0 |
-| `needs-manual-review` | Tie, non-text conflict, unlocatable hunk, leftover markers, no test command, install or test failure, or timeout | 0 |
+| `needs-manual-review` | Tie, non-text conflict, unlocatable hunk, leftover markers, no test command, install or test failure, timeout, or tests that moved `HEAD` or changed tracked files | 0 |
 | `skipped` | Reasons: `disabled-per-repo`, `denylisted`, `not-allowlisted`, `fork pull request`, `already-in-progress`, `already-attempted` | 0 |
 | `stale-status` | Merges cleanly locally; GitHub's mergeability was out of date | 0 |
 | `head-moved` | Branch changed after the scan or before the push; nothing was pushed | 0 |

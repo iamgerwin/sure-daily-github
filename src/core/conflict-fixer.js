@@ -5,7 +5,7 @@ import GitHubClient from '../github/client.js';
 import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import { runGit, gitAuthEnv, scrubEnv } from '../utils/git.js';
-import { detectTestCommand, runTestCommand, tailLines } from '../utils/test-detector.js';
+import { detectTestCommand, runTestCommand, killActiveTests, tailLines } from '../utils/test-detector.js';
 import { FixerLedger, ledgerKey } from '../utils/fixer-ledger.js';
 import { resolveConflicts } from './conflict-resolver.js';
 
@@ -93,6 +93,7 @@ class ConflictFixer {
     this.client = options.client || new GitHubClient(token);
     this.git = options.git || runGit;
     this.runCommand = options.runCommand || runTestCommand;
+    this.killTests = options.killTests || killActiveTests;
     this.remoteUrl = options.remoteUrl || defaultRemoteUrl;
     this.workRoot = options.workRoot || os.tmpdir();
     this.retryDelayMs = options.retryDelayMs ?? UNKNOWN_RETRY_DELAY_MS;
@@ -103,6 +104,7 @@ class ConflictFixer {
     this.activeKeys = new Set();
     this.activeDir = null;
     this.lock = null;
+    this.interrupted = false;
   }
 
   delay(ms) {
@@ -137,9 +139,15 @@ class ConflictFixer {
   }
 
   // Marks this run's in-progress ledger entries as interrupted so the next run
-  // does not wait out the attempt TTL, then exits non-zero
+  // does not wait out the attempt TTL, then exits non-zero. A repeated signal
+  // is ignored.
   interrupt(signal) {
+    if (this.interrupted) return;
+    this.interrupted = true;
     logger.warn('Conflict fixer interrupted', { signal, inProgress: [...this.activeKeys] });
+    // Install/test commands run in their own process group, so they would
+    // outlive this process and keep writing to the clone
+    this.killTests();
     try {
       this.ledger.markInterrupted(this.activeKeys, this.now());
     } catch (error) {
@@ -181,6 +189,9 @@ class ConflictFixer {
         throw new Error('--pr requires exactly one --repo');
       }
       const prNumber = pr === null || pr === undefined ? null : Number(pr);
+      if (prNumber !== null && (!Number.isSafeInteger(prNumber) || prNumber <= 0)) {
+        throw new Error('--pr must be a positive integer');
+      }
       dryRun = dryRun || cfg.general?.dryRun === true;
       const scanBudgetSeconds = scanTimeoutSeconds === null || scanTimeoutSeconds === undefined
         ? cfg.conflictFixer?.scanTimeoutSeconds ?? DEFAULT_SCAN_TIMEOUT_SECONDS
@@ -218,12 +229,9 @@ class ConflictFixer {
           results.push({ owner, repo, status: 'skipped', success: true, skipped: true, reason: gates.get(repoConfig) });
           continue;
         }
-        const { success, timedOut, data, error } = scanned.get(repoConfig);
-        if (timedOut) {
-          results.push({ owner, repo, status: 'scan-timeout', success: true, skipped: true, reason: 'scan budget exhausted' });
-          continue;
-        }
-        if (!success) {
+        // A repo cut off by the budget still has its already-listed PRs processed
+        const { success, timedOut, data = [], error } = scanned.get(repoConfig);
+        if (!success && !timedOut) {
           results.push({ owner, repo, status: 'error', success: false, skipped: false, error });
           continue;
         }
@@ -244,6 +252,9 @@ class ConflictFixer {
           } else if (pull.mergeable === 'UNKNOWN' && !pull.isCrossRepository) {
             results.push(prResult(repoConfig, pull, 'unknown', { reason: 'GitHub has not computed mergeability yet' }));
           }
+        }
+        if (timedOut) {
+          results.push({ owner, repo, status: 'scan-timeout', success: true, skipped: true, reason: 'scan budget exhausted' });
         }
       }
 
@@ -313,11 +324,20 @@ class ConflictFixer {
       return done('skipped', { reason: 'head and base are the same branch' });
     }
 
-    const dir = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
-    this.activeDir = dir;
-    const git = (args, options = {}) => this.git(args, { cwd: dir, env: this.authEnv, ...options });
-    const must = async (args) => {
-      const result = await git(args);
+    const root = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
+    this.activeDir = root;
+    const dir = path.join(root, 'repo');
+    fs.mkdirSync(dir);
+    // Hooks are switched off on the command line, which beats anything the
+    // tested code writes to .git/hooks or core.hooksPath in .git/config
+    const git = (args, options = {}) => this.git(['-c', `core.hooksPath=${os.devNull}`, ...args], {
+      cwd: dir, env: this.authEnv, ...options
+    });
+    // For the clone once tested code has run in it: its .git/config is no longer
+    // trusted (core.fsmonitor, http.proxy, ...), so no credential goes near it
+    const untrusted = { env: {}, baseEnv: scrubEnv(process.env) };
+    const must = async (args, options) => {
+      const result = await git(args, options);
       if (result.code !== 0) {
         throw new Error(`git ${args[0]} failed: ${String(result.stderr).trim()}`);
       }
@@ -359,18 +379,37 @@ class ConflictFixer {
         '-m', `Merge branch '${base}' into ${head}`,
         '-m', `Auto-resolved conflicts (newer change per hunk): ${files.join(', ')}`
       ]);
+      const mergeSha = (await must(['rev-parse', 'HEAD'])).trim();
 
       const gate = await this.runRegressionGate(dir, repoConfig, settings, timeoutMs);
       if (!gate.passed) {
         return done('needs-manual-review', { reason: gate.reason, output: gate.output, files });
       }
 
+      // Tests run PR code with write access to the clone; only the exact commit
+      // they ran against may be pushed. Untracked files (node_modules) are fine.
+      const testedHead = await git(['rev-parse', 'HEAD'], untrusted);
+      if (testedHead.code !== 0 || String(testedHead.stdout).trim() !== mergeSha) {
+        return done('needs-manual-review', { reason: 'tests moved HEAD away from the merge commit', files });
+      }
+      for (const args of [['diff', '--quiet'], ['diff', '--cached', '--quiet']]) {
+        if ((await git(args, untrusted)).code !== 0) {
+          return done('needs-manual-review', { reason: 'tests modified tracked files', files });
+        }
+      }
+
       if (dryRun) {
         return done('would-fix', { reason: `resolved ${files.length} file(s); tests passed`, files });
       }
 
+      // The authenticated push runs from a fresh repository whose config the
+      // tested code never saw, and sends the pinned merge commit, not HEAD
+      const pushDir = path.join(root, 'push');
+      await must(['init', '-q', '--bare', pushDir], { ...untrusted, cwd: root });
+      await must(['push', '-q', pushDir, `${mergeSha}:refs/heads/${head}`], untrusted);
+
       // Never forced: a rejected fast-forward means someone pushed meanwhile
-      const push = await git(['push', '-q', url, `HEAD:refs/heads/${head}`]);
+      const push = await git(['push', '-q', url, `${mergeSha}:refs/heads/${head}`], { cwd: pushDir });
       if (push.code !== 0) {
         const stderr = String(push.stderr).trim();
         if (/rejected|non-fast-forward|fetch first/.test(stderr)) {
@@ -385,7 +424,7 @@ class ConflictFixer {
       return done('error', { error: `#${pr.number}: ${error.message}`, reason: error.message });
     } finally {
       this.activeDir = null;
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
     }
   }
 

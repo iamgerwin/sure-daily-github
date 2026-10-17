@@ -21,6 +21,16 @@ test('detectTestCommand prefers the configured testCommand', (t) => {
   assert.deepEqual(detectTestCommand(dir, { testCommand: 'make check' }), { install: null, test: 'make check' });
 });
 
+test('detectTestCommand still installs dependencies for a configured testCommand', (t) => {
+  const locked = repoDir(t, { 'package.json': pkg({ test: 'node --test' }), 'package-lock.json': '{}' });
+  const repo = { testCommand: 'npm run test:unit' };
+  assert.deepEqual(detectTestCommand(locked, repo, { installDeps: true }), { install: 'npm ci', test: 'npm run test:unit' });
+  assert.deepEqual(detectTestCommand(locked, repo, { installDeps: false }), { install: null, test: 'npm run test:unit' });
+
+  const unlocked = repoDir(t, { 'package.json': pkg({ test: 'node --test' }) });
+  assert.deepEqual(detectTestCommand(unlocked, repo, { installDeps: true }), { install: null, test: 'npm run test:unit' });
+});
+
 test('detectTestCommand uses npm test, installing only when a lockfile exists', (t) => {
   const plain = repoDir(t, { 'package.json': pkg({ test: 'node --test' }) });
   assert.deepEqual(detectTestCommand(plain), { install: null, test: 'npm test' });

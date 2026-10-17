@@ -24,17 +24,18 @@ function hasMakeTestTarget(dir) {
 }
 
 // Returns { install, test } shell commands, or null when the repository has no
-// test suite we can run. A configured testCommand is used as-is.
+// test suite we can run. A configured testCommand is used as-is, but still gets
+// the dependency install a fresh clone needs.
 export function detectTestCommand(dir, repoConfig = {}, { installDeps = true } = {}) {
+  const install = installDeps && fs.existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : null;
   if (repoConfig.testCommand) {
-    return { install: null, test: repoConfig.testCommand };
+    return { install, test: repoConfig.testCommand };
   }
 
   const testScript = readPackageJson(dir)?.scripts?.test;
   // `npm init` writes a stub test script that always fails
   if (typeof testScript === 'string' && testScript.trim() && !/no test specified/.test(testScript)) {
-    const hasLockfile = fs.existsSync(path.join(dir, 'package-lock.json'));
-    return { install: installDeps && hasLockfile ? 'npm ci' : null, test: 'npm test' };
+    return { install, test: 'npm test' };
   }
 
   if (hasMakeTestTarget(dir)) {
@@ -42,6 +43,21 @@ export function detectTestCommand(dir, repoConfig = {}, { installDeps = true } =
   }
 
   return null;
+}
+
+// Process groups of commands still running, so an interrupted run can kill them
+const activeChildren = new Set();
+
+function killGroup(child) {
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch (_) {
+    // Already exited
+  }
+}
+
+export function killActiveTests() {
+  for (const child of activeChildren) killGroup(child);
 }
 
 // Runs a shell command in its own process group so a timeout also kills the
@@ -55,24 +71,23 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
     };
 
     const child = spawn(command, { cwd, env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    activeChildren.add(child);
     child.stdout.on('data', append);
     child.stderr.on('data', append);
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch (_) {
-        // Already exited
-      }
+      killGroup(child);
     }, timeoutMs);
 
     child.on('error', (error) => {
       clearTimeout(timer);
+      activeChildren.delete(child);
       resolve({ code: null, timedOut, output: `${output}${error.message}` });
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      activeChildren.delete(child);
       resolve({ code, timedOut, output });
     });
   });

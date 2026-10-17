@@ -12,14 +12,19 @@ test('gitAuthEnv passes the token as a GitHub-scoped header, not in plain text',
   assert.equal(Buffer.from(encoded, 'base64').toString(), 'x-access-token:ghp_secret');
 });
 
-test('scrubEnv removes tokens and git config injected through the environment', () => {
+test('scrubEnv keeps only allowlisted variables', () => {
   const env = scrubEnv({
     PATH: '/bin',
+    HOME: '/home/me',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C',
     GITHUB_TOKEN: 'ghp_secret',
     GH_TOKEN: 'ghp_secret',
+    NPM_TOKEN: 'npm_secret',
+    AWS_SECRET_ACCESS_KEY: 'aws_secret',
     ...gitAuthEnv('ghp_secret')
   });
-  assert.deepEqual(env, { PATH: '/bin' });
+  assert.deepEqual(env, { PATH: '/bin', HOME: '/home/me', LANG: 'C.UTF-8', LC_ALL: 'C' });
 });
 
 test('runGit resolves non-zero exits instead of throwing', async () => {

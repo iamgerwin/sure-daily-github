@@ -69,6 +69,32 @@ test('resolveConflicts keeps the newer side for each hunk independently', async 
   assert.equal((await runGit(['ls-files', '-u'], { cwd: dir })).stdout, '');
 });
 
+test('resolveConflicts keeps a missing final newline byte-for-byte', async (t) => {
+  const dir = await conflictedRepo(t, {
+    base: { 'app.txt': 'base' },
+    master: [[{ 'app.txt': 'master' }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.txt': 'feature' }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, true, result.reason);
+  assert.equal(fs.readFileSync(path.join(dir, 'app.txt'), 'latin1'), 'master');
+});
+
+test('resolveConflicts keeps a final newline when the winning side has one', async (t) => {
+  const dir = await conflictedRepo(t, {
+    base: { 'app.txt': 'base\n' },
+    master: [[{ 'app.txt': 'master\n' }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.txt': 'feature\n' }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, true, result.reason);
+  assert.equal(fs.readFileSync(path.join(dir, 'app.txt'), 'latin1'), 'master\n');
+});
+
 test('resolveConflicts leaves a tie for manual review', async (t) => {
   const date = '2026-01-01T00:00:00Z';
   const dir = await conflictedRepo(t, {

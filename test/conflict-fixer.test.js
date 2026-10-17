@@ -15,6 +15,7 @@ const { FixerLedger, ledgerKey } = await import('../src/utils/fixer-ledger.js');
 const { default: GitHubClient } = await import('../src/github/client.js');
 const { getRunExitCode } = await import('../src/core/executor.js');
 const { runGit } = await import('../src/utils/git.js');
+const { runTestCommand } = await import('../src/utils/test-detector.js');
 const { acquireRunLock } = await import('../src/utils/run-lock.js');
 
 const IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com'];
@@ -279,6 +280,86 @@ test('--pr filters to one pull request and requires a single repository', async 
   assert.match(unscoped.error, /--pr requires exactly one --repo/);
 });
 
+test('invalid --pr values are rejected instead of matching nothing', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  for (const pr of ['abc', '-1', '0', '1.5', '']) {
+    const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr });
+    assert.equal(result.success, false, `pr=${pr}`);
+    assert.equal(result.error, '--pr must be a positive integer');
+  }
+});
+
+// --- Untrusted test code ---
+
+test('hooks planted by the tests never run during the push', async (t) => {
+  const fx = await fixture(t);
+  const marker = path.join(fx.root, 'hook-ran');
+  const hook = `printf '#!/bin/sh\\ntouch "%s"\\n' '${marker}'`;
+  const plant = [
+    'mkdir -p evil',
+    `for h in .git/hooks/pre-push evil/pre-push evil/reference-transaction; do ${hook} > "$h"; chmod +x "$h"; done`,
+    'git config core.hooksPath "$PWD/evil"'
+  ].join(' && ');
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  const result = await fixer.run(config({ testCommand: plant }));
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+  assert.notEqual(await fx.remoteHead(), fx.pr.headRefOid);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test('pushes exactly the merge commit the tests ran against', async (t) => {
+  const fx = await fixture(t);
+  let tested;
+  const { fixer } = makeFixer(fx, [fx.pr], {
+    runCommand: async (command, { cwd }) => {
+      tested = await git(cwd, ['rev-parse', 'HEAD']);
+      return { code: 0, timedOut: false, output: '' };
+    }
+  });
+
+  const result = await fixer.run(config());
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+  assert.equal(await fx.remoteHead(), tested);
+});
+
+test('does not push when the tests create a commit', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  const result = await fixer.run(config({
+    testCommand: 'git -c user.name=x -c user.email=x@example.com commit -q --allow-empty -m sneaky'
+  }));
+
+  assert.equal(result.results[0].status, 'needs-manual-review');
+  assert.match(result.results[0].reason, /moved HEAD/);
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+});
+
+test('does not push when the tests modify a tracked file', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  const result = await fixer.run(config({ testCommand: 'echo tampered >> app.txt && touch untracked.txt' }));
+
+  assert.equal(result.results[0].status, 'needs-manual-review');
+  assert.match(result.results[0].reason, /modified tracked files/);
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+});
+
+test('untracked files left by the tests do not block the push', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  const result = await fixer.run(config({ testCommand: 'mkdir -p node_modules && touch node_modules/x' }));
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+});
+
 test('reports a listing failure as a failed repository', async (t) => {
   const fx = await fixture(t);
   const { fixer } = makeFixer(fx, []);
@@ -408,11 +489,32 @@ test('interrupt marks in-progress attempts as interrupted and exits non-zero', a
   fixer.activeDir = fs.mkdtempSync(path.join(fx.workRoot, 'sdg-fix-'));
 
   fixer.interrupt('SIGTERM');
+  // A second signal while shutting down is ignored
   fixer.interrupt('SIGINT');
 
-  assert.deepEqual(exits, [143, 130]);
+  assert.deepEqual(exits, [143]);
   assert.deepEqual(fixer.ledger.load()[KEY], { headSha: fx.pr.headRefOid, status: 'interrupted', startedAt: 1000, finishedAt: 2000 });
   assert.deepEqual(fs.readdirSync(fx.workRoot), []);
+
+  const { fixer: other } = makeFixer(fx, [], { exit: (code) => exits.push(code) });
+  other.interrupt('SIGINT');
+  assert.deepEqual(exits, [143, 130]);
+});
+
+test('interrupt kills a running test command before exiting', async (t) => {
+  const fx = await fixture(t);
+  const marker = path.join(fx.root, 'test-survived');
+  const exits = [];
+  const { fixer } = makeFixer(fx, [], { exit: (code) => exits.push(code) });
+
+  const running = runTestCommand(`sleep 1 && touch "${marker}"`, { cwd: fx.root, env: process.env, timeoutMs: 10000 });
+  fixer.interrupt('SIGTERM');
+  const result = await running;
+  await new Promise(resolve => setTimeout(resolve, 1500));
+
+  assert.notEqual(result.code, 0);
+  assert.deepEqual(exits, [143]);
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test('signal handlers are installed only for the duration of a run', async (t) => {
@@ -476,23 +578,28 @@ test('an exhausted scan budget still fixes collected PRs and reports the rest', 
   assert.equal(getRunExitCode(result), 0);
 });
 
-test('a repository cut off mid-pagination is reported as scan-timeout', async (t) => {
+test('a repository cut off mid-pagination still processes its collected PRs and reports scan-timeout', async (t) => {
   const fx = await fixture(t);
   const clock = { now: 0 };
   const client = new GitHubClient('ghp_test');
   client.validate = async () => ({ success: true, user: 'bot', id: 42 });
+  let pages = 0;
   client.octokit = {
-    graphql: async (query, { repo }) => {
-      clock.now += 50 * 1000;
-      const nodes = repo === 'a' ? [fx.pr] : [{ ...fx.pr, number: 99 }];
-      return { repository: { pullRequests: { nodes, pageInfo: { hasNextPage: repo === 'b', endCursor: 'next' } } } };
+    graphql: async () => {
+      pages++;
+      clock.now += 100 * 1000;
+      return { repository: { pullRequests: { nodes: [fx.pr], pageInfo: { hasNextPage: true, endCursor: 'next' } } } };
     }
   };
   const { fixer } = makeFixer(fx, [], { client, now: () => clock.now });
 
-  const result = await fixer.run(multiConfig(['a', 'b'], { scanTimeoutSeconds: 90 }));
+  const result = await fixer.run(multiConfig(['b'], { scanTimeoutSeconds: 90 }));
 
-  assert.deepEqual(result.results.map(r => [r.repo, r.pr, r.status]), [['a', 7, 'fixed'], ['b', undefined, 'scan-timeout']]);
+  assert.equal(pages, 1);
+  assert.deepEqual(result.results.map(r => [r.repo, r.pr, r.status]), [['b', 7, 'fixed'], ['b', undefined, 'scan-timeout']]);
+  assert.equal(result.summary.fixed, 1);
+  assert.equal(result.summary.scanTimeout, 1);
+  assert.notEqual(await fx.remoteHead(), fx.pr.headRefOid);
 });
 
 test('the scan-timeout option overrides the configured budget', async (t) => {
