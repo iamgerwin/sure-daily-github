@@ -6,8 +6,14 @@ import fs from 'node:fs';
 
 const lockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-fixer-lock-'));
 process.env.SDG_RUN_LOCK_FILE = path.join(lockDir, 'run.lock');
+process.env.SDG_CONFLICT_FIXER_STATE_FILE = path.join(lockDir, 'conflict-fixer-state.json');
 
-const { default: ConflictFixer, isConflicted, selectRepositories, summarize } = await import('../src/core/conflict-fixer.js');
+const {
+  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout
+} = await import('../src/core/conflict-fixer.js');
+const { FixerLedger, ledgerKey } = await import('../src/utils/fixer-ledger.js');
+const { default: GitHubClient } = await import('../src/github/client.js');
+const { getRunExitCode } = await import('../src/core/executor.js');
 const { runGit } = await import('../src/utils/git.js');
 const { acquireRunLock } = await import('../src/utils/run-lock.js');
 
@@ -63,7 +69,8 @@ async function fixture(t, { withPackage = true, conflicting = true } = {}) {
     mergeStateStatus: 'DIRTY'
   };
   const remoteHead = () => git(remote, ['rev-parse', 'refs/heads/feature']);
-  return { root, work, remote, workRoot, pr, remoteHead };
+  const ledgerFile = path.join(root, 'conflict-fixer-state.json');
+  return { root, work, remote, workRoot, pr, remoteHead, ledgerFile };
 }
 
 function stubClient(pulls) {
@@ -85,6 +92,7 @@ function makeFixer(fx, pulls, options = {}) {
     remoteUrl: () => fx.remote,
     workRoot: fx.workRoot,
     retryDelayMs: 0,
+    ledger: new FixerLedger({ filePath: fx.ledgerFile }),
     ...options
   });
   return { fixer, client };
@@ -117,9 +125,10 @@ test('summarize counts fixed, manual review, skipped, and failed results', () =>
     { status: 'would-fix', success: true, skipped: false },
     { status: 'needs-manual-review', success: true, skipped: true },
     { status: 'skipped', success: true, skipped: true },
-    { status: 'error', success: false, skipped: true }
+    { status: 'error', success: false, skipped: true },
+    { status: 'scan-timeout', success: true, skipped: true }
   ]);
-  assert.deepEqual(summary, { total: 5, fixed: 2, needsManualReview: 1, skipped: 2, failed: 1 });
+  assert.deepEqual(summary, { total: 6, fixed: 2, needsManualReview: 1, skipped: 2, scanTimeout: 1, failed: 1 });
 });
 
 test('fixes a conflicted PR, pushes a merge commit, and cleans up', async (t) => {
@@ -130,7 +139,7 @@ test('fixes a conflicted PR, pushes a merge commit, and cleans up', async (t) =>
 
   assert.equal(result.success, true, result.error);
   assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
-  assert.deepEqual(result.summary, { total: 1, fixed: 1, needsManualReview: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(result.summary, { total: 1, fixed: 1, needsManualReview: 0, skipped: 0, scanTimeout: 0, failed: 0 });
 
   const parents = (await git(fx.remote, ['rev-list', '--parents', '-n', '1', 'refs/heads/feature'])).split(' ');
   assert.equal(parents.length, 3);
@@ -291,4 +300,236 @@ test('refuses to run while another execution holds the lock', async (t) => {
 
   assert.equal(result.success, false);
   assert.equal(result.locked, true);
+});
+
+// --- Attempt ledger ---
+
+const MINUTE = 60 * 1000;
+const KEY = ledgerKey('me', 'demo', 7);
+
+function seedLedger(fx, entry) {
+  fs.writeFileSync(fx.ledgerFile, JSON.stringify({ [KEY]: entry }));
+}
+
+test('records a finished attempt in the ledger', async (t) => {
+  const fx = await fixture(t);
+  let clock = 5 * MINUTE;
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => clock });
+
+  await fixer.run(config());
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8')), {
+    [KEY]: { headSha: fx.pr.headRefOid, status: 'fixed', startedAt: clock, finishedAt: clock }
+  });
+});
+
+test('skips a PR whose same head SHA is already in progress', async (t) => {
+  const fx = await fixture(t);
+  const now = 100 * MINUTE;
+  seedLedger(fx, { headSha: fx.pr.headRefOid, status: 'in-progress', startedAt: now - 59 * MINUTE, finishedAt: null });
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => now, git: async () => assert.fail('git must not run') });
+
+  const result = await fixer.run(config());
+
+  assert.deepEqual(result.results.map(r => [r.status, r.reason]), [['skipped', 'already-in-progress']]);
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+});
+
+test('retries an in-progress attempt once the attempt TTL has expired', async (t) => {
+  const fx = await fixture(t);
+  const now = 100 * MINUTE;
+  seedLedger(fx, { headSha: fx.pr.headRefOid, status: 'in-progress', startedAt: now - 61 * MINUTE, finishedAt: null });
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => now });
+
+  const result = await fixer.run(config());
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+  assert.equal(JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8'))[KEY].startedAt, now);
+});
+
+test('skips a finished attempt on the same head SHA within the retry cooldown', async (t) => {
+  const fx = await fixture(t);
+  const now = 1000 * MINUTE;
+  seedLedger(fx, { headSha: fx.pr.headRefOid, status: 'needs-manual-review', startedAt: 0, finishedAt: now - 239 * MINUTE });
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => now, git: async () => assert.fail('git must not run') });
+
+  const result = await fixer.run(config());
+
+  assert.deepEqual(result.results.map(r => [r.status, r.reason]), [['skipped', 'already-attempted']]);
+});
+
+test('honours configured TTL and cooldown windows', async (t) => {
+  const fx = await fixture(t);
+  const now = 1000 * MINUTE;
+  seedLedger(fx, { headSha: fx.pr.headRefOid, status: 'failed', startedAt: 0, finishedAt: now - 11 * MINUTE });
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => now });
+  const cfg = config();
+  cfg.conflictFixer.retryCooldownMinutes = 10;
+
+  const result = await fixer.run(cfg);
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+});
+
+test('re-attempts a PR whose head SHA changed and overwrites the entry', async (t) => {
+  const fx = await fixture(t);
+  const now = 1000 * MINUTE;
+  seedLedger(fx, { headSha: 'f'.repeat(40), status: 'fixed', startedAt: now - MINUTE, finishedAt: now - MINUTE });
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => now });
+
+  const result = await fixer.run(config());
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
+  assert.deepEqual(JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8'))[KEY], {
+    headSha: fx.pr.headRefOid, status: 'fixed', startedAt: now, finishedAt: now
+  });
+});
+
+test('scan-only and dry runs never write the ledger', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+
+  await fixer.run(config(), { scanOnly: true });
+  assert.equal(fs.existsSync(fx.ledgerFile), false);
+
+  const dry = await fixer.run(config(), { dryRun: true });
+  assert.equal(dry.results[0].status, 'would-fix');
+  assert.equal(fs.existsSync(fx.ledgerFile), false);
+});
+
+// --- Signal safety ---
+
+test('interrupt marks in-progress attempts as interrupted and exits non-zero', async (t) => {
+  const fx = await fixture(t);
+  const exits = [];
+  const { fixer } = makeFixer(fx, [], { now: () => 2000, exit: (code) => exits.push(code) });
+  fixer.ledger.start(KEY, fx.pr.headRefOid, 1000);
+  fixer.activeKeys.add(KEY);
+  fixer.activeDir = fs.mkdtempSync(path.join(fx.workRoot, 'sdg-fix-'));
+
+  fixer.interrupt('SIGTERM');
+  fixer.interrupt('SIGINT');
+
+  assert.deepEqual(exits, [143, 130]);
+  assert.deepEqual(fixer.ledger.load()[KEY], { headSha: fx.pr.headRefOid, status: 'interrupted', startedAt: 1000, finishedAt: 2000 });
+  assert.deepEqual(fs.readdirSync(fx.workRoot), []);
+});
+
+test('signal handlers are installed only for the duration of a run', async (t) => {
+  const fx = await fixture(t);
+  const before = process.listenerCount('SIGTERM');
+  let during;
+  let activeDuring;
+  const { fixer } = makeFixer(fx, [fx.pr], {
+    runCommand: async () => {
+      during = process.listenerCount('SIGTERM');
+      activeDuring = [...fixer.activeKeys];
+      return { code: 0, timedOut: false, output: '' };
+    }
+  });
+
+  await fixer.run(config());
+
+  assert.equal(during, before + 1);
+  assert.deepEqual(activeDuring, [KEY]);
+  assert.equal(process.listenerCount('SIGTERM'), before);
+  assert.equal(fixer.activeKeys.size, 0);
+});
+
+// --- Scan-time budget ---
+
+function multiConfig(names, conflictFixer = {}) {
+  return {
+    general: { dryRun: false },
+    repositories: names.map(repo => ({ owner: 'me', repo, enabled: true, testCommand: null })),
+    conflictFixer: { testTimeoutMinutes: 1, installDeps: true, ...conflictFixer }
+  };
+}
+
+// Each listing takes `costMs` of fake time; repo "a" has the conflicted PR
+function timedClient(fx, clock, costMs) {
+  const listed = [];
+  return {
+    listed,
+    validate: async () => ({ success: true, user: 'bot', id: 42 }),
+    listOpenPullRequests: async (owner, repo) => {
+      listed.push(repo);
+      clock.now += costMs;
+      return { success: true, data: repo === 'a' ? [fx.pr] : [] };
+    }
+  };
+}
+
+test('an exhausted scan budget still fixes collected PRs and reports the rest', async (t) => {
+  const fx = await fixture(t);
+  const clock = { now: 0 };
+  const client = timedClient(fx, clock, 200 * 1000);
+  const { fixer } = makeFixer(fx, [], { client, now: () => clock.now });
+
+  const result = await fixer.run(multiConfig(['a', 'b', 'c']));
+
+  assert.deepEqual(client.listed, ['a']);
+  assert.deepEqual(result.results.map(r => [r.repo, r.status]), [['a', 'fixed'], ['b', 'scan-timeout'], ['c', 'scan-timeout']]);
+  assert.equal(result.results[1].reason, 'scan budget exhausted');
+  assert.equal(result.summary.scanTimeout, 2);
+  assert.equal(result.summary.fixed, 1);
+  assert.equal(getRunExitCode(result), 0);
+});
+
+test('a repository cut off mid-pagination is reported as scan-timeout', async (t) => {
+  const fx = await fixture(t);
+  const clock = { now: 0 };
+  const client = new GitHubClient('ghp_test');
+  client.validate = async () => ({ success: true, user: 'bot', id: 42 });
+  client.octokit = {
+    graphql: async (query, { repo }) => {
+      clock.now += 50 * 1000;
+      const nodes = repo === 'a' ? [fx.pr] : [{ ...fx.pr, number: 99 }];
+      return { repository: { pullRequests: { nodes, pageInfo: { hasNextPage: repo === 'b', endCursor: 'next' } } } };
+    }
+  };
+  const { fixer } = makeFixer(fx, [], { client, now: () => clock.now });
+
+  const result = await fixer.run(multiConfig(['a', 'b'], { scanTimeoutSeconds: 90 }));
+
+  assert.deepEqual(result.results.map(r => [r.repo, r.pr, r.status]), [['a', 7, 'fixed'], ['b', undefined, 'scan-timeout']]);
+});
+
+test('the scan-timeout option overrides the configured budget', async (t) => {
+  const fx = await fixture(t);
+  const run = async (options) => {
+    const clock = { now: 0 };
+    const { fixer } = makeFixer(fx, [], { client: timedClient(fx, clock, 10 * 1000), now: () => clock.now });
+    const result = await fixer.run(multiConfig(['a', 'b'], { scanTimeoutSeconds: 1000 }), { scanOnly: true, ...options });
+    return result.results.map(r => [r.repo, r.status]);
+  };
+
+  assert.deepEqual(await run({}), [['a', 'conflicted']]);
+  assert.deepEqual(await run({ scanTimeoutSeconds: '5' }), [['a', 'conflicted'], ['b', 'scan-timeout']]);
+});
+
+test('UNKNOWN re-polls stop when the remaining budget cannot cover the sleep', async (t) => {
+  const fx = await fixture(t);
+  const clock = { now: 0 };
+  const unknown = { ...fx.pr, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' };
+  const { fixer, client } = makeFixer(fx, [unknown], { now: () => clock.now, retryDelayMs: 2000 });
+  fixer.delay = async (ms) => { clock.now += ms; };
+
+  const result = await fixer.run(multiConfig(['demo'], { scanTimeoutSeconds: 3 }));
+
+  assert.equal(client.calls.list, 2);
+  assert.deepEqual(result.results.map(r => r.status), ['unknown']);
+});
+
+test('invalid scan-timeout values are rejected', async (t) => {
+  for (const value of ['0', '-1', 'abc', '']) {
+    assert.throws(() => parseScanTimeout(value), /--scan-timeout must be a positive number of seconds/);
+  }
+  assert.equal(parseScanTimeout('2.5'), 2.5);
+
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+  const result = await fixer.run(config(), { scanTimeoutSeconds: 0 });
+  assert.equal(result.success, false);
+  assert.match(result.error, /--scan-timeout/);
 });

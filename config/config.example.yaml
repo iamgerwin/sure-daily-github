@@ -88,9 +88,19 @@ schedule:
 # and pushes only if the repository's tests pass. Anything else is reported
 # as needs-manual-review. Long test runs share the run lock, so raise
 # SDG_RUN_LOCK_STALE_MS if a full pass can exceed 2 hours.
+#
+# Each attempt is recorded per PR head SHA in data/conflict-fixer-state.json
+# (SDG_CONFLICT_FIXER_STATE_FILE overrides the path), so the same commit is
+# not cloned and tested again while an attempt is running or cooling down.
 # conflictFixer:
-#   testTimeoutMinutes: 15   # Per install/test command
-#   installDeps: true        # Run "npm ci" first when package-lock.json exists
+#   testTimeoutMinutes: 15     # Per install/test command
+#   installDeps: true          # Run "npm ci" first when package-lock.json exists
+#   scanTimeoutSeconds: 120    # Budget for listing PRs across all repos
+#                              # (incl. UNKNOWN re-polls); override per run
+#                              # with --scan-timeout <seconds>. Unscanned
+#                              # repos are reported as scan-timeout.
+#   attemptTtlMinutes: 60      # An in-progress attempt older than this is stale
+#   retryCooldownMinutes: 240  # Skip re-attempting the same head SHA this long
 
 # ========================================
 # Repositories

@@ -241,12 +241,19 @@ test('validate passes testCommand through and defaults conflictFixer', () => {
   const cfg = config.validate({ repositories: [{ ...baseRepo, testCommand: 'npm run test:unit' }, { owner: 'me', repo: 'other' }] });
   assert.equal(cfg.repositories[0].testCommand, 'npm run test:unit');
   assert.equal(cfg.repositories[1].testCommand, null);
-  assert.deepEqual(cfg.conflictFixer, { testTimeoutMinutes: 15, installDeps: true });
+  assert.deepEqual(cfg.conflictFixer, {
+    testTimeoutMinutes: 15,
+    installDeps: true,
+    scanTimeoutSeconds: 120,
+    attemptTtlMinutes: 60,
+    retryCooldownMinutes: 240
+  });
 });
 
 test('validate keeps configured conflictFixer settings', () => {
-  const cfg = config.validate({ repositories: [baseRepo], conflictFixer: { testTimeoutMinutes: 30, installDeps: false } });
-  assert.deepEqual(cfg.conflictFixer, { testTimeoutMinutes: 30, installDeps: false });
+  const settings = { testTimeoutMinutes: 30, installDeps: false, scanTimeoutSeconds: 45, attemptTtlMinutes: 10, retryCooldownMinutes: 20 };
+  const cfg = config.validate({ repositories: [baseRepo], conflictFixer: settings });
+  assert.deepEqual(cfg.conflictFixer, settings);
 });
 
 test('validate rejects invalid conflictFixer and testCommand values', () => {
@@ -266,4 +273,12 @@ test('validate rejects invalid conflictFixer and testCommand values', () => {
     () => config.validate({ repositories: [baseRepo], conflictFixer: ['x'] }),
     /conflictFixer must be a mapping/
   );
+  for (const field of ['scanTimeoutSeconds', 'attemptTtlMinutes', 'retryCooldownMinutes']) {
+    for (const value of [0, -5, 1.5, '60']) {
+      assert.throws(
+        () => config.validate({ repositories: [baseRepo], conflictFixer: { [field]: value } }),
+        new RegExp(`conflictFixer.${field} must be a positive whole number`)
+      );
+    }
+  }
 });

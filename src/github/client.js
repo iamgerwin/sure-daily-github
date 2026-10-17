@@ -150,11 +150,16 @@ class GitHubClient {
 
   // REST pull listings omit mergeability, which would cost one extra request
   // per PR; GraphQL returns it for a whole page at once
-  async listOpenPullRequests(owner, repo) {
+  // `shouldContinue` is checked before each page after the first; a partial
+  // listing is never returned
+  async listOpenPullRequests(owner, repo, { shouldContinue } = {}) {
     try {
       const pulls = [];
       let cursor = null;
       do {
+        if (cursor && shouldContinue && !shouldContinue()) {
+          return { success: false, timedOut: true, error: 'scan budget exhausted' };
+        }
         const data = await this.octokit.graphql(OPEN_PULL_REQUESTS_QUERY, { owner, repo, cursor });
         const page = data.repository.pullRequests;
         pulls.push(...page.nodes);

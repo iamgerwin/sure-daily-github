@@ -127,3 +127,19 @@ test('listOpenPullRequests reports API failures', async () => {
 
   assert.deepEqual(result, { success: false, error: 'Could not resolve to a Repository' });
 });
+
+test('listOpenPullRequests stops before the next page when shouldContinue is false', async () => {
+  const client = new GitHubClient('ghp_test');
+  let pages = 0;
+  client.octokit = {
+    graphql: async () => {
+      pages++;
+      return { repository: { pullRequests: { nodes: [{ number: pages }], pageInfo: { hasNextPage: true, endCursor: `c${pages}` } } } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo', { shouldContinue: () => pages < 2 });
+
+  assert.equal(pages, 2);
+  assert.deepEqual(result, { success: false, timedOut: true, error: 'scan budget exhausted' });
+});

@@ -6,14 +6,28 @@ import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import { runGit, gitAuthEnv, scrubEnv } from '../utils/git.js';
 import { detectTestCommand, runTestCommand, tailLines } from '../utils/test-detector.js';
+import { FixerLedger, ledgerKey } from '../utils/fixer-ledger.js';
 import { resolveConflicts } from './conflict-resolver.js';
 
 // GitHub computes mergeability lazily and reports UNKNOWN until it is done
 export const UNKNOWN_RETRIES = 3;
 export const UNKNOWN_RETRY_DELAY_MS = 2000;
 export const DEFAULT_TEST_TIMEOUT_MINUTES = 15;
+export const DEFAULT_SCAN_TIMEOUT_SECONDS = 120;
+export const DEFAULT_ATTEMPT_TTL_MINUTES = 60;
+export const DEFAULT_RETRY_COOLDOWN_MINUTES = 240;
 
 const FIXED_STATUSES = new Set(['fixed', 'would-fix']);
+const SIGNALS = ['SIGINT', 'SIGTERM'];
+
+// Shared by the --scan-timeout option parser and execute()
+export function parseScanTimeout(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`--scan-timeout must be a positive number of seconds: ${value}`);
+  }
+  return seconds;
+}
 
 export function isConflicted(pr) {
   return pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY';
@@ -37,7 +51,8 @@ export function summarize(results) {
     total: results.length,
     fixed: results.filter(r => FIXED_STATUSES.has(r.status)).length,
     needsManualReview: results.filter(r => r.status === 'needs-manual-review').length,
-    skipped: results.filter(r => r.skipped && r.status !== 'needs-manual-review').length,
+    skipped: results.filter(r => r.skipped && !['needs-manual-review', 'scan-timeout'].includes(r.status)).length,
+    scanTimeout: results.filter(r => r.status === 'scan-timeout').length,
     failed: results.filter(r => !r.success).length
   };
 }
@@ -67,6 +82,12 @@ class ConflictFixer {
     this.workRoot = options.workRoot || os.tmpdir();
     this.retryDelayMs = options.retryDelayMs ?? UNKNOWN_RETRY_DELAY_MS;
     this.authEnv = gitAuthEnv(token);
+    this.ledger = options.ledger || new FixerLedger();
+    this.now = options.now || Date.now;
+    this.exit = options.exit || ((code) => process.exit(code));
+    this.activeKeys = new Set();
+    this.activeDir = null;
+    this.lock = null;
   }
 
   delay(ms) {
@@ -89,14 +110,56 @@ class ConflictFixer {
       return { success: false, locked: true, error };
     }
 
+    this.lock = lock;
+    const removeSignalHandlers = this.installSignalHandlers();
     try {
       return await this.execute(cfg, options);
     } finally {
+      removeSignalHandlers();
+      this.lock = null;
       lock.release();
     }
   }
 
-  async execute(cfg, { repos = [], pr = null, dryRun = false, scanOnly = false } = {}) {
+  // Marks this run's in-progress ledger entries as interrupted so the next run
+  // does not wait out the attempt TTL, then exits non-zero
+  interrupt(signal) {
+    logger.warn('Conflict fixer interrupted', { signal, inProgress: [...this.activeKeys] });
+    try {
+      this.ledger.markInterrupted(this.activeKeys, this.now());
+    } catch (error) {
+      logger.error('Failed to mark interrupted attempts', { error: error.message });
+    }
+    if (this.activeDir) {
+      fs.rmSync(this.activeDir, { recursive: true, force: true });
+    }
+    this.lock?.release();
+    this.exit(signal === 'SIGINT' ? 130 : 143);
+  }
+
+  installSignalHandlers() {
+    const handlers = SIGNALS.map(signal => [signal, () => this.interrupt(signal)]);
+    handlers.forEach(([signal, handler]) => process.on(signal, handler));
+    return () => handlers.forEach(([signal, handler]) => process.off(signal, handler));
+  }
+
+  // Lists every repository's open PRs within the scan budget. Repositories not
+  // fully listed before the deadline are returned as timedOut.
+  async gather(repositories, deadline) {
+    const remaining = () => deadline - this.now();
+    const scanned = [];
+    for (const repoConfig of repositories) {
+      if (remaining() <= 0) {
+        scanned.push({ repoConfig, timedOut: true });
+        continue;
+      }
+      const listed = await this.listPullRequests(repoConfig.owner, repoConfig.repo, remaining);
+      scanned.push({ repoConfig, ...listed });
+    }
+    return scanned;
+  }
+
+  async execute(cfg, { repos = [], pr = null, dryRun = false, scanOnly = false, scanTimeoutSeconds = null } = {}) {
     try {
       const repositories = selectRepositories(cfg.repositories, repos);
       if (pr !== null && pr !== undefined && repos.length !== 1) {
@@ -104,6 +167,11 @@ class ConflictFixer {
       }
       const prNumber = pr === null || pr === undefined ? null : Number(pr);
       dryRun = dryRun || cfg.general?.dryRun === true;
+      const scanBudgetSeconds = scanTimeoutSeconds === null || scanTimeoutSeconds === undefined
+        ? cfg.conflictFixer?.scanTimeoutSeconds ?? DEFAULT_SCAN_TIMEOUT_SECONDS
+        : parseScanTimeout(scanTimeoutSeconds);
+      const attemptTtlMs = (cfg.conflictFixer?.attemptTtlMinutes ?? DEFAULT_ATTEMPT_TTL_MINUTES) * 60 * 1000;
+      const retryCooldownMs = (cfg.conflictFixer?.retryCooldownMinutes ?? DEFAULT_RETRY_COOLDOWN_MINUTES) * 60 * 1000;
 
       const auth = await this.client.validate();
       if (!auth.success) {
@@ -118,18 +186,24 @@ class ConflictFixer {
         installDeps: cfg.conflictFixer?.installDeps ?? true
       };
 
-      logger.info('Starting conflict fixer', { repositories: repositories.length, dryRun, scanOnly });
+      logger.info('Starting conflict fixer', { repositories: repositories.length, dryRun, scanOnly, scanBudgetSeconds });
+
+      // The budget covers only gathering; collected PRs are always processed
+      const scanned = await this.gather(repositories, this.now() + scanBudgetSeconds * 1000);
 
       const results = [];
-      for (const repoConfig of repositories) {
+      for (const { repoConfig, success, timedOut, data, error } of scanned) {
         const { owner, repo } = repoConfig;
-        const listed = await this.listPullRequests(owner, repo);
-        if (!listed.success) {
-          results.push({ owner, repo, status: 'error', success: false, skipped: false, error: listed.error });
+        if (timedOut) {
+          results.push({ owner, repo, status: 'scan-timeout', success: true, skipped: true, reason: 'scan budget exhausted' });
+          continue;
+        }
+        if (!success) {
+          results.push({ owner, repo, status: 'error', success: false, skipped: false, error });
           continue;
         }
 
-        for (const pull of listed.data) {
+        for (const pull of data) {
           if (prNumber !== null && pull.number !== prNumber) continue;
 
           if (isConflicted(pull)) {
@@ -138,7 +212,9 @@ class ConflictFixer {
             } else if (scanOnly) {
               results.push(prResult(repoConfig, pull, 'conflicted', { reason: `${pull.headRefName} -> ${pull.baseRefName}` }));
             } else {
-              results.push(await this.fixPullRequest(repoConfig, pull, { dryRun, settings, identity }));
+              results.push(await this.attemptPullRequest(repoConfig, pull, {
+                dryRun, settings, identity, attemptTtlMs, retryCooldownMs
+              }));
             }
           } else if (pull.mergeable === 'UNKNOWN' && !pull.isCrossRepository) {
             results.push(prResult(repoConfig, pull, 'unknown', { reason: 'GitHub has not computed mergeability yet' }));
@@ -155,13 +231,44 @@ class ConflictFixer {
     }
   }
 
-  async listPullRequests(owner, repo) {
-    for (let attempt = 0; ; attempt++) {
-      const result = await this.client.listOpenPullRequests(owner, repo);
+  // Re-polls while GitHub reports UNKNOWN mergeability, but only while the
+  // budget can cover the sleep; the last complete listing is kept on expiry
+  async listPullRequests(owner, repo, remaining = () => Infinity) {
+    const shouldContinue = () => remaining() > 0;
+    let result = await this.client.listOpenPullRequests(owner, repo, { shouldContinue });
+    for (let attempt = 0; attempt < UNKNOWN_RETRIES; attempt++) {
       const pending = result.success
         && result.data.some(pr => !pr.isCrossRepository && pr.mergeable === 'UNKNOWN');
-      if (!pending || attempt >= UNKNOWN_RETRIES) return result;
+      if (!pending || remaining() <= this.retryDelayMs) break;
       await this.delay(this.retryDelayMs);
+      const retried = await this.client.listOpenPullRequests(owner, repo, { shouldContinue });
+      if (retried.timedOut) break;
+      result = retried;
+    }
+    return result;
+  }
+
+  // Ledger-guarded wrapper around fixPullRequest. Dry runs honour the ledger
+  // but never write it, so a rehearsal cannot block the real fix.
+  async attemptPullRequest(repoConfig, pr, { dryRun, settings, identity, attemptTtlMs, retryCooldownMs }) {
+    const key = ledgerKey(repoConfig.owner, repoConfig.repo, pr.number);
+    const skip = this.ledger.skipReason(key, pr.headRefOid, { now: this.now(), attemptTtlMs, retryCooldownMs });
+    if (skip) {
+      return prResult(repoConfig, pr, 'skipped', { reason: skip });
+    }
+
+    if (dryRun) {
+      return this.fixPullRequest(repoConfig, pr, { dryRun, settings, identity });
+    }
+
+    this.ledger.start(key, pr.headRefOid, this.now());
+    this.activeKeys.add(key);
+    try {
+      const result = await this.fixPullRequest(repoConfig, pr, { dryRun, settings, identity });
+      this.ledger.finish(key, result.status, this.now());
+      return result;
+    } finally {
+      this.activeKeys.delete(key);
     }
   }
 
@@ -182,6 +289,7 @@ class ConflictFixer {
     }
 
     const dir = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
+    this.activeDir = dir;
     const git = (args, options = {}) => this.git(args, { cwd: dir, env: this.authEnv, ...options });
     const must = async (args) => {
       const result = await git(args);
@@ -251,6 +359,7 @@ class ConflictFixer {
       logger.error('Conflict fixer error', { owner, repo, pr: pr.number, error: error.message });
       return done('error', { error: `#${pr.number}: ${error.message}`, reason: error.message });
     } finally {
+      this.activeDir = null;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }

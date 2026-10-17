@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import executor, { describeFailures, getRunExitCode } from './core/executor.js';
 import scheduler from './core/scheduler.js';
-import ConflictFixer from './core/conflict-fixer.js';
+import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import config from './config/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -176,16 +176,19 @@ program
   .option('--scan-only', 'Only list conflicted pull requests')
   .option('--repo <owner/repo>', 'Only process this configured repository (repeatable)', (value, list) => [...list, value], [])
   .option('--pr <number>', 'Only process this pull request (requires one --repo)')
+  .option('--scan-timeout <seconds>', 'Time budget for listing pull requests (overrides conflictFixer.scanTimeoutSeconds)')
   .option('--config <path>', 'Path to configuration file')
   .action(async (options) => {
     try {
+      const scanTimeoutSeconds = options.scanTimeout === undefined ? null : parseScanTimeout(options.scanTimeout);
       const cfg = config.load(options.config);
       const fixer = new ConflictFixer(config.getGitHubToken());
       const result = await fixer.run(cfg, {
         repos: options.repo,
         pr: options.pr ?? null,
         dryRun: Boolean(options.dryRun),
-        scanOnly: Boolean(options.scanOnly)
+        scanOnly: Boolean(options.scanOnly),
+        scanTimeoutSeconds
       });
 
       if (!result.success) {
@@ -209,6 +212,7 @@ program
       console.log(`\nFixed:               ${result.summary.fixed}`);
       console.log(`Needs manual review: ${result.summary.needsManualReview}`);
       console.log(`Skipped:             ${result.summary.skipped}`);
+      console.log(`Scan timeout:        ${result.summary.scanTimeout}`);
       console.log(`Failed:              ${result.summary.failed}\n`);
       process.exit(getRunExitCode(result));
     } catch (error) {

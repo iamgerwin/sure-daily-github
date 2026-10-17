@@ -154,11 +154,13 @@ class ConfigLoader {
     if (typeof conflictFixer !== 'object' || Array.isArray(conflictFixer)) {
       errors.push('conflictFixer must be a mapping');
     } else {
-      const { testTimeoutMinutes, installDeps } = conflictFixer;
-      if (testTimeoutMinutes !== undefined && testTimeoutMinutes !== null
-        && (!Number.isInteger(testTimeoutMinutes) || testTimeoutMinutes < 1)) {
-        errors.push('conflictFixer.testTimeoutMinutes must be a positive whole number');
+      for (const field of ['testTimeoutMinutes', 'scanTimeoutSeconds', 'attemptTtlMinutes', 'retryCooldownMinutes']) {
+        const value = conflictFixer[field];
+        if (value !== undefined && value !== null && (!Number.isInteger(value) || value < 1)) {
+          errors.push(`conflictFixer.${field} must be a positive whole number`);
+        }
       }
+      const { installDeps } = conflictFixer;
       if (installDeps !== undefined && installDeps !== null && typeof installDeps !== 'boolean') {
         errors.push('conflictFixer.installDeps must be true or false');
       }
@@ -287,7 +289,10 @@ class ConfigLoader {
       }),
       conflictFixer: {
         testTimeoutMinutes: conflictFixer.testTimeoutMinutes ?? 15,
-        installDeps: conflictFixer.installDeps ?? true
+        installDeps: conflictFixer.installDeps ?? true,
+        scanTimeoutSeconds: conflictFixer.scanTimeoutSeconds ?? 120,
+        attemptTtlMinutes: conflictFixer.attemptTtlMinutes ?? 60,
+        retryCooldownMinutes: conflictFixer.retryCooldownMinutes ?? 240
       },
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
