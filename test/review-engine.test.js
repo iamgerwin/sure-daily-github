@@ -261,14 +261,72 @@ test('parseImplementReport requires an explicit status for every expected id', (
       { id: 'b', status: 'failed', summary: 'could not' },
       { id: 'c', summary: 'no status' },
       { id: 'd', status: 'maybe' },
-      { id: 'a', status: 'failed' },
+      { id: 'b', status: 'failed', summary: 'same status again' },
       { id: 'zzz', status: 'implemented' }
     ]
   }), ['a', 'b', 'c', 'd', 'e']);
-  assert.deepEqual(report.fixes.map(f => [f.id, f.status]), [['a', 'implemented'], ['b', 'failed']]);
+  assert.deepEqual(report.fixes.map(f => [f.id, f.status, f.summary]), [['a', 'implemented', 'done'], ['b', 'failed', 'could not']]);
   assert.deepEqual(report.missing, ['c', 'd', 'e']);
+  assert.deepEqual(report.conflicting, []);
   assert.equal(parseImplementReport('{"nope":1}', ['a']), null);
   assert.equal(parseImplementReport('garbage', ['a']), null);
+});
+
+test('parseImplementReport never settles an id reported with conflicting statuses', () => {
+  for (const fixes of [
+    [{ id: 'a', status: 'implemented' }, { id: 'a', status: 'failed' }],
+    [{ id: 'a', status: 'failed' }, { id: 'a', status: 'implemented' }]
+  ]) {
+    const report = parseImplementReport(JSON.stringify({ fixes: [...fixes, { id: 'b', status: 'implemented' }] }), ['a', 'b']);
+    assert.deepEqual(report.fixes.map(f => f.id), ['b']);
+    assert.deepEqual(report.missing, ['a']);
+    assert.deepEqual(report.conflicting, ['a']);
+  }
+});
+
+test('a failing later batch keeps the earlier batches\' results and only reports its own items', async () => {
+  const dir = tmpDir();
+  // Two comments too large to share a batch
+  const big = [0, 1].map(i => ({
+    id: `review_comment:${200 + i}`, kind: 'review_comment', author: 'alice', path: 'a.js', line: 1, body: `${i}`.repeat(60 * 1024)
+  }));
+  const failSecond = (fileOf, entry) => {
+    let call = 0;
+    return async (cmd, args, opts) => {
+      if (++call === 2) return { code: 1, stdout: '', stderr: 'model crashed' };
+      const ids = [...opts.input.matchAll(/"id": "(review_comment:\d+)"/g)].map(m => m[1]);
+      fs.writeFileSync(fileOf(opts.input), JSON.stringify(entry(ids)));
+      return { code: 0, stdout: '', stderr: '' };
+    };
+  };
+
+  const triage = await runTriage({
+    engine: 'opencode', model: 'm', cwd: '/w', pr, comments: big, diff: '', outputFile: path.join(dir, 'triage.json'),
+    runner: failSecond(input => input.match(/only output that is read\): (\S+)/)[1],
+      ids => ({ comments: ids.map(id => ({ id, action: 'fix', reasoning: 'ok' })) }))
+  });
+  assert.equal(triage.ok, true);
+  assert.deepEqual(triage.decisions.map(d => d.id), ['review_comment:200']);
+  assert.deepEqual(triage.batchFailures, [{ ids: ['review_comment:201'], infra: false, error: 'opencode exited with code 1: model crashed' }]);
+
+  const items = big.map(comment => ({ comment, decision: { action: 'fix', reasoning: 'r', plan: 'p' } }));
+  const implement = await runImplement({
+    engine: 'opencode', model: 'm', cwd: '/w', pr, items, reportFile: path.join(dir, 'implement.json'),
+    runner: failSecond(input => input.match(/write a JSON report to: (\S+)/)[1],
+      ids => ({ fixes: ids.map(id => ({ id, status: 'implemented', summary: 's' })) }))
+  });
+  assert.equal(implement.ok, true);
+  assert.deepEqual(implement.report.fixes.map(f => [f.id, f.status]), [['review_comment:200', 'implemented']]);
+  assert.deepEqual(implement.report.missing, []);
+  assert.deepEqual(implement.report.batchFailures.map(f => [f.ids, f.infra]), [[['review_comment:201'], false]]);
+
+  // When every batch fails, the whole call fails as before
+  const allFail = await runImplement({
+    engine: 'opencode', model: 'm', cwd: '/w', pr, items, reportFile: path.join(dir, 'implement.json'),
+    runner: async () => ({ code: 1, stdout: '', stderr: 'down' })
+  });
+  assert.equal(allFail.ok, false);
+  assert.match(allFail.error, /exited with code 1: down/);
 });
 
 test('large comment batches are split across engine calls, each under the size bound, covering every id', async () => {
@@ -409,4 +467,21 @@ test('killActiveEngines terminates running engine groups including grandchildren
   for (const pid of pids) {
     assert.throws(() => process.kill(pid, 0), /ESRCH/, `pid ${pid} is gone`);
   }
+});
+
+test('killActiveEngines still kills a background grandchild after its group leader exited', async () => {
+  const pidFile = path.join(tmpDir(), 'pid');
+  // The leader starts a same-group grandchild and exits right away
+  const script = `
+    const { spawn } = require('child_process');
+    const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(g.pid));
+    g.unref();`;
+  const result = await runProcess(process.execPath, ['-e', script]);
+  assert.equal(result.code, 0);
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.doesNotThrow(() => process.kill(pid, 0), 'grandchild outlives its leader');
+
+  await killActiveEngines({ graceMs: 300 });
+  assert.throws(() => process.kill(pid, 0), /ESRCH/, 'grandchild is gone');
 });

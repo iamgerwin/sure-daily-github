@@ -6,7 +6,10 @@ const KILL_GRACE_MS = 5000;
 const POLL_MS = 50;
 
 // Process groups (by leader pid) still running, so an interrupted run can kill
-// them: they are detached and would otherwise outlive this process
+// them: they are detached and would otherwise outlive this process. A group
+// stays registered after its leader exits while other members (a background
+// grandchild) are still alive; dead groups are pruned on every spawn and kill,
+// so the set never holds more than the groups that are actually alive.
 const activeGroups = new Set();
 
 function appendTail(buffer, chunk) {
@@ -31,6 +34,10 @@ function groupAlive(pid) {
   }
 }
 
+function pruneGroups() {
+  for (const pid of activeGroups) if (!groupAlive(pid)) activeGroups.delete(pid);
+}
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // SIGTERM every active group, then SIGKILL whatever is still alive after the
@@ -44,6 +51,7 @@ export async function killActiveEngines({ graceMs = KILL_GRACE_MS } = {}) {
   groups.filter(groupAlive).forEach(pid => signalGroup(pid, 'SIGKILL'));
   const reapDeadline = Date.now() + 1000;
   while (groups.some(groupAlive) && Date.now() < reapDeadline) await sleep(POLL_MS);
+  pruneGroups();
 }
 
 // Spawns a command without a shell and resolves (never rejects) with
@@ -64,7 +72,8 @@ export function runProcess(cmd, args = [], { cwd, env = process.env, timeoutMs =
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      if (child?.pid) activeGroups.delete(child.pid);
+      // The leader is gone, but same-group members may live on
+      if (child?.pid && !groupAlive(child.pid)) activeGroups.delete(child.pid);
       resolve({ stdout, stderr, timedOut, signal: null, error: null, ...result });
     };
 
@@ -74,7 +83,10 @@ export function runProcess(cmd, args = [], { cwd, env = process.env, timeoutMs =
       finish({ code: null, error });
       return;
     }
-    if (detached && child.pid) activeGroups.add(child.pid);
+    if (detached && child.pid) {
+      pruneGroups();
+      activeGroups.add(child.pid);
+    }
 
     const kill = (signal) => {
       try {

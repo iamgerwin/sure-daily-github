@@ -284,8 +284,10 @@ export function parseTriage(raw, expectedIds) {
 }
 
 // The report decides which items settle: only ids with an explicit
-// "implemented" status count as fixed. Unknown ids, duplicates, and entries
-// without a valid status are dropped, so those items end up in `missing`.
+// "implemented" status count as fixed. Unknown ids and entries without a valid
+// status are dropped. An id listed again with the same status keeps its first
+// entry; an id listed with conflicting statuses breaks the report contract and
+// is dropped entirely. Dropped items end up in `missing` (never settled).
 // Returns null when the report is not a valid JSON object with a fixes array.
 export function parseImplementReport(raw, expectedIds) {
   let parsed;
@@ -297,11 +299,15 @@ export function parseImplementReport(raw, expectedIds) {
   if (!parsed || !Array.isArray(parsed.fixes)) return null;
 
   const expected = new Set(expectedIds);
+  const valid = parsed.fixes.filter(f =>
+    f && typeof f.id === 'string' && expected.has(f.id) && IMPLEMENT_STATUSES.includes(f.status));
+  const conflicting = new Set(valid
+    .filter(f => valid.some(other => other.id === f.id && other.status !== f.status))
+    .map(f => f.id));
   const seen = new Set();
   const fixes = [];
-  for (const f of parsed.fixes) {
-    if (!f || typeof f.id !== 'string' || !expected.has(f.id) || seen.has(f.id)) continue;
-    if (!IMPLEMENT_STATUSES.includes(f.status)) continue;
+  for (const f of valid) {
+    if (seen.has(f.id) || conflicting.has(f.id)) continue;
     seen.add(f.id);
     fixes.push({
       id: f.id,
@@ -314,7 +320,7 @@ export function parseImplementReport(raw, expectedIds) {
         : []
     });
   }
-  return { fixes, missing: expectedIds.filter(id => !seen.has(id)) };
+  return { fixes, missing: expectedIds.filter(id => !seen.has(id)), conflicting: [...conflicting] };
 }
 
 function readFileOrNull(filePath) {
@@ -327,58 +333,84 @@ function readFileOrNull(filePath) {
 
 const commentSize = (c) => (c.body || '').length + (c.diffHunk || '').length;
 
-// One engine call per batch. Any failing batch fails the whole triage; `infra`
-// marks failures where the engine could not be started at all.
+// A failed batch only affects its own items: they are listed in
+// `batchFailures` ({ ids, infra, error }) while the other batches' results
+// are kept. Only when every batch fails is the whole call a failure.
+function settleBatches(failures, batchCount, result) {
+  if (failures.length === batchCount) {
+    return { ok: false, infra: failures.every(f => f.infra), error: failures[0].error };
+  }
+  return { ok: true, ...result, batchFailures: failures };
+}
+
+// One engine call per batch. `infra` marks failures where the engine could
+// not be started at all.
 export async function runTriage({ engine, model, cwd, pr, comments, diff, outputFile, timeoutMs, env, runner }) {
   const decisions = [];
   const missing = [];
+  const failures = [];
   const batches = batchBySize(comments, commentSize);
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
+    const ids = batch.map(c => c.id);
     const file = batchFile(outputFile, i);
     fs.rmSync(file, { force: true });
     const prompt = buildTriagePrompt({ pr, comments: batch, diff, outputFile: file });
     const result = await runEngine(engine, model, { cwd, prompt, timeoutMs, env, runner });
     if (result.timedOut || result.error || result.code !== 0) {
-      return { ok: false, infra: result.infra, error: describeEngineFailure(engine, result) };
+      failures.push({ ids, infra: result.infra, error: describeEngineFailure(engine, result) });
+      continue;
     }
 
     const raw = readFileOrNull(file);
     if (raw === null) {
-      return { ok: false, error: `${engine} did not write the triage file` };
+      failures.push({ ids, infra: false, error: `${engine} did not write the triage file` });
+      continue;
     }
-    const parsed = parseTriage(raw, batch.map(c => c.id));
-    if (!parsed.ok) return parsed;
+    const parsed = parseTriage(raw, ids);
+    if (!parsed.ok) {
+      failures.push({ ids, infra: false, error: parsed.error });
+      continue;
+    }
     decisions.push(...parsed.decisions);
     missing.push(...parsed.missing);
   }
-  return { ok: true, decisions, missing };
+  return settleBatches(failures, batches.length, { decisions, missing });
 }
 
 // A missing or unreadable report is an infrastructure failure: nothing can be
-// attributed to any item, so none is settled or charged an attempt
+// attributed to the batch's items, so none is settled or charged an attempt.
+// Edits a failed batch left behind go through the same test gate as the rest.
 export async function runImplement({ engine, model, cwd, pr, items, reportFile, timeoutMs, env, runner }) {
   const fixes = [];
   const missing = [];
+  const conflicting = [];
+  const failures = [];
   const batches = batchBySize(items, ({ comment }) => commentSize(comment));
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
+    const ids = batch.map(({ comment }) => comment.id);
     const file = batchFile(reportFile, i);
     fs.rmSync(file, { force: true });
     const prompt = buildImplementPrompt({ pr, items: batch, reportFile: file });
     const result = await runEngine(engine, model, { cwd, prompt, timeoutMs, env, runner });
     if (result.timedOut || result.error || result.code !== 0) {
-      return { ok: false, infra: result.infra, error: describeEngineFailure(engine, result) };
+      failures.push({ ids, infra: result.infra, error: describeEngineFailure(engine, result) });
+      continue;
     }
     const raw = readFileOrNull(file);
-    const report = raw === null ? null : parseImplementReport(raw, batch.map(({ comment }) => comment.id));
+    const report = raw === null ? null : parseImplementReport(raw, ids);
     if (!report) {
-      return { ok: false, infra: true, error: `${engine} did not write a valid implement report` };
+      failures.push({ ids, infra: true, error: `${engine} did not write a valid implement report` });
+      continue;
     }
     fixes.push(...report.fixes);
     missing.push(...report.missing);
+    conflicting.push(...report.conflicting);
   }
-  return { ok: true, report: { fixes, missing } };
+  const { batchFailures, ...rest } = settleBatches(failures, batches.length, {});
+  if (!rest.ok) return rest;
+  return { ok: true, report: { fixes, missing, conflicting, batchFailures } };
 }
 
 // The engine object the babysitter consumes; tests inject their own
