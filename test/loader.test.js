@@ -232,6 +232,67 @@ test('validate rejects duplicate repositories, ignoring case', () => {
   );
 });
 
+test('validate defaults the babysit block when it is absent', () => {
+  const cfg = config.validate({ repositories: [baseRepo] });
+  assert.deepEqual(cfg.babysit, {
+    enabled: false,
+    label: 'babysit',
+    engine: 'opencode',
+    model: 'openai/gpt-6.1-sol',
+    ownPRsOnly: true,
+    maxPrsPerRun: 5,
+    testTimeoutMinutes: 15,
+    engineTimeoutMinutes: 30
+  });
+  assert.equal(cfg.repositories[0].testCommand, null);
+});
+
+test('validate keeps configured babysit settings and fills in the rest', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, testCommand: 'npm ci && npm test' }],
+    babysit: { enabled: true, label: 'watch-me', engine: 'claude', model: 'opus', ownPRsOnly: false, maxPrsPerRun: 2 }
+  });
+  assert.equal(cfg.babysit.enabled, true);
+  assert.equal(cfg.babysit.label, 'watch-me');
+  assert.equal(cfg.babysit.engine, 'claude');
+  assert.equal(cfg.babysit.model, 'opus');
+  assert.equal(cfg.babysit.ownPRsOnly, false);
+  assert.equal(cfg.babysit.maxPrsPerRun, 2);
+  assert.equal(cfg.babysit.testTimeoutMinutes, 15);
+  assert.equal(cfg.repositories[0].testCommand, 'npm ci && npm test');
+});
+
+test('validate rejects invalid babysit settings', () => {
+  const cases = [
+    [[], /babysit must be a mapping/],
+    [{ enabled: 'yes' }, /babysit\.enabled must be true or false/],
+    [{ ownPRsOnly: 1 }, /babysit\.ownPRsOnly must be true or false/],
+    [{ label: '' }, /babysit\.label must be a non-empty string/],
+    [{ engine: 'gpt' }, /babysit\.engine must be one of: opencode, claude/],
+    [{ model: '' }, /babysit\.model must be a non-empty string/],
+    [{ model: '--dangerously-skip-permissions' }, /babysit\.model must be a non-empty string not starting with "-"/],
+    [{ maxPrsPerRun: 0 }, /babysit\.maxPrsPerRun must be a positive whole number/],
+    [{ testTimeoutMinutes: 1.5 }, /babysit\.testTimeoutMinutes must be a positive whole number/],
+    [{ engineTimeoutMinutes: '30' }, /babysit\.engineTimeoutMinutes must be a positive whole number/]
+  ];
+  for (const [babysit, pattern] of cases) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], babysit }),
+      pattern,
+      `${JSON.stringify(babysit)} should be rejected`
+    );
+  }
+});
+
+test('validate rejects an empty or non-string repository testCommand', () => {
+  for (const testCommand of ['', '  ', 42, ['npm', 'test']]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, testCommand }] }),
+      /Repository 0: testCommand must be a non-empty string/
+    );
+  }
+});
+
 test('validate accepts the same repo name under different owners', () => {
   const cfg = config.validate({ repositories: [baseRepo, { owner: 'other', repo: 'demo' }] });
   assert.equal(cfg.repositories.length, 2);

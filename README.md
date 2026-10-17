@@ -115,8 +115,20 @@ sure-daily-github validate          # Validate configuration file
 sure-daily-github run [--dry-run]   # Run once (manual trigger)
 sure-daily-github start             # Start scheduler (daemon mode)
 sure-daily-github status            # Check repository status
+sure-daily-github babysit [--dry-run] [--repo owner/repo] [--pr N]
+                                    # Address review comments on PRs labeled "babysit"
 sure-daily-github --help            # Show all commands
 ```
+
+### Babysit
+
+`babysit` scans open PRs that carry the `babysit` label and handles each
+review comment: it triages the comment with an AI engine (`opencode` or
+`claude`), pushes fixes that pass the tests as a fast-forward of the PR
+branch, and replies on every thread. Bot reviewers are tagged back for a
+re-review. It never merges. Configure it in the `babysit:` block; set
+`babysit.enabled: true` to also run it on the scheduler. See
+[docs/BABYSIT.md](./docs/BABYSIT.md).
 
 ## VPS Deployment
 

@@ -172,6 +172,73 @@ class GitHubClient {
     }
   }
 
+  // Shared { success, data } / { success: false, error } wrapper for babysit calls
+  async call(action, meta, fn) {
+    try {
+      return { success: true, data: await fn() };
+    } catch (error) {
+      logger.error(`Failed to ${action}`, { ...meta, error: error.message });
+      return { success: false, error: error.message, status: error.status };
+    }
+  }
+
+  async getAuthenticatedUser() {
+    return this.call('get authenticated user', {}, async () => {
+      const { data } = await this.octokit.rest.users.getAuthenticated();
+      return { login: data.login, id: data.id };
+    });
+  }
+
+  // The issues API filters by label server-side; pull requests are the issues
+  // that carry a `pull_request` key
+  async listLabeledPullRequests(owner, repo, label) {
+    return this.call('list labeled pull requests', { owner, repo, label }, async () => {
+      const issues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
+        owner, repo, state: 'open', labels: label, per_page: 100
+      });
+      return issues.filter(issue => issue.pull_request);
+    });
+  }
+
+  async getPullRequest(owner, repo, number) {
+    return this.call('get pull request', { owner, repo, number }, async () => {
+      const { data } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: number });
+      return data;
+    });
+  }
+
+  async listReviewComments(owner, repo, number) {
+    return this.call('list review comments', { owner, repo, number }, () =>
+      this.octokit.paginate(this.octokit.rest.pulls.listReviewComments, { owner, repo, pull_number: number, per_page: 100 }));
+  }
+
+  async listReviews(owner, repo, number) {
+    return this.call('list reviews', { owner, repo, number }, () =>
+      this.octokit.paginate(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }));
+  }
+
+  async listIssueComments(owner, repo, number) {
+    return this.call('list issue comments', { owner, repo, number }, () =>
+      this.octokit.paginate(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }));
+  }
+
+  // GitHub only accepts replies to the top-level comment of a review thread
+  async replyToReviewComment(owner, repo, number, commentId, body) {
+    return this.call('reply to review comment', { owner, repo, number, commentId }, async () => {
+      const { data } = await this.octokit.rest.pulls.createReplyForReviewComment({
+        owner, repo, pull_number: number, comment_id: commentId, body
+      });
+      return data;
+    });
+  }
+
+  async createIssueComment(owner, repo, number, body) {
+    return this.call('create issue comment', { owner, repo, number }, async () => {
+      const { data } = await this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body });
+      return data;
+    });
+  }
+
   async getRateLimit() {
     try {
       const { data } = await this.octokit.rest.rateLimit.get();

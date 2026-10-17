@@ -26,6 +26,57 @@ function stubClient({ getContent } = {}) {
   return { client, calls };
 }
 
+test('listLabeledPullRequests filters open issues by label and keeps only pull requests', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  const listForRepo = () => {};
+  client.octokit = {
+    rest: { issues: { listForRepo } },
+    paginate: async (method, params) => {
+      calls.push({ method, params });
+      return [
+        { number: 1, title: 'plain issue' },
+        { number: 2, title: 'a PR', pull_request: { url: 'x' } }
+      ];
+    }
+  };
+
+  const result = await client.listLabeledPullRequests('me', 'demo', 'babysit');
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.map(i => i.number), [2]);
+  assert.equal(calls[0].method, listForRepo);
+  assert.deepEqual(calls[0].params, { owner: 'me', repo: 'demo', state: 'open', labels: 'babysit', per_page: 100 });
+});
+
+test('replyToReviewComment posts a thread reply and reports API errors without throwing', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  client.octokit = {
+    rest: {
+      pulls: {
+        createReplyForReviewComment: async (params) => {
+          calls.push(params);
+          if (params.comment_id === 404) {
+            const error = new Error('Not Found');
+            error.status = 404;
+            throw error;
+          }
+          return { data: { id: 77 } };
+        }
+      }
+    }
+  };
+
+  const ok = await client.replyToReviewComment('me', 'demo', 7, 11, 'Fixed');
+  assert.deepEqual(ok, { success: true, data: { id: 77 } });
+  assert.deepEqual(calls[0], { owner: 'me', repo: 'demo', pull_number: 7, comment_id: 11, body: 'Fixed' });
+
+  const failed = await client.replyToReviewComment('me', 'demo', 7, 404, 'Fixed');
+  assert.equal(failed.success, false);
+  assert.equal(failed.status, 404);
+  assert.match(failed.error, /Not Found/);
+});
+
 test('normalizeRepoPath collapses leading, trailing, and doubled slashes', () => {
   assert.equal(normalizeRepoPath('daily-updates/2026-10-15-1.md'), 'daily-updates/2026-10-15-1.md');
   assert.equal(normalizeRepoPath('daily-updates//2026-10-15-1.md'), 'daily-updates/2026-10-15-1.md');

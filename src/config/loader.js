@@ -42,6 +42,50 @@ function validateDailyTarget(target, label, errors) {
   }
 }
 
+export const BABYSIT_ENGINES = ['opencode', 'claude'];
+
+export const BABYSIT_DEFAULTS = {
+  enabled: false,
+  label: 'babysit',
+  engine: 'opencode',
+  model: 'openai/gpt-6.1-sol',
+  ownPRsOnly: true,
+  maxPrsPerRun: 5,
+  testTimeoutMinutes: 15,
+  engineTimeoutMinutes: 30
+};
+
+const isPositiveInt = (value) => Number.isInteger(value) && value >= 1;
+const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+
+function validateBabysit(babysit, errors) {
+  if (babysit === undefined || babysit === null) return;
+  if (typeof babysit !== 'object' || Array.isArray(babysit)) {
+    errors.push('babysit must be a mapping');
+    return;
+  }
+  for (const key of ['enabled', 'ownPRsOnly']) {
+    if (babysit[key] !== undefined && typeof babysit[key] !== 'boolean') {
+      errors.push(`babysit.${key} must be true or false`);
+    }
+  }
+  if (babysit.label !== undefined && !isNonEmptyString(babysit.label)) {
+    errors.push('babysit.label must be a non-empty string');
+  }
+  if (babysit.engine !== undefined && !BABYSIT_ENGINES.includes(babysit.engine)) {
+    errors.push(`babysit.engine must be one of: ${BABYSIT_ENGINES.join(', ')}`);
+  }
+  // The model is passed as a CLI argument, so a leading dash would be read as a flag
+  if (babysit.model !== undefined && (!isNonEmptyString(babysit.model) || babysit.model.startsWith('-'))) {
+    errors.push('babysit.model must be a non-empty string not starting with "-"');
+  }
+  for (const key of ['maxPrsPerRun', 'testTimeoutMinutes', 'engineTimeoutMinutes']) {
+    if (babysit[key] !== undefined && !isPositiveInt(babysit[key])) {
+      errors.push(`babysit.${key} must be a positive whole number`);
+    }
+  }
+}
+
 class ConfigLoader {
   constructor() {
     this.config = null;
@@ -186,6 +230,8 @@ class ConfigLoader {
       }
     }
 
+    validateBabysit(config.babysit, errors);
+
     if (config.contentTemplates !== undefined && !Array.isArray(config.contentTemplates)) {
       errors.push('contentTemplates must be an array');
     }
@@ -303,7 +349,7 @@ class ConfigLoader {
           weight: repo.weight || 1,
           // Consumed by AdvancedIssueHandler to space issues out across the day
           intervalMinutes: repo.intervalMinutes || null,
-          // Consumed by fix-conflicts; overrides test command detection
+          // Consumed by fix-conflicts and babysit; overrides test command detection
           testCommand: repo.testCommand || null,
           // Per-repo fix-conflicts opt in/out; null defers to the lists
           conflictFixer: typeof repo.conflictFixer === 'boolean' ? repo.conflictFixer : null
@@ -320,6 +366,7 @@ class ConfigLoader {
         allowlist: conflictFixer.allowlist ?? [],
         denylist: conflictFixer.denylist ?? []
       },
+      babysit: { ...BABYSIT_DEFAULTS, ...(config.babysit || {}) },
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
         body: 'Progress update for ${date}'
