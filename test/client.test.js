@@ -94,3 +94,36 @@ test('createOrUpdateFile targets the configured branch for both lookup and write
   assert.equal(calls.getContent[0].ref, 'master');
   assert.equal(calls.put[0].branch, 'master');
 });
+
+test('listOpenPullRequests follows GraphQL pagination', async () => {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  const pages = [
+    { nodes: [{ number: 1, mergeable: 'CONFLICTING' }], pageInfo: { hasNextPage: true, endCursor: 'c1' } },
+    { nodes: [{ number: 2, mergeable: 'MERGEABLE' }], pageInfo: { hasNextPage: false, endCursor: 'c2' } }
+  ];
+  client.octokit = {
+    graphql: async (query, variables) => {
+      calls.push(variables);
+      return { repository: { pullRequests: pages[calls.length - 1] } };
+    }
+  };
+
+  const result = await client.listOpenPullRequests('me', 'demo');
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.map(pr => pr.number), [1, 2]);
+  assert.deepEqual(calls, [
+    { owner: 'me', repo: 'demo', cursor: null },
+    { owner: 'me', repo: 'demo', cursor: 'c1' }
+  ]);
+});
+
+test('listOpenPullRequests reports API failures', async () => {
+  const client = new GitHubClient('ghp_test');
+  client.octokit = { graphql: async () => { throw new Error('Could not resolve to a Repository'); } };
+
+  const result = await client.listOpenPullRequests('me', 'missing');
+
+  assert.deepEqual(result, { success: false, error: 'Could not resolve to a Repository' });
+});

@@ -142,7 +142,26 @@ class ConfigLoader {
           && (typeof repo.weight !== 'number' || !Number.isFinite(repo.weight) || repo.weight <= 0)) {
           errors.push(`Repository ${idx}: weight must be a positive number`);
         }
+        if (repo.testCommand !== undefined && repo.testCommand !== null
+          && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
+          errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
+        }
       });
+    }
+
+    // Used by fix-conflicts; validated up front so a bad value fails `validate`
+    const conflictFixer = config.conflictFixer ?? {};
+    if (typeof conflictFixer !== 'object' || Array.isArray(conflictFixer)) {
+      errors.push('conflictFixer must be a mapping');
+    } else {
+      const { testTimeoutMinutes, installDeps } = conflictFixer;
+      if (testTimeoutMinutes !== undefined && testTimeoutMinutes !== null
+        && (!Number.isInteger(testTimeoutMinutes) || testTimeoutMinutes < 1)) {
+        errors.push('conflictFixer.testTimeoutMinutes must be a positive whole number');
+      }
+      if (installDeps !== undefined && installDeps !== null && typeof installDeps !== 'boolean') {
+        errors.push('conflictFixer.installDeps must be true or false');
+      }
     }
 
     if (config.contentTemplates !== undefined && !Array.isArray(config.contentTemplates)) {
@@ -261,9 +280,15 @@ class ConfigLoader {
           labels: repo.labels || ['automated'],
           weight: repo.weight || 1,
           // Consumed by AdvancedIssueHandler to space issues out across the day
-          intervalMinutes: repo.intervalMinutes || null
+          intervalMinutes: repo.intervalMinutes || null,
+          // Consumed by fix-conflicts; overrides test command detection
+          testCommand: repo.testCommand || null
         };
       }),
+      conflictFixer: {
+        testTimeoutMinutes: conflictFixer.testTimeoutMinutes ?? 15,
+        installDeps: conflictFixer.installDeps ?? true
+      },
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
         body: 'Progress update for ${date}'

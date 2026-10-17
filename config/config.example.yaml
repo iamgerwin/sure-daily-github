@@ -81,6 +81,18 @@ schedule:
   # 0 9,17 * * *     - Twice daily (9 AM and 5 PM)
 
 # ========================================
+# Conflict Fixer (Optional)
+# ========================================
+# Used by `sure-daily-github fix-conflicts`: merges the base branch into every
+# open PR with merge conflicts, keeps the newer change per conflicting hunk,
+# and pushes only if the repository's tests pass. Anything else is reported
+# as needs-manual-review. Long test runs share the run lock, so raise
+# SDG_RUN_LOCK_STALE_MS if a full pass can exceed 2 hours.
+# conflictFixer:
+#   testTimeoutMinutes: 15   # Per install/test command
+#   installDeps: true        # Run "npm ci" first when package-lock.json exists
+
+# ========================================
 # Repositories
 # ========================================
 repositories:
@@ -94,6 +106,7 @@ repositories:
     commitMessage: "docs: daily update ${date}"
     labels: ["automated"]  # For issue mode
     weight: 1              # For weighted selection
+    # testCommand: "npm run test:unit"  # fix-conflicts: overrides test detection
 
   # Example with range-based target
   # - owner: "yourusername"

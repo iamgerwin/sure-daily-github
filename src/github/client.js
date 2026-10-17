@@ -14,6 +14,25 @@ export function normalizeRepoPath(filePath) {
   return segments.join('/');
 }
 
+const OPEN_PULL_REQUESTS_QUERY = `
+  query ($owner: String!, $repo: String!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequests(states: OPEN, first: 100, after: $cursor) {
+        nodes {
+          number
+          headRefName
+          headRefOid
+          baseRefName
+          isCrossRepository
+          mergeable
+          mergeStateStatus
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
 class GitHubClient {
   constructor(token) {
     if (!token) {
@@ -34,7 +53,7 @@ class GitHubClient {
       const { data } = await this.octokit.rest.users.getAuthenticated();
       this.authenticated = true;
       logger.info('GitHub authentication successful', { user: data.login });
-      return { success: true, user: data.login };
+      return { success: true, user: data.login, id: data.id };
     } catch (error) {
       logger.error('GitHub authentication failed', { error: error.message });
       return { success: false, error: error.message };
@@ -125,6 +144,25 @@ class GitHubClient {
         path,
         error: error.message
       });
+      return { success: false, error: error.message };
+    }
+  }
+
+  // REST pull listings omit mergeability, which would cost one extra request
+  // per PR; GraphQL returns it for a whole page at once
+  async listOpenPullRequests(owner, repo) {
+    try {
+      const pulls = [];
+      let cursor = null;
+      do {
+        const data = await this.octokit.graphql(OPEN_PULL_REQUESTS_QUERY, { owner, repo, cursor });
+        const page = data.repository.pullRequests;
+        pulls.push(...page.nodes);
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+      } while (cursor);
+      return { success: true, data: pulls };
+    } catch (error) {
+      logger.error('Failed to list pull requests', { owner, repo, error: error.message });
       return { success: false, error: error.message };
     }
   }

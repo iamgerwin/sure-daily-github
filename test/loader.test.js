@@ -236,3 +236,34 @@ test('validate accepts the same repo name under different owners', () => {
   const cfg = config.validate({ repositories: [baseRepo, { owner: 'other', repo: 'demo' }] });
   assert.equal(cfg.repositories.length, 2);
 });
+
+test('validate passes testCommand through and defaults conflictFixer', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, testCommand: 'npm run test:unit' }, { owner: 'me', repo: 'other' }] });
+  assert.equal(cfg.repositories[0].testCommand, 'npm run test:unit');
+  assert.equal(cfg.repositories[1].testCommand, null);
+  assert.deepEqual(cfg.conflictFixer, { testTimeoutMinutes: 15, installDeps: true });
+});
+
+test('validate keeps configured conflictFixer settings', () => {
+  const cfg = config.validate({ repositories: [baseRepo], conflictFixer: { testTimeoutMinutes: 30, installDeps: false } });
+  assert.deepEqual(cfg.conflictFixer, { testTimeoutMinutes: 30, installDeps: false });
+});
+
+test('validate rejects invalid conflictFixer and testCommand values', () => {
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, testCommand: '  ' }] }),
+    /Repository 0: testCommand must be a non-empty string/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { testTimeoutMinutes: 0 } }),
+    /conflictFixer.testTimeoutMinutes must be a positive whole number/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { installDeps: 'yes' } }),
+    /conflictFixer.installDeps must be true or false/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: ['x'] }),
+    /conflictFixer must be a mapping/
+  );
+});
