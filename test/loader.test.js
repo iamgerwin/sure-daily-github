@@ -246,14 +246,17 @@ test('validate passes testCommand through and defaults conflictFixer', () => {
     installDeps: true,
     scanTimeoutSeconds: 120,
     attemptTtlMinutes: 60,
-    retryCooldownMinutes: 240
+    retryCooldownMinutes: 240,
+    mode: 'allowlist',
+    allowlist: [],
+    denylist: []
   });
 });
 
 test('validate keeps configured conflictFixer settings', () => {
   const settings = { testTimeoutMinutes: 30, installDeps: false, scanTimeoutSeconds: 45, attemptTtlMinutes: 10, retryCooldownMinutes: 20 };
   const cfg = config.validate({ repositories: [baseRepo], conflictFixer: settings });
-  assert.deepEqual(cfg.conflictFixer, settings);
+  assert.deepEqual(cfg.conflictFixer, { ...settings, mode: 'allowlist', allowlist: [], denylist: [] });
 });
 
 test('validate rejects invalid conflictFixer and testCommand values', () => {
@@ -281,4 +284,37 @@ test('validate rejects invalid conflictFixer and testCommand values', () => {
       );
     }
   }
+});
+
+test('validate normalizes repo gating settings', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, conflictFixer: false }, { owner: 'me', repo: 'other' }],
+    conflictFixer: { mode: 'denylist', allowlist: ['me/demo'], denylist: ['Me/Legacy.repo'] }
+  });
+  assert.equal(cfg.repositories[0].conflictFixer, false);
+  assert.equal(cfg.repositories[1].conflictFixer, null);
+  assert.equal(cfg.conflictFixer.mode, 'denylist');
+  assert.deepEqual(cfg.conflictFixer.allowlist, ['me/demo']);
+  assert.deepEqual(cfg.conflictFixer.denylist, ['Me/Legacy.repo']);
+});
+
+test('validate rejects invalid repo gating settings', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { mode: 'everything' } }),
+    /conflictFixer.mode must be one of: allowlist, denylist, all/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], conflictFixer: { allowlist: 'me/demo' } }),
+    /conflictFixer.allowlist must be a list of "owner\/repo" strings/
+  );
+  for (const entry of ['demo', 'me/', '/demo', 'me/de mo', 'me/demo/x', 42]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], conflictFixer: { denylist: ['me/ok', entry] } }),
+      /conflictFixer.denylist\[1\] must be an "owner\/repo" string/
+    );
+  }
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, conflictFixer: 'yes' }] }),
+    /Repository 0: conflictFixer must be true or false/
+  );
 });

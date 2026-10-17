@@ -46,6 +46,21 @@ export function selectRepositories(repositories = [], filters = []) {
   });
 }
 
+// Opt-in gate: returns the skip reason for a repository, or null if allowed.
+// With no configuration the allowlist is empty, so nothing is ever fixed.
+export function gateReason(repoConfig, conflictFixer = {}) {
+  if (repoConfig.conflictFixer === false) return 'disabled-per-repo';
+  if (repoConfig.conflictFixer === true) return null;
+
+  const name = `${repoConfig.owner}/${repoConfig.repo}`.toLowerCase();
+  const listed = (list) => (list || []).some(entry => String(entry).toLowerCase() === name);
+  if (listed(conflictFixer?.denylist)) return 'denylisted';
+  if ((conflictFixer?.mode ?? 'allowlist') === 'allowlist' && !listed(conflictFixer?.allowlist)) {
+    return 'not-allowlisted';
+  }
+  return null;
+}
+
 export function summarize(results) {
   return {
     total: results.length,
@@ -188,12 +203,22 @@ class ConflictFixer {
 
       logger.info('Starting conflict fixer', { repositories: repositories.length, dryRun, scanOnly, scanBudgetSeconds });
 
+      // Gated-out repositories are never listed, so they cost no API calls
+      const gates = new Map(repositories.map(r => [r, gateReason(r, cfg.conflictFixer)]));
+      const allowed = repositories.filter(r => !gates.get(r));
+
       // The budget covers only gathering; collected PRs are always processed
-      const scanned = await this.gather(repositories, this.now() + scanBudgetSeconds * 1000);
+      const scanned = new Map((await this.gather(allowed, this.now() + scanBudgetSeconds * 1000))
+        .map(entry => [entry.repoConfig, entry]));
 
       const results = [];
-      for (const { repoConfig, success, timedOut, data, error } of scanned) {
+      for (const repoConfig of repositories) {
         const { owner, repo } = repoConfig;
+        if (gates.get(repoConfig)) {
+          results.push({ owner, repo, status: 'skipped', success: true, skipped: true, reason: gates.get(repoConfig) });
+          continue;
+        }
+        const { success, timedOut, data, error } = scanned.get(repoConfig);
         if (timedOut) {
           results.push({ owner, repo, status: 'scan-timeout', success: true, skipped: true, reason: 'scan budget exhausted' });
           continue;

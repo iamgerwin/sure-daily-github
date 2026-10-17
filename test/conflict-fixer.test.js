@@ -9,7 +9,7 @@ process.env.SDG_RUN_LOCK_FILE = path.join(lockDir, 'run.lock');
 process.env.SDG_CONFLICT_FIXER_STATE_FILE = path.join(lockDir, 'conflict-fixer-state.json');
 
 const {
-  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout
+  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout, gateReason
 } = await import('../src/core/conflict-fixer.js');
 const { FixerLedger, ledgerKey } = await import('../src/utils/fixer-ledger.js');
 const { default: GitHubClient } = await import('../src/github/client.js');
@@ -102,7 +102,7 @@ function config(repoOverrides = {}) {
   return {
     general: { dryRun: false },
     repositories: [{ owner: 'me', repo: 'demo', enabled: true, testCommand: null, ...repoOverrides }],
-    conflictFixer: { testTimeoutMinutes: 1, installDeps: true }
+    conflictFixer: { testTimeoutMinutes: 1, installDeps: true, mode: 'all' }
   };
 }
 
@@ -442,7 +442,7 @@ function multiConfig(names, conflictFixer = {}) {
   return {
     general: { dryRun: false },
     repositories: names.map(repo => ({ owner: 'me', repo, enabled: true, testCommand: null })),
-    conflictFixer: { testTimeoutMinutes: 1, installDeps: true, ...conflictFixer }
+    conflictFixer: { testTimeoutMinutes: 1, installDeps: true, mode: 'all', ...conflictFixer }
   };
 }
 
@@ -532,4 +532,90 @@ test('invalid scan-timeout values are rejected', async (t) => {
   const result = await fixer.run(config(), { scanTimeoutSeconds: 0 });
   assert.equal(result.success, false);
   assert.match(result.error, /--scan-timeout/);
+});
+
+// --- Repo gate ---
+
+test('gateReason applies per-repo flag, denylist, then allowlist mode in order', () => {
+  const repo = (overrides = {}) => ({ owner: 'me', repo: 'api', conflictFixer: null, ...overrides });
+  const lists = { mode: 'allowlist', allowlist: ['me/api'], denylist: ['me/api'] };
+
+  assert.equal(gateReason(repo({ conflictFixer: false }), { mode: 'all' }), 'disabled-per-repo');
+  assert.equal(gateReason(repo({ conflictFixer: true }), lists), null);
+  assert.equal(gateReason(repo(), lists), 'denylisted');
+  assert.equal(gateReason(repo(), { mode: 'denylist', denylist: ['me/api'] }), 'denylisted');
+  assert.equal(gateReason(repo(), { mode: 'allowlist', allowlist: ['me/other'] }), 'not-allowlisted');
+  assert.equal(gateReason(repo(), { mode: 'allowlist', allowlist: ['me/api'] }), null);
+  assert.equal(gateReason(repo(), { mode: 'denylist', denylist: ['me/other'] }), null);
+  assert.equal(gateReason(repo(), { mode: 'all' }), null);
+});
+
+test('gateReason skips everything when the conflictFixer block is absent', () => {
+  assert.equal(gateReason({ owner: 'me', repo: 'api' }), 'not-allowlisted');
+  assert.equal(gateReason({ owner: 'me', repo: 'api' }, {}), 'not-allowlisted');
+  assert.equal(gateReason({ owner: 'me', repo: 'api' }, { allowlist: [] }), 'not-allowlisted');
+});
+
+test('gateReason matches list entries case-insensitively', () => {
+  assert.equal(gateReason({ owner: 'Me', repo: 'Api' }, { allowlist: ['me/API'] }), null);
+  assert.equal(gateReason({ owner: 'me', repo: 'api' }, { mode: 'all', denylist: ['ME/Api'] }), 'denylisted');
+});
+
+test('gated repositories are reported as skipped and never listed or cloned', async (t) => {
+  const fx = await fixture(t);
+  const clock = { now: 0 };
+  const client = timedClient(fx, clock, 0);
+  const { fixer } = makeFixer(fx, [], { client, git: async () => assert.fail('git must not run') });
+  const cfg = multiConfig(['a', 'b'], { mode: 'allowlist', allowlist: [] });
+
+  const result = await fixer.run(cfg);
+
+  assert.deepEqual(client.listed, []);
+  assert.deepEqual(result.results.map(r => [r.repo, r.status, r.reason]), [
+    ['a', 'skipped', 'not-allowlisted'],
+    ['b', 'skipped', 'not-allowlisted']
+  ]);
+  assert.equal(getRunExitCode(result), 0);
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+});
+
+test('--repo cannot bypass the gate, including in scan-only mode', async (t) => {
+  const fx = await fixture(t);
+  const clock = { now: 0 };
+  const client = timedClient(fx, clock, 0);
+  const { fixer } = makeFixer(fx, [], { client });
+  const cfg = multiConfig(['a', 'b'], { mode: 'denylist', denylist: ['me/a'] });
+
+  for (const scanOnly of [false, true]) {
+    const result = await fixer.run(cfg, { repos: ['me/a'], scanOnly });
+    assert.deepEqual(result.results.map(r => [r.repo, r.status, r.reason]), [['a', 'skipped', 'denylisted']]);
+  }
+  assert.deepEqual(client.listed, []);
+});
+
+test('scan-only lists allowed repos alongside gated-out rows', async (t) => {
+  const fx = await fixture(t);
+  const clock = { now: 0 };
+  const client = timedClient(fx, clock, 0);
+  const { fixer } = makeFixer(fx, [], { client });
+  const cfg = multiConfig(['a', 'b'], { mode: 'allowlist', allowlist: ['ME/A'] });
+
+  const result = await fixer.run(cfg, { scanOnly: true });
+
+  assert.deepEqual(result.results.map(r => [r.repo, r.status, r.reason]), [
+    ['a', 'conflicted', 'feature -> master'],
+    ['b', 'skipped', 'not-allowlisted']
+  ]);
+  assert.deepEqual(client.listed, ['a']);
+});
+
+test('a per-repo opt-in is fixed even when not allowlisted', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+  const cfg = config({ conflictFixer: true });
+  cfg.conflictFixer = { ...cfg.conflictFixer, mode: 'allowlist', allowlist: [], denylist: ['me/demo'] };
+
+  const result = await fixer.run(cfg);
+
+  assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
 });

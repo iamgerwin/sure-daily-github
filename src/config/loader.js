@@ -146,6 +146,9 @@ class ConfigLoader {
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
         }
+        if (repo.conflictFixer !== undefined && repo.conflictFixer !== null && typeof repo.conflictFixer !== 'boolean') {
+          errors.push(`Repository ${idx}: conflictFixer must be true or false`);
+        }
       });
     }
 
@@ -163,6 +166,23 @@ class ConfigLoader {
       const { installDeps } = conflictFixer;
       if (installDeps !== undefined && installDeps !== null && typeof installDeps !== 'boolean') {
         errors.push('conflictFixer.installDeps must be true or false');
+      }
+      const validFixerModes = ['allowlist', 'denylist', 'all'];
+      if (conflictFixer.mode !== undefined && conflictFixer.mode !== null && !validFixerModes.includes(conflictFixer.mode)) {
+        errors.push(`conflictFixer.mode must be one of: ${validFixerModes.join(', ')}`);
+      }
+      for (const field of ['allowlist', 'denylist']) {
+        const list = conflictFixer[field];
+        if (list === undefined || list === null) continue;
+        if (!Array.isArray(list)) {
+          errors.push(`conflictFixer.${field} must be a list of "owner/repo" strings`);
+          continue;
+        }
+        list.forEach((entry, i) => {
+          if (typeof entry !== 'string' || !/^[^\s/]+\/[^\s/]+$/.test(entry)) {
+            errors.push(`conflictFixer.${field}[${i}] must be an "owner/repo" string`);
+          }
+        });
       }
     }
 
@@ -284,7 +304,9 @@ class ConfigLoader {
           // Consumed by AdvancedIssueHandler to space issues out across the day
           intervalMinutes: repo.intervalMinutes || null,
           // Consumed by fix-conflicts; overrides test command detection
-          testCommand: repo.testCommand || null
+          testCommand: repo.testCommand || null,
+          // Per-repo fix-conflicts opt in/out; null defers to the lists
+          conflictFixer: typeof repo.conflictFixer === 'boolean' ? repo.conflictFixer : null
         };
       }),
       conflictFixer: {
@@ -292,7 +314,11 @@ class ConfigLoader {
         installDeps: conflictFixer.installDeps ?? true,
         scanTimeoutSeconds: conflictFixer.scanTimeoutSeconds ?? 120,
         attemptTtlMinutes: conflictFixer.attemptTtlMinutes ?? 60,
-        retryCooldownMinutes: conflictFixer.retryCooldownMinutes ?? 240
+        retryCooldownMinutes: conflictFixer.retryCooldownMinutes ?? 240,
+        // Opt-in by default: an empty allowlist means nothing is fixed
+        mode: conflictFixer.mode ?? 'allowlist',
+        allowlist: conflictFixer.allowlist ?? [],
+        denylist: conflictFixer.denylist ?? []
       },
       contentTemplate: config.contentTemplate || {
         title: 'Daily Update',
