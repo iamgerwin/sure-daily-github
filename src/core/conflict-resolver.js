@@ -111,40 +111,88 @@ export function isTestFile(file) {
   return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
 }
 
+// `text` with comments and single-line '...'/"..." strings blanked out, so a
+// test( mentioned there is not mistaken for a registration. Template literals
+// are left alone and an unclosed block comment stops the stripping, so a
+// misread keeps the text and fails closed.
+function stripCommentsAndStrings(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '/' && next === '/') {
+      const end = text.indexOf('\n', i);
+      i = end === -1 ? text.length : end;
+    } else if (ch === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) return out + text.slice(i);
+      out += text.slice(i, end + 2).replace(/[^\n]/g, ' ');
+      i = end + 2;
+    } else if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== ch && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
+      const end = Math.min(text[j] === ch ? j + 1 : j, text.length);
+      out += ' '.repeat(end - i);
+      i = end;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
 // Number of test registrations in `text`, or null when it cannot be told
 export function countTests(text) {
   const count = (text.match(TEST_CALL) || []).length;
-  return count === 0 && ANY_TEST_CALL.test(text) ? null : count;
+  return count === 0 && ANY_TEST_CALL.test(stripCommentsAndStrings(text)) ? null : count;
 }
 
 const indentOf = (line) => /^[ \t]*/.exec(line)[0].length;
 const isBlank = (line) => normalize(line).trim() === '';
 
+// Unescaped backticks on a line; an odd count opens or closes a template literal
+const backticks = (line) => (line.match(/(?<!\\)(?:\\\\)*`/g) || []).length;
+
+// Compared form of a block: blank lines at its edges are separator artifacts,
+// blank lines inside it (a template literal fixture, say) are content
+function blockKey(block) {
+  let start = 0;
+  let end = block.length;
+  while (start < end && isBlank(block[start])) start++;
+  while (end > start && isBlank(block[end - 1])) end--;
+  return block.slice(start, end).map(normalize).join('\n');
+}
+
 // Splits added lines into top-level blocks (a whole test(...) call with its
 // body and closing line). A block starts at a least-indented line that does not
-// close a bracket and takes the blank lines just before it.
+// close a bracket and is not inside a template literal, and takes the blank
+// lines just before it.
 function splitBlocks(lines) {
   const filled = lines.filter(line => !isBlank(line));
   const minIndent = Math.min(...filled.map(indentOf));
   const blocks = [];
   let blanks = [];
+  let inTemplate = false;
   for (const line of lines) {
-    if (isBlank(line)) {
+    if (isBlank(line) && !inTemplate) {
       blanks.push(line);
       continue;
     }
-    if (blocks.length === 0 || (indentOf(line) === minIndent && !/^[ \t]*[)\]}]/.test(line))) {
+    if (blocks.length === 0 || (!inTemplate && indentOf(line) === minIndent && !/^[ \t]*[)\]}]/.test(line))) {
       blocks.push([...blanks, line]);
     } else {
       blocks[blocks.length - 1].push(...blanks, line);
     }
     blanks = [];
+    if (backticks(line) % 2 === 1) inTemplate = !inTemplate;
   }
   if (blanks.length) {
     if (blocks.length) blocks[blocks.length - 1].push(...blanks);
     else blocks.push(blanks);
   }
-  return blocks.map(block => ({ lines: block, key: block.filter(line => !isBlank(line)).map(normalize).join('\n') }));
+  return blocks.map(block => ({ lines: block, key: blockKey(block) }));
 }
 
 // Merges two sides' additions to one slot: blocks both sides added identically

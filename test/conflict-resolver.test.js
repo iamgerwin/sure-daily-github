@@ -136,6 +136,20 @@ test('countTests returns null when tests are registered in a form it cannot coun
   assert.equal(countTests(''), 0);
 });
 
+test('countTests ignores test( mentioned only in comments or strings', () => {
+  const text = [
+    '// see test(...) in the suite below\n',
+    '/* it(\'a\') registrations\n',
+    '   live elsewhere: test( */\n',
+    "export const label = 'run test(x) first';\n",
+    'export const other = "it(";\n'
+  ].join('');
+  assert.equal(countTests(text), 0);
+  assert.equal(countTests("// helper\nexport default test('a', () => {});\n"), null);
+  assert.equal(countTests("const s = 'x'; export default test('a', () => {});\n"), null);
+  assert.equal(countTests("/* unclosed\nexport default test('a', () => {});\n"), null);
+});
+
 test('unionHunk keeps every added line from both sides, ours before theirs', () => {
   const union = unionHunk({
     base: [],
@@ -190,6 +204,37 @@ test('unionHunk escalates shared additions it cannot line up', () => {
     () => unionHunk({ base: [], ours: ["test('a');\n", "test('a');\n"], theirs: ["test('a');\n", "test('b');\n"] }),
     (error) => error instanceof ManualReviewError && /repeats on one side/.test(error.message)
   );
+});
+
+test('unionHunk keeps both fixtures that differ only by a blank line inside a template literal', () => {
+  const fixture = (body) => ["test('parses fixture', () => {\n", '  const input = `\n', ...body, '`;\n', '  assert.ok(parse(input));\n', '});\n'];
+  const oursFixture = fixture(['a: 1\n', '\n', 'b: 2\n']);
+  const theirsFixture = fixture(['a: 1\n', 'b: 2\n']);
+  const own = (name) => [`test('${name}', () => {});\n`];
+  const union = unionHunk({
+    base: [],
+    ours: [...oursFixture, '\n', ...own('ours')],
+    theirs: [...theirsFixture, '\n', ...own('theirs')]
+  });
+  assert.deepEqual(union, [...oursFixture, '\n', ...own('ours'), ...theirsFixture, '\n', ...own('theirs')]);
+
+  const indented = (body) => ["test('parses fixture', () => {\n", '  const input = `\n', ...body, '  `;\n', '});\n'];
+  const indentedUnion = unionHunk({
+    base: [],
+    ours: [...indented(['  a\n', '\n', '  b\n']), ...own('ours')],
+    theirs: [...indented(['  a\n', '  b\n']), ...own('theirs')]
+  });
+  assert.equal(indentedUnion.filter(line => line.startsWith("test('parses fixture'")).length, 2);
+});
+
+test('unionHunk still merges a shared block whose only difference is surrounding blank lines', () => {
+  const block = ["test('shared', () => {\n", '  const input = `\n', 'x\n', '\n', 'y\n', '`;\n', '});\n'];
+  const union = unionHunk({
+    base: [],
+    ours: [...block, '\n', "test('ours');\n"],
+    theirs: ['\n', '\n', ...block, '\n', "test('theirs');\n"]
+  });
+  assert.deepEqual(union, [...block, '\n', "test('ours');\n", '\n', "test('theirs');\n"]);
 });
 
 test('unionHunk returns null when a side modified or removed a base line', () => {
