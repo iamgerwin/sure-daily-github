@@ -308,6 +308,7 @@ test('validate passes testCommand through and defaults conflictFixer', () => {
     scanTimeoutSeconds: 120,
     attemptTtlMinutes: 60,
     retryCooldownMinutes: 240,
+    sourceHunks: 'push',
     mode: 'allowlist',
     allowlist: [],
     denylist: []
@@ -315,7 +316,9 @@ test('validate passes testCommand through and defaults conflictFixer', () => {
 });
 
 test('validate keeps configured conflictFixer settings', () => {
-  const settings = { testTimeoutMinutes: 30, installDeps: false, scanTimeoutSeconds: 45, attemptTtlMinutes: 10, retryCooldownMinutes: 20 };
+  const settings = {
+    testTimeoutMinutes: 30, installDeps: false, scanTimeoutSeconds: 45, attemptTtlMinutes: 10, retryCooldownMinutes: 20, sourceHunks: 'claude'
+  };
   const cfg = config.validate({ repositories: [baseRepo], conflictFixer: settings });
   assert.deepEqual(cfg.conflictFixer, { ...settings, mode: 'allowlist', allowlist: [], denylist: [] });
 });
@@ -344,6 +347,20 @@ test('validate rejects invalid conflictFixer and testCommand values', () => {
         new RegExp(`conflictFixer.${field} must be a positive whole number`)
       );
     }
+  }
+});
+
+test('validate accepts each sourceHunks strategy and rejects anything else', () => {
+  for (const sourceHunks of ['push', 'claude', 'escalate']) {
+    const cfg = config.validate({ repositories: [baseRepo], conflictFixer: { sourceHunks } });
+    assert.equal(cfg.conflictFixer.sourceHunks, sourceHunks);
+  }
+  assert.equal(config.validate({ repositories: [baseRepo], conflictFixer: { sourceHunks: null } }).conflictFixer.sourceHunks, 'push');
+  for (const sourceHunks of ['Push', 'newer', '', true, 1]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], conflictFixer: { sourceHunks } }),
+      /conflictFixer.sourceHunks must be one of: push, claude, escalate/
+    );
   }
 });
 

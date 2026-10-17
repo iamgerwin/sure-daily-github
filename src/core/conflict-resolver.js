@@ -12,10 +12,25 @@ const LEFTOVER_MARKER = /^(<{7}|\|{7}|={7}|>{7})( |\r?$)/m;
 const CONTEXT_LINES = 3;
 // Same window git uses to decide whether a blob is binary
 const BINARY_SNIFF_CHARS = 8000;
+// Conflicts in these files keep both sides instead of the newer one, so tests
+// added on the older side are never dropped
+const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.test\.js$/, /\.spec\.js$/];
+// A test(...) or it(...) registration at the start of a line: optionally
+// awaited, optionally on a receiver (t.test, suite.it), including .only/.skip/.todo
+const TEST_CALL = /^[ \t]*(?:await[ \t]+)?(?:[A-Za-z_$][\w$]*\.)?(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\(/gm;
+// Any test(...) or it(...) call, wherever it sits; seeing one when TEST_CALL
+// counts nothing means the file registers tests in a form we cannot count
+const ANY_TEST_CALL = /\b(?:test|it)\b(?:\.\w+)*[ \t]*\(/;
+export const SOURCE_HUNK_STRATEGIES = ['push', 'claude', 'escalate'];
 
 // Raised for anything the newer-wins rule must not guess at; the PR is then
-// left for a human instead of being pushed
-export class ManualReviewError extends Error {}
+// left for a human instead of being pushed. `file` names the path to escalate.
+export class ManualReviewError extends Error {
+  constructor(message, { file } = {}) {
+    super(message);
+    this.file = file;
+  }
+}
 
 export function splitLines(text) {
   return text === '' ? [] : text.split(/(?<=\n)/);
@@ -90,6 +105,186 @@ export function pickNewer(oursTime, theirsTime) {
 
 // A file's last line may lack the newline git adds before the next marker
 const normalize = (line) => line.replace(/\r?\n$/, '');
+const sameLines = (a, b) => a.length === b.length && a.every((line, i) => normalize(line) === normalize(b[i]));
+
+export function isTestFile(file) {
+  return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
+}
+
+const blankOut = (text) => text.replace(/[^\n]/g, ' ');
+
+// `text` with comments, '...'/"..." strings and the literal text of `...`
+// templates blanked out (newlines kept), so a test( mentioned there is inert
+// and not mistaken for a registration. ${...} inside a template is code and is
+// kept. An unclosed comment, string or template stops the stripping, so a
+// misread keeps the text and fails closed.
+function stripCommentsAndStrings(text) {
+  let out = '';
+  // Brace depth inside each open ${...}, innermost last
+  const interpolations = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '/' && next === '/') {
+      const newline = text.indexOf('\n', i);
+      const end = newline === -1 ? text.length : newline;
+      out += blankOut(text.slice(i, end));
+      i = end;
+    } else if (ch === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) return out + text.slice(i);
+      out += blankOut(text.slice(i, end + 2));
+      i = end + 2;
+    } else if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== ch && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
+      if (j >= text.length || text[j] !== ch) return out + text.slice(i);
+      out += blankOut(text.slice(i, j + 1));
+      i = j + 1;
+    } else if (ch === '`' || (ch === '}' && interpolations.at(-1) === 0)) {
+      // Opening a template, or closing a ${...} and resuming its template
+      if (ch === '}') interpolations.pop();
+      let j = i + 1;
+      while (j < text.length && text[j] !== '`' && !(text[j] === '$' && text[j + 1] === '{')) {
+        j += text[j] === '\\' ? 2 : 1;
+      }
+      if (j >= text.length) return out + text.slice(i);
+      if (text[j] === '`') {
+        out += blankOut(text.slice(i, j + 1));
+        i = j + 1;
+      } else {
+        out += blankOut(text.slice(i, j + 2));
+        interpolations.push(0);
+        i = j + 2;
+      }
+    } else {
+      if (interpolations.length && ch === '{') interpolations[interpolations.length - 1]++;
+      if (interpolations.length && ch === '}') interpolations[interpolations.length - 1]--;
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+// Number of test registrations in `text`, or null when it cannot be told
+export function countTests(text) {
+  const count = (text.match(TEST_CALL) || []).length;
+  return count === 0 && ANY_TEST_CALL.test(stripCommentsAndStrings(text)) ? null : count;
+}
+
+const indentOf = (line) => /^[ \t]*/.exec(line)[0].length;
+const isBlank = (line) => normalize(line).trim() === '';
+
+// Unescaped backticks on a line; an odd count opens or closes a template literal
+const backticks = (line) => (line.match(/(?<!\\)(?:\\\\)*`/g) || []).length;
+
+// Compared form of a block: blank lines at its edges are separator artifacts,
+// blank lines inside it (a template literal fixture, say) are content
+function blockKey(block) {
+  let start = 0;
+  let end = block.length;
+  while (start < end && isBlank(block[start])) start++;
+  while (end > start && isBlank(block[end - 1])) end--;
+  return block.slice(start, end).map(normalize).join('\n');
+}
+
+// Splits added lines into top-level blocks (a whole test(...) call with its
+// body and closing line). A block starts at a least-indented line that does not
+// close a bracket and is not inside a template literal, and takes the blank
+// lines just before it.
+function splitBlocks(lines) {
+  const filled = lines.filter(line => !isBlank(line));
+  const minIndent = Math.min(...filled.map(indentOf));
+  const blocks = [];
+  let blanks = [];
+  let inTemplate = false;
+  for (const line of lines) {
+    if (isBlank(line) && !inTemplate) {
+      blanks.push(line);
+      continue;
+    }
+    if (blocks.length === 0 || (!inTemplate && indentOf(line) === minIndent && !/^[ \t]*[)\]}]/.test(line))) {
+      blocks.push([...blanks, line]);
+    } else {
+      blocks[blocks.length - 1].push(...blanks, line);
+    }
+    blanks = [];
+    if (backticks(line) % 2 === 1) inTemplate = !inTemplate;
+  }
+  if (blanks.length) {
+    if (blocks.length) blocks[blocks.length - 1].push(...blanks);
+    else blocks.push(blanks);
+  }
+  return blocks.map(block => ({ lines: block, key: blockKey(block) }));
+}
+
+// Merges two sides' additions to one slot: blocks both sides added identically
+// appear once (ours' copy), everything else is kept with ours before theirs
+// between shared blocks. Throws when the shared blocks cannot be lined up.
+function mergeSlot(ours, theirs) {
+  if (sameLines(ours, theirs)) return [...ours];
+  if (ours.length === 0 || theirs.length === 0) return [...ours, ...theirs];
+
+  const oursBlocks = splitBlocks(ours);
+  const theirsBlocks = splitBlocks(theirs);
+  const tally = (blocks, key) => blocks.filter(block => block.key === key).length;
+  const shared = oursBlocks.filter(block => block.key !== '' && tally(theirsBlocks, block.key) > 0).map(block => block.key);
+  for (const key of shared) {
+    if (tally(oursBlocks, key) !== 1 || tally(theirsBlocks, key) !== 1) {
+      throw new ManualReviewError('shared addition repeats on one side, cannot line it up');
+    }
+  }
+  const theirsShared = theirsBlocks.filter(block => shared.includes(block.key)).map(block => block.key);
+  if (theirsShared.some((key, i) => key !== shared[i])) {
+    throw new ManualReviewError('shared additions appear in a different order on each side');
+  }
+
+  const lines = [];
+  let t = 0;
+  for (const block of oursBlocks) {
+    if (shared.includes(block.key)) {
+      while (theirsBlocks[t].key !== block.key) lines.push(...theirsBlocks[t++].lines);
+      t++;
+    }
+    lines.push(...block.lines);
+  }
+  while (t < theirsBlocks.length) lines.push(...theirsBlocks[t++].lines);
+  return lines;
+}
+
+// The lines `side` inserted around the base lines, grouped by slot (slot i sits
+// just before base line i), or null when the side changed or removed a base line
+export function additionsBySlot(base, side) {
+  const slots = Array.from({ length: base.length + 1 }, () => []);
+  let next = 0;
+  for (const line of side) {
+    if (next < base.length && normalize(line) === normalize(base[next])) {
+      next++;
+    } else {
+      slots[next].push(line);
+    }
+  }
+  return next === base.length ? slots : null;
+}
+
+// Union of a purely additive hunk: the base lines stay in place and each slot
+// gets ours' additions, then theirs' (blocks both added identically only once).
+// Returns null when either side modified a base line; throws ManualReviewError
+// when shared additions cannot be lined up.
+export function unionHunk({ base, ours, theirs }) {
+  const oursSlots = additionsBySlot(base, ours);
+  const theirsSlots = additionsBySlot(base, theirs);
+  if (!oursSlots || !theirsSlots) return null;
+
+  const lines = [];
+  for (let i = 0; i <= base.length; i++) {
+    lines.push(...mergeSlot(oursSlots[i], theirsSlots[i]));
+    if (i < base.length) lines.push(base[i]);
+  }
+  return lines;
+}
 
 function findAll(haystack, needle, from) {
   const hits = [];
@@ -154,7 +349,7 @@ function parseUnmerged(out) {
   return files;
 }
 
-async function resolveFile(git, cwd, file, info, mergeBase) {
+async function resolveFile(git, cwd, file, info, mergeBase, sourceHunks) {
   if (!info.stages.has('2') || !info.stages.has('3')) {
     throw new ManualReviewError(`${file}: deleted on one side (stages ${[...info.stages].join(',')})`);
   }
@@ -171,6 +366,10 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
   }
 
   const segments = parseConflicts(working);
+  const testFile = isTestFile(file);
+  if (!testFile && sourceHunks !== 'push') {
+    throw new ManualReviewError(`${file}: source conflict left for review (sourceHunks: ${sourceHunks})`, { file });
+  }
   const sides = {
     ours: { rev: 'HEAD', lines: splitLines(ours), cursor: 0 },
     theirs: { rev: 'MERGE_HEAD', lines: splitLines(theirs), cursor: 0 }
@@ -181,6 +380,31 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i];
     if (segment.type !== 'conflict') continue;
+
+    if (testFile) {
+      let union;
+      try {
+        union = unionHunk(segment);
+      } catch (error) {
+        if (!(error instanceof ManualReviewError)) throw error;
+        throw new ManualReviewError(`${file}: test hunk ${winners.length + 1}: ${error.message}`, { file });
+      }
+      if (!union) {
+        const modified = ['ours', 'theirs'].filter(name => !additionsBySlot(segment.base, segment[name]));
+        throw new ManualReviewError(
+          `${file}: test hunk ${winners.length + 1} modifies existing lines (${modified.join(', ')}), not only adds`,
+          { file }
+        );
+      }
+      // Drop the newline git adds before the closing marker when neither side
+      // ends the file with one
+      if (i === segments.length - 1 && union.length && !ours.endsWith('\n') && !theirs.endsWith('\n')) {
+        union[union.length - 1] = normalize(union[union.length - 1]);
+      }
+      winners.push('union');
+      kept.push(union);
+      continue;
+    }
 
     const before = segments[i - 1]?.type === 'text' ? segments[i - 1].lines.slice(-CONTEXT_LINES) : [];
     const after = segments[i + 1]?.type === 'text' ? segments[i + 1].lines.slice(0, CONTEXT_LINES) : [];
@@ -218,16 +442,35 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
   if (hasConflictMarkers(resolved)) {
     throw new ManualReviewError(`${file}: conflict markers left after resolution`);
   }
+  // Safety net for the union: the merged file must keep at least as many tests
+  // as either parent. Fails, for example, when one side cleanly deleted tests.
+  // A count we cannot establish fails closed.
+  if (testFile) {
+    const counts = [ours, theirs, resolved].map(countTests);
+    if (counts.includes(null)) {
+      throw new ManualReviewError(`${file}: could not count tests reliably, left for review`, { file });
+    }
+    const [floor, remaining] = [Math.max(counts[0], counts[1]), counts[2]];
+    if (remaining < floor) {
+      throw new ManualReviewError(`${file}: resolution keeps ${remaining} tests, fewer than the ${floor} on one side`, { file });
+    }
+  }
   fs.writeFileSync(path.join(cwd, file), resolved, 'latin1');
   await mustGit(git, ['add', '--', file]);
   return { file, hunks: winners };
 }
 
 // Resolves an in-progress diff3 merge in `cwd` by keeping, per conflicting hunk,
-// the side whose lines were committed most recently. Returns
-// { resolved: true, files } or { resolved: false, reason } without touching
-// anything the rule cannot decide on its own.
-export async function resolveConflicts({ cwd, git = (args, options) => runGit(args, { cwd, ...options }) }) {
+// the side whose lines were committed most recently; test files keep both
+// sides instead. With sourceHunks other than 'push', any conflict outside a
+// test file is left for review. Returns { resolved: true, files } or
+// { resolved: false, reason[, file] } without touching anything the rules
+// cannot decide on their own.
+export async function resolveConflicts({
+  cwd,
+  git = (args, options) => runGit(args, { cwd, ...options }),
+  sourceHunks = 'push'
+}) {
   try {
     const unmerged = parseUnmerged(await mustGit(git, ['ls-files', '-u', '-z']));
     if (unmerged.size === 0) {
@@ -237,7 +480,7 @@ export async function resolveConflicts({ cwd, git = (args, options) => runGit(ar
 
     const files = [];
     for (const [file, info] of unmerged) {
-      files.push(await resolveFile(git, cwd, file, info, mergeBase));
+      files.push(await resolveFile(git, cwd, file, info, mergeBase, sourceHunks));
     }
 
     if ((await mustGit(git, ['ls-files', '-u', '-z'])) !== '') {
@@ -255,7 +498,7 @@ export async function resolveConflicts({ cwd, git = (args, options) => runGit(ar
     return { resolved: true, files };
   } catch (error) {
     if (error instanceof ManualReviewError) {
-      return { resolved: false, reason: error.message };
+      return { resolved: false, reason: error.message, ...(error.file && { file: error.file }) };
     }
     throw error;
   }

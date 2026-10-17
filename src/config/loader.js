@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
+import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -215,6 +216,10 @@ class ConfigLoader {
       if (conflictFixer.mode !== undefined && conflictFixer.mode !== null && !validFixerModes.includes(conflictFixer.mode)) {
         errors.push(`conflictFixer.mode must be one of: ${validFixerModes.join(', ')}`);
       }
+      const { sourceHunks } = conflictFixer;
+      if (sourceHunks !== undefined && sourceHunks !== null && !SOURCE_HUNK_STRATEGIES.includes(sourceHunks)) {
+        errors.push(`conflictFixer.sourceHunks must be one of: ${SOURCE_HUNK_STRATEGIES.join(', ')}`);
+      }
       for (const field of ['allowlist', 'denylist']) {
         const list = conflictFixer[field];
         if (list === undefined || list === null) continue;
@@ -361,6 +366,9 @@ class ConfigLoader {
         scanTimeoutSeconds: conflictFixer.scanTimeoutSeconds ?? 120,
         attemptTtlMinutes: conflictFixer.attemptTtlMinutes ?? 60,
         retryCooldownMinutes: conflictFixer.retryCooldownMinutes ?? 240,
+        // Non-test conflict hunks: newer side wins and is pushed (push), or the
+        // PR is left for review (claude is resolved by pr-maint, escalate by a human)
+        sourceHunks: conflictFixer.sourceHunks ?? 'push',
         // Opt-in by default: an empty allowlist means nothing is fixed
         mode: conflictFixer.mode ?? 'allowlist',
         allowlist: conflictFixer.allowlist ?? [],
