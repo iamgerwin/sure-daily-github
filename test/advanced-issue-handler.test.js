@@ -138,8 +138,9 @@ test('status reports today\'s progress when state is from the current day', asyn
     }
   });
 
-  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+  const { timezone, repositories: [status] } = await handler.getStatus([repo()], 'UTC');
 
+  assert.equal(timezone, 'UTC');
   assert.equal(status.issuesCreatedToday, 2);
   assert.equal(status.todayTarget, 3);
   assert.equal(status.nextIssueTime, new Date(next).toISOString());
