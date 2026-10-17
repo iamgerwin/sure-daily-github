@@ -328,6 +328,12 @@ npm run format
 npm run lint
 ```
 
+### Continuous Integration
+
+GitHub Actions (`.github/workflows/test.yml`) runs `npm test` on every pull request to `master` and on every push to `master`.
+The job is named `test` so a branch ruleset can require it as a status check.
+See [docs/PR_MAINTENANCE.md](./docs/PR_MAINTENANCE.md) for the one-time `master` ruleset setup.
+
 ## Project Structure
 
 ```
