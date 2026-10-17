@@ -158,6 +158,89 @@ test('resolveConflicts refuses submodule conflicts', async (t) => {
   assert.match(result.reason, /submodule conflict/);
 });
 
+const testFile = (...names) => [
+  "import test from 'node:test';\n",
+  ...names.map(name => `test('${name}', () => {});\n`)
+].join('');
+
+test('resolveConflicts keeps tests added on both sides of a test file, ours before theirs', async (t) => {
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.js': testFile('base'), 'app.txt': numbered() },
+    // master's test is newer, which used to drop the feature's test entirely
+    master: [[{ 'app.test.js': testFile('base', 'master'), 'app.txt': numbered({ 2: 'master 2' }) }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.js': testFile('base', 'feature'), 'app.txt': numbered({ 2: 'feature 2' }) }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, true, result.reason);
+  assert.deepEqual(result.files, [{ file: 'app.test.js', hunks: ['union'] }, { file: 'app.txt', hunks: ['theirs'] }]);
+  assert.equal(fs.readFileSync(path.join(dir, 'app.test.js'), 'utf8'), testFile('base', 'feature', 'master'));
+  assert.equal(fs.readFileSync(path.join(dir, 'app.txt'), 'utf8'), numbered({ 2: 'master 2' }));
+});
+
+test('resolveConflicts escalates a test hunk where a side modified existing lines', async (t) => {
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.js': testFile('base') },
+    master: [[{ 'app.test.js': testFile('base', 'master') }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.js': testFile('base renamed') }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, false);
+  assert.equal(result.file, 'app.test.js');
+  assert.match(result.reason, /app\.test\.js: test hunk 1 modifies existing lines \(ours\), not only adds/);
+});
+
+test('resolveConflicts rejects a test-file resolution with fewer tests than a parent', async (t) => {
+  const filler = Array.from({ length: 6 }, (_, i) => `// spacer ${i + 1}\n`).join('');
+  const file = (top, bottom) => [
+    "import test from 'node:test';\n",
+    ...top.map(name => `test('${name}', () => {});\n`),
+    filler,
+    "test('three', () => {});\n",
+    ...bottom.map(name => `test('${name}', () => {});\n`)
+  ].join('');
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.js': file(['one', 'two'], []) },
+    // master cleanly deletes two tests at the top; both sides add one at the end
+    master: [[{ 'app.test.js': file([], ['master']) }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.js': file(['one', 'two'], ['feature']) }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, false);
+  assert.equal(result.file, 'app.test.js');
+  assert.match(result.reason, /keeps 3 tests, fewer than the 4 on one side/);
+});
+
+test('resolveConflicts leaves source conflicts for review unless sourceHunks is push', async (t) => {
+  for (const sourceHunks of ['escalate', 'claude']) {
+    const dir = await conflictedRepo(t, {
+      base: { 'app.test.js': testFile('base'), 'app.txt': numbered() },
+      master: [[{ 'app.test.js': testFile('base', 'master'), 'app.txt': numbered({ 2: 'master 2' }) }, '2026-02-01T00:00:00Z']],
+      feature: [[{ 'app.test.js': testFile('base', 'feature'), 'app.txt': numbered({ 2: 'feature 2' }) }, '2026-01-01T00:00:00Z']]
+    });
+
+    const result = await resolveConflicts({ cwd: dir, sourceHunks });
+
+    assert.equal(result.resolved, false);
+    assert.equal(result.file, 'app.txt');
+    assert.equal(result.reason, `app.txt: source conflict left for review (sourceHunks: ${sourceHunks})`);
+  }
+
+  // A conflict confined to test files is still resolved
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.js': testFile('base') },
+    master: [[{ 'app.test.js': testFile('base', 'master') }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.js': testFile('base', 'feature') }, '2026-01-01T00:00:00Z']]
+  });
+  const result = await resolveConflicts({ cwd: dir, sourceHunks: 'escalate' });
+  assert.equal(result.resolved, true, result.reason);
+});
+
 test('resolveConflicts refuses a resolution that still contains markers', async (t) => {
   const dir = await conflictedRepo(t, {
     base: { 'app.txt': numbered() },

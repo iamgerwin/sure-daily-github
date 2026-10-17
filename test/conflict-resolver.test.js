@@ -7,6 +7,10 @@ import {
   pickNewer,
   locateBlock,
   splitLines,
+  isTestFile,
+  countTests,
+  additionsBySlot,
+  unionHunk,
   ManualReviewError
 } from '../src/core/conflict-resolver.js';
 
@@ -90,4 +94,58 @@ test('locateBlock uses surrounding text to place a repeated hunk', () => {
 test('locateBlock tolerates a missing newline at end of file', () => {
   const file = splitLines('a\nlast');
   assert.equal(locateBlock(file, ['last\n']), 1);
+});
+
+test('isTestFile matches test directories and .test/.spec files', () => {
+  for (const file of ['test/a.js', 'test/unit/b.txt', '__tests__/c.js', 'src/x.test.js', 'lib/deep/y.spec.js', 'z.test.js']) {
+    assert.equal(isTestFile(file), true, file);
+  }
+  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'a.test.ts', 'testing/a.js']) {
+    assert.equal(isTestFile(file), false, file);
+  }
+});
+
+test('countTests counts test and it calls at line start, including modifiers', () => {
+  const text = [
+    "test('a', () => {});\n",
+    "  it('b', () => {});\n",
+    "test.skip('c', () => {});\n",
+    "it.only ('d', () => {});\n",
+    "describe('group', () => {});\n",
+    "const contest = attest('x');\n"
+  ].join('');
+  assert.equal(countTests(text), 4);
+});
+
+test('unionHunk keeps every added line from both sides, ours before theirs', () => {
+  const union = unionHunk({
+    base: [],
+    ours: ["test('ours 1', () => {});\n", "test('ours 2', () => {});\n"],
+    theirs: ["test('theirs 1', () => {});\n"]
+  });
+  assert.deepEqual(union, [
+    "test('ours 1', () => {});\n",
+    "test('ours 2', () => {});\n",
+    "test('theirs 1', () => {});\n"
+  ]);
+});
+
+test('unionHunk keeps base lines in place and orders base, ours, theirs per slot', () => {
+  const union = unionHunk({
+    base: ['b1\n', 'b2\n'],
+    ours: ['o0\n', 'b1\n', 'o1\n', 'b2\n'],
+    theirs: ['b1\n', 't1\n', 'b2\n', 't2\n']
+  });
+  assert.deepEqual(union, ['o0\n', 'b1\n', 'o1\n', 't1\n', 'b2\n', 't2\n']);
+});
+
+test('unionHunk keeps lines both sides added identically only once', () => {
+  assert.deepEqual(unionHunk({ base: [], ours: ['same\n'], theirs: ['same'] }), ['same\n']);
+});
+
+test('unionHunk returns null when a side modified or removed a base line', () => {
+  assert.equal(unionHunk({ base: ['b\n'], ours: ['b changed\n'], theirs: ['b\n', 't\n'] }), null);
+  assert.equal(unionHunk({ base: ['b\n'], ours: ['b\n', 'o\n'], theirs: [] }), null);
+  assert.equal(additionsBySlot(['b1\n', 'b2\n'], ['b2\n', 'b1\n']), null);
+  assert.deepEqual(additionsBySlot(['b\n'], ['b\n', 'x\n']), [[], ['x\n']]);
 });

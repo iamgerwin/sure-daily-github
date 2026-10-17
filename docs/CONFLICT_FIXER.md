@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make conflicted open pull requests mergeable again across the configured repositories without a human doing the merge. For each conflicted PR, the base branch is merged into the PR branch and every conflicting hunk keeps the newer change. The result is pushed only if the repository's own tests pass, so no regression is ever pushed automatically, and nothing is touched on a repository that was not explicitly approved.
+Make conflicted open pull requests mergeable again across the configured repositories without a human doing the merge. For each conflicted PR, the base branch is merged into the PR branch and every conflicting hunk keeps the newer change, except in test files, where both sides are kept. The result is pushed only if the repository's own tests pass, so no regression is ever pushed automatically, and nothing is touched on a repository that was not explicitly approved.
 
 ## Safety model
 
@@ -11,6 +11,9 @@ A resolved branch is pushed only when **every** check below passes. Otherwise th
 Never auto-pushed:
 
 - **Ties**: both sides of a hunk were committed at the same second.
+- **Test hunks that change existing lines**: a test-file hunk where either side modified or removed a base line, not only added lines (see [Test files](#test-files)).
+- **Test-count drops**: a resolved test file with fewer tests than either parent's version.
+- **Source hunks under `sourceHunks: escalate` or `claude`**: any conflict outside a test file.
 - **Non-text conflicts**: delete/modify, rename, binary, submodule or symlink conflicts. Also hunks that cannot be located unambiguously, and resolutions that still contain conflict markers.
 - **No tests**: no `testCommand`, no usable `npm test` script, and no `make test` target.
 - **Test failures**: dependency install or test failure, or a timeout (`testTimeoutMinutes`).
@@ -90,11 +93,30 @@ With no `conflictFixer` block at all, the mode is `allowlist` and the allowlist 
 1. List open PRs through GraphQL, including `mergeable` and `mergeStateStatus`. A PR is conflicted when it is `CONFLICTING` or `DIRTY`.
 2. Fetch the base and head branches into a temp repo. Continue only if the head is still at the SHA GitHub reported.
 3. Run `git merge --no-ff --no-commit` with `merge.conflictStyle=diff3`. A clean merge means GitHub's status was stale (`stale-status`).
-4. For each conflicting hunk, find its lines on both sides and take the newest `git blame` committer time for each. The newer side wins. If one side deleted the hunk, that side's newest commit to the file since the merge base is used instead.
+4. For each conflicting hunk in a source file, find its lines on both sides and take the newest `git blame` committer time for each. The newer side wins. If one side deleted the hunk, that side's newest commit to the file since the merge base is used instead. With `sourceHunks` set to anything but `push`, the PR is left for review instead. Test-file hunks are merged as described in [Test files](#test-files).
 5. Commit the merge: `Merge branch '<base>' into <head>`, and pin its SHA.
 6. Run the regression gate: the repo's `testCommand`, else `npm test`, else `make test`. `npm ci` runs first when `package-lock.json` exists and `installDeps` is on, including before a `testCommand`.
 7. Check that `HEAD` is still the pinned merge commit and that tracked files are unchanged.
 8. Push `<merge SHA>:refs/heads/<head>` without force.
+
+## Test files
+
+Newer-wins on a test file silently drops the tests the older side added, and the test gate cannot notice tests that are no longer there. Conflicts in test files are therefore merged as a union instead.
+
+- **Test files** are paths matching `test/**`, `__tests__/**` (both from the repository root), `**/*.test.js` or `**/*.spec.js`.
+- **Union**: every line either side added is kept. The base lines stay in place, and at each insertion point the PR branch's (ours) additions come first, then the base branch's (theirs). If both sides added the identical lines at the same point, they are kept once.
+- **Escalation**: if either side modified or removed a base line inside the conflict region, the union could resurrect or duplicate code, so the PR is left for review (`needs-manual-review`, with the path in the result's `file`).
+- **Test-count check**: after a test file is resolved, the number of `test(...)`/`it(...)` calls (including `.only`, `.skip` and `.todo`) at the start of a line must be at least the larger count of the two parents' versions of that file. Otherwise the PR is left for review. The check lives in the resolver (`src/core/conflict-resolver.js`), per conflicted test file, before the file is staged, so nothing reaches the commit or the push without it. It is deliberately strict: when one side cleanly deleted tests elsewhere in the same file, the count drops and a human decides.
+
+## Source hunks
+
+`conflictFixer.sourceHunks` decides what happens to conflicts outside test files:
+
+| Value | Behaviour |
+|-------|-----------|
+| `push` (default) | Newer change wins and the result is pushed after the test gate, as before |
+| `claude` | Reserved for the PR-maintenance automation, which resolves source hunks with a verified Claude worker. `fix-conflicts` on its own leaves the PR for review |
+| `escalate` | The PR is left for review (`needs-manual-review`) |
 
 ## Idempotency
 
@@ -131,6 +153,7 @@ conflictFixer:
   scanTimeoutSeconds: 120
   attemptTtlMinutes: 60
   retryCooldownMinutes: 240
+  sourceHunks: "push"        # push | claude | escalate
 
 repositories:
   - owner: "yourusername"
@@ -139,7 +162,7 @@ repositories:
     conflictFixer: true                # optional per-repo gate override
 ```
 
-All numbers must be positive whole numbers. Invalid values fail `validate` and config loading.
+All numbers must be positive whole numbers and `sourceHunks` must be `push`, `claude` or `escalate`. Invalid values fail `validate` and config loading.
 
 ## CLI reference
 
@@ -179,7 +202,7 @@ sure-daily-github fix-conflicts --scan-timeout 300
 | `fixed` | Conflicts resolved, tests passed, branch pushed | 0 |
 | `would-fix` | Same as `fixed`, but a dry run, so nothing was pushed | 0 |
 | `conflicted` | Listed by `--scan-only` | 0 |
-| `needs-manual-review` | Tie, non-text conflict, unlocatable hunk, leftover markers, no test command, install or test failure, timeout, or tests that moved `HEAD` or changed tracked files | 0 |
+| `needs-manual-review` | Tie, non-text conflict, test hunk that changes existing lines, test-count drop, source hunk under `sourceHunks: escalate`/`claude`, unlocatable hunk, leftover markers, no test command, install or test failure, timeout, or tests that moved `HEAD` or changed tracked files | 0 |
 | `skipped` | Reasons: `disabled-per-repo`, `denylisted`, `not-allowlisted`, `fork pull request`, `already-in-progress`, `already-attempted` | 0 |
 | `stale-status` | Merges cleanly locally; GitHub's mergeability was out of date | 0 |
 | `head-moved` | Branch changed after the scan or before the push; nothing was pushed | 0 |

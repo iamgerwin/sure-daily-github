@@ -165,6 +165,20 @@ test('does not push when tests fail', async (t) => {
   assert.deepEqual(fs.readdirSync(fx.workRoot), []);
 });
 
+test('does not push a source conflict when sourceHunks is escalate', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+  const cfg = config();
+  cfg.conflictFixer.sourceHunks = 'escalate';
+
+  const result = await fixer.run(cfg);
+
+  assert.equal(result.results[0].status, 'needs-manual-review');
+  assert.equal(result.results[0].file, 'app.txt');
+  assert.match(result.results[0].reason, /source conflict left for review \(sourceHunks: escalate\)/);
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+});
+
 test('does not push when no test command is detected', async (t) => {
   const fx = await fixture(t, { withPackage: false });
   const { fixer } = makeFixer(fx, [fx.pr]);

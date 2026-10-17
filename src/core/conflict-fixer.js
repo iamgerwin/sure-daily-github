@@ -222,7 +222,8 @@ class ConflictFixer {
       };
       const settings = {
         testTimeoutMinutes: cfg.conflictFixer?.testTimeoutMinutes ?? DEFAULT_TEST_TIMEOUT_MINUTES,
-        installDeps: cfg.conflictFixer?.installDeps ?? true
+        installDeps: cfg.conflictFixer?.installDeps ?? true,
+        sourceHunks: cfg.conflictFixer?.sourceHunks ?? 'push'
       };
 
       logger.info('Starting conflict fixer', { repositories: repositories.length, dryRun, scanOnly, scanBudgetSeconds });
@@ -383,16 +384,16 @@ class ConflictFixer {
         throw new Error(`git merge failed: ${String(merge.stderr || merge.stdout).trim()}`);
       }
 
-      const resolution = await resolveConflicts({ cwd: dir, git });
+      const resolution = await resolveConflicts({ cwd: dir, git, sourceHunks: settings.sourceHunks ?? 'push' });
       if (!resolution.resolved) {
-        return done('needs-manual-review', { reason: resolution.reason });
+        return done('needs-manual-review', { reason: resolution.reason, ...(resolution.file && { file: resolution.file }) });
       }
 
       const files = resolution.files.map(f => f.file);
       await must([
         'commit', '-q', '--no-verify',
         '-m', `Merge branch '${base}' into ${head}`,
-        '-m', `Auto-resolved conflicts (newer change per hunk): ${files.join(', ')}`
+        '-m', `Auto-resolved conflicts (newer change per hunk, both sides in test files): ${files.join(', ')}`
       ]);
       const mergeSha = (await must(['rev-parse', 'HEAD'])).trim();
 

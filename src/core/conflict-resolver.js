@@ -12,10 +12,21 @@ const LEFTOVER_MARKER = /^(<{7}|\|{7}|={7}|>{7})( |\r?$)/m;
 const CONTEXT_LINES = 3;
 // Same window git uses to decide whether a blob is binary
 const BINARY_SNIFF_CHARS = 8000;
+// Conflicts in these files keep both sides instead of the newer one, so tests
+// added on the older side are never dropped
+const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.test\.js$/, /\.spec\.js$/];
+// A test(...) or it(...) call at the start of a line, including .only/.skip/.todo
+const TEST_CALL = /^[ \t]*(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\(/gm;
+export const SOURCE_HUNK_STRATEGIES = ['push', 'claude', 'escalate'];
 
 // Raised for anything the newer-wins rule must not guess at; the PR is then
-// left for a human instead of being pushed
-export class ManualReviewError extends Error {}
+// left for a human instead of being pushed. `file` names the path to escalate.
+export class ManualReviewError extends Error {
+  constructor(message, { file } = {}) {
+    super(message);
+    this.file = file;
+  }
+}
 
 export function splitLines(text) {
   return text === '' ? [] : text.split(/(?<=\n)/);
@@ -90,6 +101,47 @@ export function pickNewer(oursTime, theirsTime) {
 
 // A file's last line may lack the newline git adds before the next marker
 const normalize = (line) => line.replace(/\r?\n$/, '');
+const sameLines = (a, b) => a.length === b.length && a.every((line, i) => normalize(line) === normalize(b[i]));
+
+export function isTestFile(file) {
+  return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
+}
+
+export function countTests(text) {
+  return (text.match(TEST_CALL) || []).length;
+}
+
+// The lines `side` inserted around the base lines, grouped by slot (slot i sits
+// just before base line i), or null when the side changed or removed a base line
+export function additionsBySlot(base, side) {
+  const slots = Array.from({ length: base.length + 1 }, () => []);
+  let next = 0;
+  for (const line of side) {
+    if (next < base.length && normalize(line) === normalize(base[next])) {
+      next++;
+    } else {
+      slots[next].push(line);
+    }
+  }
+  return next === base.length ? slots : null;
+}
+
+// Union of a purely additive hunk: the base lines stay in place and each slot
+// gets ours' additions, then theirs' (once if both added the same lines).
+// Returns null when either side modified a base line.
+export function unionHunk({ base, ours, theirs }) {
+  const oursSlots = additionsBySlot(base, ours);
+  const theirsSlots = additionsBySlot(base, theirs);
+  if (!oursSlots || !theirsSlots) return null;
+
+  const lines = [];
+  for (let i = 0; i <= base.length; i++) {
+    lines.push(...oursSlots[i]);
+    if (!sameLines(oursSlots[i], theirsSlots[i])) lines.push(...theirsSlots[i]);
+    if (i < base.length) lines.push(base[i]);
+  }
+  return lines;
+}
 
 function findAll(haystack, needle, from) {
   const hits = [];
@@ -154,7 +206,7 @@ function parseUnmerged(out) {
   return files;
 }
 
-async function resolveFile(git, cwd, file, info, mergeBase) {
+async function resolveFile(git, cwd, file, info, mergeBase, sourceHunks) {
   if (!info.stages.has('2') || !info.stages.has('3')) {
     throw new ManualReviewError(`${file}: deleted on one side (stages ${[...info.stages].join(',')})`);
   }
@@ -171,6 +223,10 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
   }
 
   const segments = parseConflicts(working);
+  const testFile = isTestFile(file);
+  if (!testFile && sourceHunks !== 'push') {
+    throw new ManualReviewError(`${file}: source conflict left for review (sourceHunks: ${sourceHunks})`, { file });
+  }
   const sides = {
     ours: { rev: 'HEAD', lines: splitLines(ours), cursor: 0 },
     theirs: { rev: 'MERGE_HEAD', lines: splitLines(theirs), cursor: 0 }
@@ -181,6 +237,25 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i];
     if (segment.type !== 'conflict') continue;
+
+    if (testFile) {
+      const union = unionHunk(segment);
+      if (!union) {
+        const modified = ['ours', 'theirs'].filter(name => !additionsBySlot(segment.base, segment[name]));
+        throw new ManualReviewError(
+          `${file}: test hunk ${winners.length + 1} modifies existing lines (${modified.join(', ')}), not only adds`,
+          { file }
+        );
+      }
+      // Drop the newline git adds before the closing marker when neither side
+      // ends the file with one
+      if (i === segments.length - 1 && union.length && !ours.endsWith('\n') && !theirs.endsWith('\n')) {
+        union[union.length - 1] = normalize(union[union.length - 1]);
+      }
+      winners.push('union');
+      kept.push(union);
+      continue;
+    }
 
     const before = segments[i - 1]?.type === 'text' ? segments[i - 1].lines.slice(-CONTEXT_LINES) : [];
     const after = segments[i + 1]?.type === 'text' ? segments[i + 1].lines.slice(0, CONTEXT_LINES) : [];
@@ -218,16 +293,31 @@ async function resolveFile(git, cwd, file, info, mergeBase) {
   if (hasConflictMarkers(resolved)) {
     throw new ManualReviewError(`${file}: conflict markers left after resolution`);
   }
+  // Safety net for the union: the merged file must keep at least as many tests
+  // as either parent. Fails, for example, when one side cleanly deleted tests.
+  if (testFile) {
+    const floor = Math.max(countTests(ours), countTests(theirs));
+    const remaining = countTests(resolved);
+    if (remaining < floor) {
+      throw new ManualReviewError(`${file}: resolution keeps ${remaining} tests, fewer than the ${floor} on one side`, { file });
+    }
+  }
   fs.writeFileSync(path.join(cwd, file), resolved, 'latin1');
   await mustGit(git, ['add', '--', file]);
   return { file, hunks: winners };
 }
 
 // Resolves an in-progress diff3 merge in `cwd` by keeping, per conflicting hunk,
-// the side whose lines were committed most recently. Returns
-// { resolved: true, files } or { resolved: false, reason } without touching
-// anything the rule cannot decide on its own.
-export async function resolveConflicts({ cwd, git = (args, options) => runGit(args, { cwd, ...options }) }) {
+// the side whose lines were committed most recently; test files keep both
+// sides instead. With sourceHunks other than 'push', any conflict outside a
+// test file is left for review. Returns { resolved: true, files } or
+// { resolved: false, reason[, file] } without touching anything the rules
+// cannot decide on their own.
+export async function resolveConflicts({
+  cwd,
+  git = (args, options) => runGit(args, { cwd, ...options }),
+  sourceHunks = 'push'
+}) {
   try {
     const unmerged = parseUnmerged(await mustGit(git, ['ls-files', '-u', '-z']));
     if (unmerged.size === 0) {
@@ -237,7 +327,7 @@ export async function resolveConflicts({ cwd, git = (args, options) => runGit(ar
 
     const files = [];
     for (const [file, info] of unmerged) {
-      files.push(await resolveFile(git, cwd, file, info, mergeBase));
+      files.push(await resolveFile(git, cwd, file, info, mergeBase, sourceHunks));
     }
 
     if ((await mustGit(git, ['ls-files', '-u', '-z'])) !== '') {
@@ -255,7 +345,7 @@ export async function resolveConflicts({ cwd, git = (args, options) => runGit(ar
     return { resolved: true, files };
   } catch (error) {
     if (error instanceof ManualReviewError) {
-      return { resolved: false, reason: error.message };
+      return { resolved: false, reason: error.message, ...(error.file && { file: error.file }) };
     }
     throw error;
   }

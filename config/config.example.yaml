@@ -112,6 +112,10 @@ schedule:
 #                              # repos are reported as scan-timeout.
 #   attemptTtlMinutes: 60      # An in-progress attempt older than this is stale
 #   retryCooldownMinutes: 240  # Skip re-attempting the same head SHA this long
+#   sourceHunks: "push"        # Non-test conflicts: "push" (newer wins, default)
+#                              # | "claude" (left for the pr-maint Claude worker)
+#                              # | "escalate" (needs-manual-review). Test-file
+#                              # conflicts always keep both sides' added lines.
 
 # ========================================
 # Repositories
