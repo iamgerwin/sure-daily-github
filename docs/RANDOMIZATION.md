@@ -102,6 +102,8 @@ randomization:
 
 The system automatically selects the appropriate time period based on your scheduler configuration.
 
+> When randomization is enabled, `issueCount` and each configured `timeVariations` period (when `timeVariations.enabled` is true) must have whole-number `min` and `max` values of at least 1, with `min` not greater than `max`. Invalid ranges are rejected when the configuration loads instead of failing partway through a run.
+
 ## Repository Selection Strategies
 
 Control which repositories are processed during each execution.
