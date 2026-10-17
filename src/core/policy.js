@@ -34,6 +34,35 @@ export const NEEDS_HUMAN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // Escalations only a human may clear
 export const NEVER_AUTO_CLEAR = ['gate-weakening', 'policy-denial', 'flapping'];
 
+// Merge states GitHub only reports once it computed a non-conflicting merge
+const NON_CONFLICT_STATES = ['CLEAN', 'HAS_HOOKS', 'UNSTABLE', 'BLOCKED', 'BEHIND', 'DRAFT'];
+
+// Positive evidence only: UNKNOWN or missing mergeability is not "no conflict"
+export function isCleanlyMergeable(pr) {
+  return pr?.mergeable === 'MERGEABLE' && NON_CONFLICT_STATES.includes(pr?.mergeStateStatus);
+}
+
+const headMoved = (e, pr) => Boolean(e.headSha && pr?.headRefOid) && pr.headRefOid !== e.headSha;
+
+// The allowlist of clearing conditions the AI may act on, shared by the
+// planner and the needs-human rule; any other reason waits for a human
+export const CLEAR_CONDITIONS = {
+  attempts: { text: 'the head or base moves', met: (e, pr) => headMoved(e, pr) },
+  uncertain: { text: 'a new commit is pushed', met: (e, pr) => headMoved(e, pr) },
+  scorecard: { text: 'a new commit is pushed', met: (e, pr) => headMoved(e, pr) },
+  'tests-red': { text: 'checks pass on a new head', met: (e, pr) => headMoved(e, pr) && pr.checks === 'SUCCESS' },
+  'ci-red-after-change': { text: 'checks pass on a new head', met: (e, pr) => headMoved(e, pr) && pr.checks === 'SUCCESS' },
+  'non-text': { text: 'the pull request no longer conflicts', met: (e, pr) => isCleanlyMergeable(pr) },
+  lockfile: { text: 'the pull request no longer conflicts', met: (e, pr) => isCleanlyMergeable(pr) }
+};
+
+export function clearConditionMet(escalation, pr) {
+  const condition = Object.hasOwn(CLEAR_CONDITIONS, escalation?.reason) ? CLEAR_CONDITIONS[escalation.reason] : null;
+  return Boolean(condition && condition.met(escalation, pr));
+}
+
+export const clearsNeedsHuman = (action) => action?.type === 'label.remove' && action.payload?.label === NEEDS_HUMAN;
+
 export const DEFAULT_CAPS = { writesPerPrPerTick: 20, writesPerHour: 200 };
 
 const ATTRIBUTION_PATTERN = /Co-Authored-By|Generated with|\bClaude\b|\bAnthropic\b|\u{1F916}/iu;
@@ -172,10 +201,16 @@ export const RULES = [
     rule: 'needs-human',
     kind: 'deny',
     check: (action, fresh, ctx) => {
-      if (action.type !== 'label.remove' || action.payload?.label !== NEEDS_HUMAN) return null;
+      if (!clearsNeedsHuman(action)) return null;
       const escalation = ctx.escalation;
       if (!escalation?.active) return 'needs-human was set by a human';
       if (NEVER_AUTO_CLEAR.includes(escalation.reason)) return `escalation reason ${escalation.reason} is cleared by humans only`;
+      if (!Object.hasOwn(CLEAR_CONDITIONS, escalation.reason)) {
+        return `escalation reason ${escalation.reason} has no automatic clearing condition`;
+      }
+      if (!clearConditionMet(escalation, fresh)) {
+        return `clearing condition does not hold: ${CLEAR_CONDITIONS[escalation.reason].text}`;
+      }
       if (recentClears(escalation, ctx.now) >= NEEDS_HUMAN_CLEAR_LIMIT) {
         return `needs-human was auto-cleared ${NEEDS_HUMAN_CLEAR_LIMIT} times in 7 days`;
       }
@@ -227,10 +262,13 @@ export const RULES = [
     check: (action, fresh, ctx) => {
       const caps = { ...DEFAULT_CAPS, ...(ctx.caps || {}) };
       const writes = ctx.writes || {};
-      if (action.scope === 'pr' && (writes.pr || 0) >= caps.writesPerPrPerTick) {
+      // A handler that may write more than once (creating and pinning the
+      // dashboard) reserves its full cost up front
+      const cost = ctx.cost ?? 1;
+      if (action.scope === 'pr' && (writes.pr || 0) + cost > caps.writesPerPrPerTick) {
         return `${caps.writesPerPrPerTick} writes on this pull request this tick`;
       }
-      if ((writes.hour || 0) >= caps.writesPerHour) return `${caps.writesPerHour} writes in the last hour`;
+      if ((writes.hour || 0) + cost > caps.writesPerHour) return `${caps.writesPerHour} writes in the last hour`;
       return null;
     }
   },

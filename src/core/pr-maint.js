@@ -11,7 +11,8 @@ import { ActionExecutor, effectiveMode } from './executor.js';
 import { isConflicted, selectRepositories, gateReason } from './conflict-fixer.js';
 import {
   LIFECYCLE_LABELS, MANAGED_LABELS, NEEDS_HUMAN, BABYSIT, PAUSED, MARKERS, MERGE_POLICY_CONTEXT,
-  NEVER_AUTO_CLEAR, NEEDS_HUMAN_CLEAR_LIMIT, NEEDS_HUMAN_WINDOW_MS, DEFAULT_CAPS
+  NEVER_AUTO_CLEAR, NEEDS_HUMAN_CLEAR_LIMIT, NEEDS_HUMAN_WINDOW_MS, DEFAULT_CAPS, MAX_TEXT_BYTES,
+  CLEAR_CONDITIONS, clearConditionMet, clearsNeedsHuman
 } from './policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,11 +33,13 @@ const shortSha = (sha) => String(sha || 'none').slice(0, 7);
 
 // Everything that should wake a PR, and nothing we write ourselves: managed
 // labels, our status context (left out of `checks`), and our sticky comment
-// (an issue comment, which is not part of the snapshot) are excluded
+// (an issue comment, which is not part of the snapshot) are excluded. Managed
+// labels are reconciled separately against what we last wrote (managedLabels).
 export function fingerprint(pr) {
   return sha1(JSON.stringify([
     pr.headRefOid,
     pr.mergeable,
+    pr.mergeStateStatus ?? null,
     pr.checks,
     pr.reviewThreads.map(t => `${t.id}:${t.lastCommentId}:${t.isResolved}`).sort(),
     pr.reviews.map(r => r.id).sort(),
@@ -44,25 +47,21 @@ export function fingerprint(pr) {
   ]));
 }
 
-// Clearing conditions the AI may act on; any other reason waits for a human
-const CLEAR_CONDITIONS = {
-  attempts: { text: 'the head or base moves', met: (e, pr) => pr.headRefOid !== e.headSha },
-  uncertain: { text: 'a new commit is pushed', met: (e, pr) => pr.headRefOid !== e.headSha },
-  scorecard: { text: 'a new commit is pushed', met: (e, pr) => pr.headRefOid !== e.headSha },
-  'tests-red': { text: 'checks pass on a new head', met: (e, pr) => pr.headRefOid !== e.headSha && pr.checks === 'SUCCESS' },
-  'ci-red-after-change': { text: 'checks pass on a new head', met: (e, pr) => pr.headRefOid !== e.headSha && pr.checks === 'SUCCESS' },
-  'non-text': { text: 'the pull request no longer conflicts', met: (e, pr) => !isConflicted(pr) },
-  lockfile: { text: 'the pull request no longer conflicts', met: (e, pr) => !isConflicted(pr) }
-};
-
-export function clearConditionText(reason) {
-  return CLEAR_CONDITIONS[reason]?.text || 'a human removes needs-human';
+// Our managed labels on a PR, in a stable order
+export function managedLabels(labels) {
+  return MANAGED_LABELS.filter(l => labels.includes(l));
 }
 
+const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+export function clearConditionText(reason) {
+  return (Object.hasOwn(CLEAR_CONDITIONS, reason) && CLEAR_CONDITIONS[reason].text) || 'a human removes needs-human';
+}
+
+// The same allowlisted predicates the needs-human policy rule enforces
 export function canAutoClear(escalation, pr, now) {
   if (!escalation?.active || NEVER_AUTO_CLEAR.includes(escalation.reason)) return false;
-  const condition = CLEAR_CONDITIONS[escalation.reason];
-  if (!condition || !condition.met(escalation, pr)) return false;
+  if (!clearConditionMet(escalation, pr)) return false;
   const clears = (escalation.clears || []).filter(at => now - at < NEEDS_HUMAN_WINDOW_MS);
   return clears.length < NEEDS_HUMAN_CLEAR_LIMIT;
 }
@@ -161,18 +160,20 @@ export function renderSticky(pr, row, { mode, owner = null }) {
 function decidePr(pr, repoLedger, opts) {
   const key = String(pr.number);
   const prev = repoLedger.prs[key] || {};
-  const escalation = repoLedger.escalations[key] || null;
+  const recorded = repoLedger.escalations[key] || null;
   const current = LIFECYCLE_LABELS.filter(l => pr.labels.includes(l));
   const row = {
     number: pr.number,
     headSha: pr.headRefOid,
     priority: pr.labels.includes(BABYSIT) ? 'babysit' : null,
     fingerprint: fingerprint(pr),
-    escalation,
+    managedLabels: managedLabels(pr.labels),
+    escalation: recorded,
     skip: null,
     filtered: false,
     changed: false,
     humanCleared: false,
+    delivered: false,
     lifecycle: current[0] || null,
     why: '',
     next: '',
@@ -188,6 +189,12 @@ function decidePr(pr, repoLedger, opts) {
   }
 
   const needsHuman = pr.labels.includes(NEEDS_HUMAN);
+  // A pending escalation whose needs-human is already on GitHub was delivered
+  // (a crash can lose the ledger write after the label add): acknowledge it
+  // first, so a later human clear is honored instead of re-adding the label
+  row.delivered = needsHuman && Boolean(recorded?.active && recorded.pending);
+  const escalation = row.delivered ? { ...recorded, pending: false } : recorded;
+  row.escalation = escalation;
   const clearing = needsHuman && canAutoClear(escalation, pr, opts.now);
   const escalating = !needsHuman && Boolean(escalation?.active && escalation.pending);
   // A human removed our needs-human: the escalation is over
@@ -225,9 +232,13 @@ function decidePr(pr, repoLedger, opts) {
   if (opts.pr !== null && opts.pr !== undefined && pr.number !== opts.pr) return { ...row, filtered: true };
 
   // A new escalation record also wakes the PR; once decided (even if shadow
-  // mode only logged it) it does not again until something changes
+  // mode only logged it) it does not again until something changes. So does
+  // a managed label someone else added or removed: the ledger keeps the
+  // managed labels as they were after our own writes, which never wake it.
   row.escalationAt = escalation?.at ?? null;
-  row.changed = prev.fingerprint !== row.fingerprint || prev.mode !== opts.mode || (prev.escalationAt ?? null) !== row.escalationAt;
+  const labelsMoved = Array.isArray(prev.managedLabels) && !sameList(prev.managedLabels, row.managedLabels);
+  row.changed = prev.fingerprint !== row.fingerprint || prev.mode !== opts.mode
+    || (prev.escalationAt ?? null) !== row.escalationAt || labelsMoved;
   if (!row.changed) return row;
 
   const actions = [...labelActions];
@@ -253,7 +264,13 @@ export function decide(snapshot, repoLedger, opts) {
   return { paused: false, prs };
 }
 
-export function renderDashboard(rows, { mode, configuredMode, breaker = null, caps = DEFAULT_CAPS, now }) {
+export const MAX_DASHBOARD_ROWS = 50;
+const utf8Bytes = (text) => Buffer.byteLength(text, 'utf8');
+
+// Bounded to MAX_DASHBOARD_ROWS rows and the policy's MAX_TEXT_BYTES (UTF-8),
+// with the omitted count and a link, so it never outgrows the text policy.
+// repo: "owner/repo" for the link.
+export function renderDashboard(rows, { mode, configuredMode, breaker = null, caps = DEFAULT_CAPS, now, repo = null }) {
   const tripped = breaker && now < breaker.until;
   const lines = [
     MARKERS.dashboard,
@@ -266,20 +283,33 @@ export function renderDashboard(rows, { mode, configuredMode, breaker = null, ca
     '- **Not automated yet:** conflict resolution, review fixes, merges',
     ''
   ];
+  const footer = ['', `Add the \`${PAUSED}\` label to this issue to pause all automation.`];
   if (rows.length === 0) {
     lines.push('No open pull requests.');
-  } else {
-    // "Pending" is the label change not applied yet: in shadow mode, what
-    // act mode would do
-    lines.push('| PR | State | Next step | Blocker | Pending |', '|---|---|---|---|---|');
-    for (const row of [...rows].sort((a, b) => a.number - b.number)) {
-      const state = row.skip ? `skipped (${row.skip})` : `\`${row.lifecycle || 'none'}\``;
-      const pending = row.pending?.length ? row.pending.join('; ') : '-';
-      lines.push(`| #${row.number} | ${state} | ${row.skip ? '-' : row.next} | ${row.blocker || '-'} | ${pending} |`);
-    }
+    return [...lines, ...footer].join('\n');
   }
-  lines.push('', `Add the \`${PAUSED}\` label to this issue to pause all automation.`);
-  return lines.join('\n');
+
+  // "Pending" is the label change not applied yet: in shadow mode, what
+  // act mode would do
+  lines.push('| PR | State | Next step | Blocker | Pending |', '|---|---|---|---|---|');
+  const sorted = [...rows].sort((a, b) => a.number - b.number);
+  const omittedLine = (n) => `${n} more pull request${n === 1 ? '' : 's'} not listed (the dashboard is capped)`
+    + (repo ? `: https://github.com/${repo}/pulls` : '.');
+  // Room for the footer and the longest possible omitted line
+  let used = utf8Bytes([...lines, ...footer].join('\n')) + utf8Bytes(`\n\n${omittedLine(sorted.length)}`);
+  let shown = 0;
+  for (const row of sorted) {
+    const state = row.skip ? `skipped (${row.skip})` : `\`${row.lifecycle || 'none'}\``;
+    const pending = row.pending?.length ? row.pending.join('; ') : '-';
+    const line = `| #${row.number} | ${state} | ${row.skip ? '-' : row.next} | ${row.blocker || '-'} | ${pending} |`;
+    const size = utf8Bytes(line) + 1;
+    if (shown >= MAX_DASHBOARD_ROWS || used + size > MAX_TEXT_BYTES) break;
+    lines.push(line);
+    used += size;
+    shown++;
+  }
+  if (shown < sorted.length) lines.push('', omittedLine(sorted.length - shown));
+  return [...lines, ...footer].join('\n');
 }
 
 // Ledger bookkeeping for a write that went through
@@ -303,10 +333,13 @@ function applyOutcome(repoLedger, action, result, now) {
   }
 }
 
+// The dashboard is shadow mode's only output: not publishing it is a failure
+const dashboardFailed = (status) => status === 'error' || status === 'denied';
+
 function summarize(results) {
   const summary = { repos: results.length, prs: 0, actions: 0, written: 0, denied: 0, failed: 0 };
   for (const result of results) {
-    if (result.error || result.dashboard === 'error') summary.failed++;
+    if (result.error || dashboardFailed(result.dashboard)) summary.failed++;
     for (const pr of result.prs || []) {
       summary.prs++;
       for (const outcome of pr.outcomes || []) {
@@ -432,13 +465,6 @@ export class PrMaint {
     const plan = decide(snapshot, repoLedger, { mode, authors: settings.authors, owner: login, pr, now: this.now() });
     const byNumber = new Map(snapshot.prs.map(p => [p.number, p]));
 
-    // Repository setup, so never in shadow mode
-    if (!dryRun && mode !== 'shadow' && repoLedger.labelsVersion !== LABELS_VERSION) {
-      const { written } = await github.ensureLabels(owner, repo);
-      state.writes = [...(state.writes || []), ...Array(written).fill(this.now())];
-      repoLedger.labelsVersion = LABELS_VERSION;
-    }
-
     const dashboardHandler = (action) => github.upsertDashboard(owner, repo, action.payload.body, { number: action.payload.issue });
     // In shadow mode the PR handlers do not even exist
     const handlers = mode === 'shadow'
@@ -457,7 +483,8 @@ export class PrMaint {
     const executor = new ActionExecutor({
       mode,
       handlers,
-      fresh: (number) => github.freshPullRequest(owner, repo, number),
+      // Clearing needs-human is judged on live checks too, not the snapshot's
+      fresh: (number, action) => github.freshPullRequest(owner, repo, number, { checks: clearsNeedsHuman(action) }),
       state,
       ctx: { owner: login, authors: settings.authors, caps },
       repo: `${owner}/${repo}`,
@@ -466,9 +493,18 @@ export class PrMaint {
       decisionsFile: this.options.decisionsFile
     });
 
+    // Repository setup, so never in shadow mode. Every label write is
+    // admitted like an Action (hourly cap, breaker); a setup cut short is
+    // finished on a later tick.
+    if (!dryRun && mode !== 'shadow' && repoLedger.labelsVersion !== LABELS_VERSION) {
+      const { complete } = await github.ensureLabels(owner, repo, { write: (what, fn) => executor.runSetup(what, fn) });
+      if (complete) repoLedger.labelsVersion = LABELS_VERSION;
+    }
+
     const prResults = [];
     for (const row of plan.prs) {
       const key = String(row.number);
+      if (row.delivered && !dryRun) repoLedger.escalations[key].pending = false;
       if (row.humanCleared && !dryRun) repoLedger.escalations[key].active = false;
       const outcomes = [];
       for (const action of row.actions) {
@@ -484,7 +520,16 @@ export class PrMaint {
       row.pending = row.pending.filter(text => !applied.has(text));
       const unsettled = outcomes.some(o => o.status === 'error' || (o.status === 'denied' && RETRY_RULES.has(o.verdict.rule)));
       if (!dryRun && row.changed && !unsettled) {
-        repoLedger.prs[key] = { ...repoLedger.prs[key], fingerprint: row.fingerprint, mode, escalationAt: row.escalationAt };
+        // The managed labels as our own writes left them
+        let labels = row.managedLabels;
+        for (const { action, status } of outcomes) {
+          if (status !== 'done' || action.scope !== 'pr') continue;
+          if (action.type === 'label.add') labels = [...labels, action.payload.label];
+          if (action.type === 'label.remove') labels = labels.filter(l => l !== action.payload.label);
+        }
+        repoLedger.prs[key] = {
+          ...repoLedger.prs[key], fingerprint: row.fingerprint, mode, escalationAt: row.escalationAt, managedLabels: managedLabels(labels)
+        };
       }
       prResults.push({
         number: row.number,
@@ -523,21 +568,38 @@ export class PrMaint {
 
     // Rendered after the PRs so a breaker trip this tick shows up
     const body = renderDashboard(plan.prs, {
-      mode: executor.mode, configuredMode, breaker: state.breaker, caps, now: this.now()
+      mode: executor.mode, configuredMode, breaker: state.breaker, caps, now: this.now(), repo: `${owner}/${repo}`
     });
+    // The cached hash alone cannot tell that the issue was deleted, closed or
+    // edited on GitHub: read it back (no write when it is intact)
+    const known = await github.readDashboard(owner, repo, repoLedger.dashboard.number ?? null);
     let dashboard = 'unchanged';
-    if (sha1(body) !== repoLedger.dashboard.hash) {
+    let dashboardError = null;
+    if (known && known.body === body) {
+      if (!dryRun) repoLedger.dashboard = { number: known.number, hash: sha1(body) };
+    } else {
       const action = {
         type: 'comment.upsert', scope: 'dashboard', pr: null, headSha: null,
-        payload: { marker: 'dashboard', body, issue: repoLedger.dashboard.number ?? null }
+        payload: { marker: 'dashboard', body, issue: known?.number ?? null }
       };
-      const outcome = await executor.run(action);
+      // Creating the issue also pins it: two writes
+      const outcome = await executor.run(action, { cost: known ? 1 : 2 });
       if (outcome.status === 'done') applyOutcome(repoLedger, action, outcome.result, this.now());
       dashboard = outcome.status;
+      if (dashboardFailed(dashboard)) {
+        dashboardError = outcome.verdict?.allowed === false
+          ? `${outcome.verdict.rule}: ${outcome.verdict.reason}`
+          : outcome.error || 'unknown error';
+        logger.error('pr-maint dashboard was not published', { owner, repo, error: dashboardError });
+        executor.record({
+          pr: null, type: 'dashboard.publish', scope: 'dashboard', headSha: null,
+          verdict: 'error', reason: `dashboard not published: ${dashboardError}`
+        });
+      }
     }
 
-    const failed = prResults.some(p => p.outcomes.some(o => o.status === 'error')) || dashboard === 'error';
-    return { owner, repo, success: !failed, mode: executor.mode, dashboard, prs: prResults };
+    const failed = prResults.some(p => p.outcomes.some(o => o.status === 'error')) || dashboardFailed(dashboard);
+    return { owner, repo, success: !failed, mode: executor.mode, dashboard, dashboardError, prs: prResults };
   }
 }
 

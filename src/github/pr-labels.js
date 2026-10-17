@@ -71,6 +71,32 @@ const SNAPSHOT_QUERY = `
   }
 `;
 
+// Check evidence for clearing needs-human, read right before the write
+const FRESH_CHECKS_QUERY = `
+  query ($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        commits(last: 1) {
+          nodes {
+            commit {
+              oid
+              statusCheckRollup {
+                contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on CheckRun { name status conclusion }
+                    ... on StatusContext { context state }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 const PIN_ISSUE_MUTATION = `
   mutation ($issueId: ID!) {
     pinIssue(input: { issueId: $issueId }) { issue { number } }
@@ -84,6 +110,14 @@ const RESOLVE_THREAD_MUTATION = `
 `;
 
 const sameLogin = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+// A deleted issue answers 410 Gone, a missing one 404
+const isGone = (error) => error.status === 404 || error.status === 410;
+
+// REST mergeability in the GraphQL vocabulary; null (not computed yet) is UNKNOWN
+export function restMergeable(data) {
+  const mergeable = data.mergeable === true ? 'MERGEABLE' : data.mergeable === false ? 'CONFLICTING' : 'UNKNOWN';
+  return { mergeable, mergeStateStatus: String(data.mergeable_state || 'unknown').toUpperCase() };
+}
 
 // GitHub's own rollup counts our sdg/merge-policy status, so posting it would
 // change the fingerprint and wake the next tick; this one leaves it out
@@ -167,33 +201,48 @@ export class PrMaintGitHub {
     return { owner, repo, paused, prs: prs.sort((a, b) => a.number - b.number) };
   }
 
-  // The head pin: re-read right before a write
-  async freshPullRequest(owner, repo, number) {
+  // The head pin: re-read right before a write. Mergeability comes with it;
+  // `checks` also reads the check rollup (only clearing needs-human needs it),
+  // failing closed to null when it belongs to another head.
+  async freshPullRequest(owner, repo, number, { checks = false } = {}) {
     const { data } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: number });
-    return {
+    const fresh = {
       number: data.number,
       state: String(data.state).toUpperCase(),
       headRefOid: data.head?.sha || null,
-      labels: (data.labels || []).map(l => (typeof l === 'string' ? l : l.name))
+      labels: (data.labels || []).map(l => (typeof l === 'string' ? l : l.name)),
+      ...restMergeable(data)
     };
+    if (checks) {
+      const result = await this.octokit.graphql(FRESH_CHECKS_QUERY, { owner, repo, number });
+      const commit = result.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
+      fresh.checks = commit && commit.oid === fresh.headRefOid
+        ? rollupState(commit.statusCheckRollup?.contexts?.nodes || [])
+        : null;
+    }
+    return fresh;
   }
 
-  // Creates missing labels and repairs drifted managed ones; zero writes once in place
-  async ensureLabels(owner, repo) {
+  // Creates missing labels and repairs drifted managed ones; zero writes once
+  // in place. `write(what, fn)` admits each write (false stops the setup, so
+  // `complete` is false and it is retried later).
+  async ensureLabels(owner, repo, { write = async (what, fn) => { await fn(); return true; } } = {}) {
     const existing = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, { owner, repo, per_page: 100 });
     const byName = new Map(existing.map(l => [l.name.toLowerCase(), l]));
     let written = 0;
     for (const { name, color, description, managed } of LABEL_DEFINITIONS) {
       const current = byName.get(name.toLowerCase());
+      let op = null;
       if (!current) {
-        await this.octokit.rest.issues.createLabel({ owner, repo, name, color, description });
-        written++;
+        op = [`create label ${name}`, () => this.octokit.rest.issues.createLabel({ owner, repo, name, color, description })];
       } else if (managed && (current.color?.toLowerCase() !== color || (current.description || '') !== description)) {
-        await this.octokit.rest.issues.updateLabel({ owner, repo, name: current.name, color, description });
-        written++;
+        op = [`repair label ${name}`, () => this.octokit.rest.issues.updateLabel({ owner, repo, name: current.name, color, description })];
       }
+      if (!op) continue;
+      if (!(await write(...op))) return { written, complete: false };
+      written++;
     }
-    return { written };
+    return { written, complete: true };
   }
 
   async addLabel(owner, repo, number, label) {
@@ -242,17 +291,22 @@ export class PrMaintGitHub {
     return { written: 1, id: data.id };
   }
 
+  // The known dashboard issue, or null when it was deleted, closed, or is not
+  // ours (marker and author) any more
+  async readDashboard(owner, repo, number) {
+    if (!number) return null;
+    try {
+      const { data } = await this.octokit.rest.issues.get({ owner, repo, issue_number: number });
+      return data.state === 'open' && !data.pull_request && this.isOurs(data, MARKERS.dashboard) ? data : null;
+    } catch (error) {
+      if (isGone(error)) return null;
+      throw error;
+    }
+  }
+
   // One pinned dashboard issue, found by its marker, edited only on change
   async upsertDashboard(owner, repo, body, { number = null } = {}) {
-    let existing = null;
-    if (number) {
-      try {
-        const { data } = await this.octokit.rest.issues.get({ owner, repo, issue_number: number });
-        if (data.state === 'open' && this.isOurs(data, MARKERS.dashboard)) existing = data;
-      } catch (error) {
-        if (error.status !== 404) throw error;
-      }
-    }
+    let existing = await this.readDashboard(owner, repo, number);
     if (!existing) {
       const issues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
         owner, repo, state: 'open', creator: this.login, per_page: 100

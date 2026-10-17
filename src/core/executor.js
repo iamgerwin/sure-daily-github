@@ -8,7 +8,7 @@ import AdvancedIssueHandler from '../github/advanced-issue-handler.js';
 import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import config from '../config/loader.js';
-import { check as policyCheck, downgradeMode, MODES } from './policy.js';
+import { check as policyCheck, downgradeMode, MODES, DEFAULT_CAPS } from './policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DECISIONS_FILE = path.join(__dirname, '../../data/pr-maint-decisions.jsonl');
@@ -198,7 +198,7 @@ const isDashboardWrite = (action) => action.scope === 'dashboard' && action.type
 // verdict is appended to data/pr-maint-decisions.jsonl. Options:
 // - mode: effective mode at the start of the tick
 // - handlers: { 'type:scope': async (action) => ({ written }) }
-// - fresh(number): live { headRefOid, state, labels } for the head pin
+// - fresh(number, action): live { headRefOid, state, labels, mergeable, ... } for the head pin
 // - state: the pr-maint ledger state (writes, breaker), mutated in place
 // - ctx: { owner, authors, caps } for the policy; repo: "owner/repo" for the log
 // - dryRun: evaluate and simulate only; nothing is written, not even the log
@@ -264,7 +264,7 @@ export class ActionExecutor {
     if (action.scope !== 'pr') return null;
     const live = !this.dryRun && this.mode !== 'shadow' && this.fresh;
     if (live) {
-      const current = await this.fresh(action.pr);
+      const current = await this.fresh(action.pr, action);
       const merged = { ...snapshotPr, ...current };
       this.working.set(action.pr, merged);
       return merged;
@@ -276,7 +276,8 @@ export class ActionExecutor {
   }
 
   // Returns { status: 'done'|'planned'|'denied'|'skipped'|'error', verdict, result, error }
-  async run(action, { snapshotPr = null, escalation = null } = {}) {
+  // cost: the most writes the handler can make (the rate rule reserves it)
+  async run(action, { snapshotPr = null, escalation = null, cost = 1 } = {}) {
     const key = actionKey(action);
     const base = { pr: action.pr ?? null, type: action.type, scope: action.scope, headSha: action.headSha ?? null, payload: payloadSummary(action.payload) };
     if (this.denied.has(key)) {
@@ -296,6 +297,7 @@ export class ActionExecutor {
       mode: this.mode,
       escalation,
       now: this.now(),
+      cost,
       writes: { pr: this.prWrites.get(action.pr) || 0, hour: this.hourWrites() }
     });
     // Shadow is safe by construction: whatever the policy table says, nothing
@@ -341,6 +343,34 @@ export class ActionExecutor {
       this.record({ ...base, verdict: 'allow', outcome: 'error', reason: error.message });
       return { status: 'error', verdict, error: error.message };
     }
+  }
+
+  // Repository setup writes (label creates and repairs) are not Actions, but
+  // they spend the same hourly budget and stop at the same breaker. Each call
+  // is one GitHub write; returns false when it was not admitted.
+  async runSetup(what, write) {
+    const base = { pr: null, type: 'setup', scope: 'repository', headSha: null, payload: { what } };
+    const caps = { ...DEFAULT_CAPS, ...(this.ctx.caps || {}) };
+    let verdict = null;
+    if (this.mode === 'shadow') {
+      verdict = { rule: 'mode', kind: 'deny', reason: 'shadow mode only writes the dashboard issue', trip: false, escalate: false };
+    } else if (this.hourWrites() + 1 > caps.writesPerHour) {
+      verdict = { rule: 'rate', kind: 'trip', reason: `${caps.writesPerHour} writes in the last hour`, trip: true, escalate: false };
+    }
+    if (verdict) {
+      this.record({ ...base, verdict: 'deny', rule: verdict.rule, kind: verdict.kind, reason: verdict.reason });
+      if (verdict.trip) this.trip(verdict, base);
+      return false;
+    }
+    try {
+      await write();
+    } catch (error) {
+      this.record({ ...base, verdict: 'allow', outcome: 'error', reason: error.message });
+      throw error;
+    }
+    this.state.writes = [...(this.state.writes || []), this.now()];
+    this.record({ ...base, verdict: 'allow', outcome: 'written' });
+    return true;
   }
 }
 

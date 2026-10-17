@@ -79,6 +79,69 @@ test('ensureLabels creates all eight labels on an empty repository, then is a no
   assert.deepEqual(names(calls), ['listLabelsForRepo']);
 });
 
+test('ensureLabels stops at the first write its admission refuses and reports it incomplete', async () => {
+  const { github, calls } = await client();
+  const admitted = [];
+  const result = await github.ensureLabels(OWNER, 'demo', {
+    write: async (what, fn) => {
+      if (admitted.length === 2) return false;
+      admitted.push(what);
+      await fn();
+      return true;
+    }
+  });
+  assert.deepEqual(result, { written: 2, complete: false });
+  assert.deepEqual(admitted, ['create label sdg:conflict', 'create label sdg:fixing']);
+  assert.equal(calls.filter(c => c.name === 'createLabel').length, 2);
+});
+
+test('freshPullRequest reports mergeability, UNKNOWN until GitHub computed it', async () => {
+  const pr = (extra) => ({ data: { number: 3, state: 'open', head: { sha: 'h1' }, labels: [], ...extra } });
+  let data = pr({ mergeable: true, mergeable_state: 'clean' });
+  const stub = stubOctokit();
+  stub.octokit.rest.pulls = { get: async () => data };
+  const github = new PrMaintGitHub(stub.octokit);
+  assert.deepEqual((({ mergeable, mergeStateStatus }) => ({ mergeable, mergeStateStatus }))(await github.freshPullRequest(OWNER, 'demo', 3)),
+    { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+  data = pr({ mergeable: null, mergeable_state: 'unknown' });
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3)).mergeable, 'UNKNOWN');
+  data = pr({ mergeable: false, mergeable_state: 'dirty' });
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3)).mergeStateStatus, 'DIRTY');
+});
+
+test('freshPullRequest reads live checks on request, failing closed when they belong to another head', async () => {
+  const contexts = [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+  let oid = 'h1';
+  const stub = stubOctokit({
+    graphql: () => ({ repository: { pullRequest: { commits: { nodes: [{ commit: { oid, statusCheckRollup: { contexts: { nodes: contexts } } } }] } } } })
+  });
+  stub.octokit.rest.pulls = { get: async () => ({ data: { number: 3, state: 'open', head: { sha: 'h1' }, labels: [], mergeable: true, mergeable_state: 'clean' } }) };
+  const github = new PrMaintGitHub(stub.octokit);
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3)).checks, undefined);
+  assert.equal(stub.calls.length, 0, 'no checks read unless asked');
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, 'SUCCESS');
+  oid = 'h0';
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, null);
+});
+
+test('readDashboard returns null for a deleted, closed, or foreign issue', async () => {
+  const issue = { number: 77, state: 'open', body: `${MARKERS.dashboard}\nx`, user: { login: OWNER } };
+  let respond = () => ({ data: issue });
+  const { github } = await client({ get: () => respond() });
+  assert.equal((await github.readDashboard(OWNER, 'demo', 77)).number, 77);
+  assert.equal(await github.readDashboard(OWNER, 'demo', null), null);
+  respond = () => { throw Object.assign(new Error('Gone'), { status: 410 }); };
+  assert.equal(await github.readDashboard(OWNER, 'demo', 77), null);
+  respond = () => ({ data: { ...issue, state: 'closed' } });
+  assert.equal(await github.readDashboard(OWNER, 'demo', 77), null);
+  respond = () => ({ data: { ...issue, body: 'marker removed' } });
+  assert.equal(await github.readDashboard(OWNER, 'demo', 77), null);
+  respond = () => ({ data: { ...issue, user: { login: 'mallory' } } });
+  assert.equal(await github.readDashboard(OWNER, 'demo', 77), null);
+  respond = () => { throw Object.assign(new Error('boom'), { status: 500 }); };
+  await assert.rejects(github.readDashboard(OWNER, 'demo', 77), /boom/);
+});
+
 test('upsertSticky creates the comment once, skips an identical body, and edits a changed one', async () => {
   const comments = [];
   const { github, calls } = await client({

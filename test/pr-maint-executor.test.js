@@ -113,6 +113,30 @@ test('the per-PR rate cap denies the overflow write and trips the breaker withou
   assert.deepEqual(state.writes, [NOW]);
 });
 
+test('setup writes spend the hourly budget and trip the breaker at the cap', async (t) => {
+  const { executor, state, decisions } = setup(t, { caps: { writesPerHour: 2 } });
+  let done = 0;
+  const write = async () => { done++; };
+  assert.equal(await executor.runSetup('create label a', write), true);
+  assert.equal(await executor.runSetup('create label b', write), true);
+  assert.equal(await executor.runSetup('create label c', write), false);
+  assert.equal(done, 2);
+  assert.deepEqual(state.writes, [NOW, NOW]);
+  assert.equal(state.breaker.to, 'shadow');
+  assert.equal(executor.mode, 'shadow');
+  assert.equal(await executor.runSetup('create label d', write), false, 'shadow never runs setup');
+  assert.deepEqual(decisions().map(d => [d.type, d.verdict, d.rule || null]), [
+    ['setup', 'allow', null], ['setup', 'allow', null], ['setup', 'deny', 'rate'], ['setup', 'deny', 'mode']
+  ]);
+});
+
+test('the fresh read receives the action, so a needs-human clear can ask for live checks', async (t) => {
+  const seen = [];
+  const { executor } = setup(t, { fresh: async (number, action) => { seen.push([number, action.type]); return { headRefOid: SHA, state: 'OPEN', labels: [] }; } });
+  await executor.run(labelAdd('sdg:waiting'), { snapshotPr: snapshotPr() });
+  assert.deepEqual(seen, [[7, 'label.add']]);
+});
+
 test('the head pin re-reads the PR and refuses a write after the head moved', async (t) => {
   const { executor, calls } = setup(t, { fresh: async () => ({ headRefOid: 'b'.repeat(40), state: 'OPEN', labels: [] }) });
   const result = await executor.run(labelAdd('sdg:waiting'), { snapshotPr: snapshotPr() });

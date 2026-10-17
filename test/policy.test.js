@@ -213,7 +213,7 @@ test('a sticky comment with the dashboard marker is out of scope on a PR', () =>
 
 test('needs-human may be auto-cleared only for an active, clearable escalation under the cap', () => {
   const action = { ...baseAction('label.remove'), payload: { label: NEEDS_HUMAN } };
-  const fresh = freshPr({ labels: ['sdg:conflict', NEEDS_HUMAN] });
+  const fresh = freshPr({ labels: ['sdg:conflict', NEEDS_HUMAN], mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
   const escalation = { active: true, reason: 'non-text', clears: [] };
 
   assert.deepEqual(check(action, fresh, baseCtx({ escalation })), { allowed: true });
@@ -225,6 +225,51 @@ test('needs-human may be auto-cleared only for an active, clearable escalation u
   assert.match(check(action, fresh, baseCtx({ escalation: twice })).reason, /2 times in 7 days/);
   const longAgo = { ...escalation, clears: [NOW - NEEDS_HUMAN_WINDOW_MS - 1, NOW - NEEDS_HUMAN_WINDOW_MS - 2] };
   assert.deepEqual(check(action, fresh, baseCtx({ escalation: longAgo })), { allowed: true });
+});
+
+test('needs-human removal is denied when the clearing condition does not hold on the fresh state', () => {
+  const action = { ...baseAction('label.remove'), payload: { label: NEEDS_HUMAN } };
+  const fresh = freshPr({ labels: ['sdg:waiting', NEEDS_HUMAN], mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', checks: 'SUCCESS' });
+  const verdict = (escalation, f = fresh) => check(action, f, baseCtx({ escalation: { active: true, clears: [], ...escalation } }));
+
+  // Same head: a head-based condition has not been met
+  const sameHead = verdict({ reason: 'attempts', headSha: SHA });
+  assert.equal(sameHead.rule, 'needs-human');
+  assert.match(sameHead.reason, /clearing condition does not hold/);
+  assert.deepEqual(verdict({ reason: 'attempts', headSha: 'c'.repeat(40) }), { allowed: true });
+  // No recorded head is no evidence that it moved
+  assert.equal(verdict({ reason: 'uncertain', headSha: null }).rule, 'needs-human');
+  // tests-red needs green checks as well as a new head
+  assert.equal(verdict({ reason: 'tests-red', headSha: 'c'.repeat(40) }, { ...fresh, checks: 'FAILURE' }).rule, 'needs-human');
+  assert.deepEqual(verdict({ reason: 'tests-red', headSha: 'c'.repeat(40) }), { allowed: true });
+  // Conflict-based conditions fail closed on UNKNOWN or conflicting mergeability
+  for (const merge of [
+    { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' },
+    { mergeable: 'MERGEABLE', mergeStateStatus: 'UNKNOWN' },
+    { mergeable: 'MERGEABLE', mergeStateStatus: 'DIRTY' },
+    { mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' },
+    { mergeable: undefined, mergeStateStatus: undefined }
+  ]) {
+    assert.equal(verdict({ reason: 'lockfile' }, { ...fresh, ...merge }).rule, 'needs-human', JSON.stringify(merge));
+  }
+});
+
+test('needs-human removal is denied for an unrecognized escalation reason', () => {
+  const action = { ...baseAction('label.remove'), payload: { label: NEEDS_HUMAN } };
+  const fresh = freshPr({ labels: [NEEDS_HUMAN], mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headRefOid: SHA });
+  for (const reason of ['made-up', 'toString', '__proto__', undefined]) {
+    const verdict = check(action, fresh, baseCtx({ escalation: { active: true, reason, headSha: 'c'.repeat(40), clears: [] } }));
+    assert.equal(verdict.rule, 'needs-human', String(reason));
+  }
+});
+
+test('the rate rule reserves the full cost of a multi-write action', () => {
+  const dashboard = {
+    type: 'comment.upsert', scope: 'dashboard', pr: null, headSha: null,
+    payload: { marker: 'dashboard', body: `${MARKERS.dashboard}\nx` }
+  };
+  assert.deepEqual(check(dashboard, null, baseCtx({ writes: { pr: 0, hour: 199 } })), { allowed: true });
+  assert.equal(check(dashboard, null, baseCtx({ writes: { pr: 0, hour: 199 }, cost: 2 })).rule, 'rate');
 });
 
 test('an escalated PR still takes its sticky comment and the needs-human label', () => {

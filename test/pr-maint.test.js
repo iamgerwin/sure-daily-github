@@ -4,13 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PrMaint, decide, fingerprint, recordEscalation, renderDashboard, prMaintLockFile, getPrMaintExitCode, sha1, renderSticky
+  PrMaint, decide, fingerprint, recordEscalation, renderDashboard, prMaintLockFile, getPrMaintExitCode, sha1, renderSticky,
+  MAX_DASHBOARD_ROWS
 } from '../src/core/pr-maint.js';
 import { PrMaintGitHub, normalizePullRequest } from '../src/github/pr-labels.js';
 import { PrMaintLedger } from '../src/utils/pr-maint-ledger.js';
 import { acquireRunLock } from '../src/utils/run-lock.js';
 import { PR_MAINT_DEFAULTS } from '../src/config/loader.js';
-import { MARKERS, MERGE_POLICY_CONTEXT, NEEDS_HUMAN, PAUSED, NEEDS_HUMAN_WINDOW_MS } from '../src/core/policy.js';
+import { MARKERS, MERGE_POLICY_CONTEXT, NEEDS_HUMAN, PAUSED, NEEDS_HUMAN_WINDOW_MS, MAX_TEXT_BYTES } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
 const NOW = Date.UTC(2026, 9, 17, 12);
@@ -279,7 +280,7 @@ function fakeGitHub({ prs = [], issues = [], login = OWNER } = {}) {
     headRefOid: p.headRefOid,
     baseRefName: 'master',
     mergeable: p.mergeable || 'MERGEABLE',
-    mergeStateStatus: p.mergeable === 'CONFLICTING' ? 'DIRTY' : 'CLEAN',
+    mergeStateStatus: p.mergeStateStatus || (p.mergeable === 'CONFLICTING' ? 'DIRTY' : 'CLEAN'),
     author: { login: p.author || OWNER },
     labels: { nodes: p.labels.map(name => ({ name })) },
     reviewThreads: { nodes: [] },
@@ -287,6 +288,7 @@ function fakeGitHub({ prs = [], issues = [], login = OWNER } = {}) {
     commits: {
       nodes: [{
         commit: {
+          oid: p.headRefOid,
           statusCheckRollup: {
             contexts: {
               nodes: state.statuses
@@ -304,6 +306,10 @@ function fakeGitHub({ prs = [], issues = [], login = OWNER } = {}) {
     graphql: async (query, vars) => {
       if (query.includes('pinIssue')) { log('pinIssue', vars); return {}; }
       if (query.includes('resolveReviewThread')) { log('resolveReviewThread', vars); return {}; }
+      if (query.includes('pullRequest(number')) {
+        log('freshChecks', vars);
+        return { repository: { pullRequest: { commits: node(findIssue(vars.number)).commits } } };
+      }
       log('snapshot', vars);
       return {
         repository: {
@@ -320,7 +326,14 @@ function fakeGitHub({ prs = [], issues = [], login = OWNER } = {}) {
         get: async ({ pull_number }) => {
           log('pulls.get', { pull_number });
           const p = findIssue(pull_number);
-          return { data: { number: p.number, state: 'open', head: { sha: state.headOverride || p.headRefOid }, labels: p.labels.map(name => ({ name })) } };
+          const merge = node(p);
+          return {
+            data: {
+              number: p.number, state: 'open', head: { sha: state.headOverride || p.headRefOid }, labels: p.labels.map(name => ({ name })),
+              mergeable: merge.mergeable === 'UNKNOWN' ? null : merge.mergeable === 'MERGEABLE',
+              mergeable_state: merge.mergeStateStatus.toLowerCase()
+            }
+          };
         }
       },
       issues: {
@@ -624,6 +637,235 @@ test('pr-maint holds its own lock, separate from run.lock', async (t) => {
 test('the default pr-maint lock file is data/pr-maint.lock', () => {
   delete process.env.SDG_PR_MAINT_LOCK_FILE;
   assert.match(prMaintLockFile(), /data[\\/]pr-maint\.lock$/);
+});
+
+// ---- review regressions ----
+
+const readLedger = (file) => JSON.parse(fs.readFileSync(file, 'utf8')).repos['iamgerwin/demo'];
+const seedLedger = (file, repoEntry, extra = {}) => new PrMaintLedger({ filePath: file }).save({
+  breaker: null, writes: [], ...extra, repos: { 'iamgerwin/demo': { prs: {}, escalations: {}, dashboard: {}, labelsVersion: 1, ...repoEntry } }
+});
+
+test('decide: a managed label changed by someone else wakes the PR despite an unchanged fingerprint', () => {
+  const ledger = emptyLedger();
+  ledger.prs['1'] = { fingerprint: fingerprint(pr(1)), mode: 'act', managedLabels: ['sdg:waiting'] };
+
+  // Unchanged: our own last write is what GitHub shows
+  assert.deepEqual(only([pr(1, { labels: ['sdg:waiting'], mergePolicy: 'PENDING' })], ledger)[0].actions, []);
+
+  // A second lifecycle label was added
+  const [added] = only([pr(1, { labels: ['sdg:fixing', 'sdg:waiting'], mergePolicy: 'PENDING' })], ledger);
+  assert.equal(added.changed, true);
+  assert.deepEqual(labelOps(added), ['-sdg:waiting']);
+
+  // The lifecycle label was removed: it is repaired
+  const [removed] = only([pr(1, { labels: [], mergePolicy: 'PENDING' })], ledger);
+  assert.deepEqual(labelOps(removed), ['+sdg:waiting']);
+
+  // A human set needs-human: the sticky explains the freeze
+  const [frozen] = only([pr(1, { labels: ['sdg:waiting', NEEDS_HUMAN], mergePolicy: 'PENDING' })], ledger);
+  assert.deepEqual(types(frozen), ['comment.upsert']);
+  assert.match(frozen.actions[0].payload.body, /set by a human/);
+});
+
+test('fingerprint sees mergeStateStatus, so CLEAN to DIRTY under MERGEABLE wakes the PR', () => {
+  const ledger = emptyLedger();
+  ledger.prs['1'] = { fingerprint: fingerprint(pr(1)), mode: 'act', managedLabels: ['sdg:waiting'] };
+  const [row] = only([pr(1, { mergeStateStatus: 'DIRTY', labels: ['sdg:waiting'], mergePolicy: 'PENDING' })], ledger);
+  assert.equal(row.changed, true);
+  assert.deepEqual(labelOps(row), ['-sdg:waiting', '+sdg:conflict']);
+});
+
+test('act ticks: our own label writes do not wake the PR, an external managed-label change is reconciled', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [{ number: 1, headRefOid: sha('1') }] });
+  const runner = makeRunner(fake, files);
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.deepEqual(fake.state.prs[0].labels, ['sdg:waiting']);
+  assert.deepEqual(readLedger(files.ledger).prs['1'].managedLabels, ['sdg:waiting']);
+
+  let before = fake.writes().length;
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.deepEqual(fake.writes().slice(before), [], 'our own writes woke the PR');
+
+  fake.state.prs[0].labels.push('sdg:fixing');
+  before = fake.writes().length;
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.deepEqual(fake.state.prs[0].labels, ['sdg:fixing']);
+  assert.deepEqual(fake.writes().slice(before).filter(w => w.name === 'removeLabel').map(w => w.params.name), ['sdg:waiting']);
+
+  fake.state.prs[0].labels = [];
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.deepEqual(fake.state.prs[0].labels, ['sdg:waiting'], 'a removed lifecycle label is repaired');
+});
+
+test('decide: UNKNOWN mergeability never clears a non-text or lockfile escalation', () => {
+  for (const reason of ['non-text', 'lockfile']) {
+    for (const merge of [
+      { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' },
+      { mergeable: 'MERGEABLE', mergeStateStatus: 'UNKNOWN' },
+      { mergeable: undefined, mergeStateStatus: undefined }
+    ]) {
+      const ledger = emptyLedger();
+      ledger.escalations['10'] = { reason, active: true, pending: false, headSha: sha('a'), history: [NOW], clears: [] };
+      const [row] = only([pr(10, { ...merge, labels: ['sdg:conflict', NEEDS_HUMAN] })], ledger);
+      assert.deepEqual(labelOps(row), [], `${reason} ${JSON.stringify(merge)}`);
+      assert.match(row.blocker, /needs-human/);
+    }
+  }
+});
+
+test('a planned needs-human clear is denied when the live mergeability is UNKNOWN', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [{ number: 10, headRefOid: sha('a'), labels: ['sdg:conflict', NEEDS_HUMAN] }] });
+  seedLedger(files.ledger, {
+    escalations: { 10: { reason: 'non-text', active: true, pending: false, headSha: sha('a'), history: [NOW], clears: [] } }
+  });
+  const runner = makeRunner(fake, files);
+  // The snapshot is clean, but GitHub recomputes mergeability before the write
+  const get = fake.octokit.rest.pulls.get;
+  fake.octokit.rest.pulls.get = async (params) => {
+    const res = await get(params);
+    return { data: { ...res.data, mergeable: null, mergeable_state: 'unknown' } };
+  };
+  const result = await runner.execute(makeConfig({ mode: 'act' }));
+  const clear = result.results[0].prs[0].outcomes.find(o => o.label === NEEDS_HUMAN);
+  assert.equal(clear.status, 'denied');
+  assert.equal(clear.rule, 'needs-human');
+  assert.ok(fake.state.prs[0].labels.includes(NEEDS_HUMAN));
+  assert.equal(readLedger(files.ledger).escalations['10'].active, true);
+});
+
+test('label setup is admitted under the hourly cap and breaker, and finishes on a later tick', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [] });
+  const runner = makeRunner(fake, files);
+  const result = await runner.execute(makeConfig({ mode: 'act', rateLimits: { writesPerPrPerTick: 20, writesPerHour: 1 } }));
+
+  assert.equal(fake.writes().filter(w => w.name === 'createLabel').length, 1);
+  const state = JSON.parse(fs.readFileSync(files.ledger, 'utf8'));
+  assert.equal(state.writes.length, 1);
+  assert.match(state.breaker.reason, /^rate: /);
+  assert.equal(state.repos['iamgerwin/demo'].labelsVersion, undefined, 'setup cut short is not marked done');
+  const setup = readDecisions(files.decisions).filter(d => d.type === 'setup');
+  assert.deepEqual(setup.map(d => d.verdict), ['allow', 'deny']);
+  // Creating the dashboard costs two writes: it does not fit, and that fails the tick
+  assert.equal(result.results[0].dashboard, 'denied');
+  assert.equal(getPrMaintExitCode(result), 1);
+});
+
+test('label setup makes no write when the hourly budget is already spent', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [] });
+  new PrMaintLedger({ filePath: files.ledger }).save({ breaker: null, writes: Array(5).fill(NOW - 1000), repos: {} });
+  await makeRunner(fake, files).execute(makeConfig({ mode: 'act', rateLimits: { writesPerPrPerTick: 20, writesPerHour: 5 } }));
+  assert.deepEqual(fake.writes(), []);
+});
+
+test('renderDashboard is bounded in rows and UTF-8 bytes, with an omitted count and link', () => {
+  const rows = Array.from({ length: 300 }, (_, i) => ({
+    number: i + 1, lifecycle: 'sdg:conflict', next: 'resolve the conflicts — ünïcödé ✓'.repeat(2), blocker: 'merge conflicts',
+    pending: ['remove label `sdg:waiting`', 'add label `sdg:conflict`']
+  }));
+  const body = renderDashboard(rows, { mode: 'shadow', configuredMode: 'shadow', now: NOW, repo: 'iamgerwin/demo' });
+  assert.ok(Buffer.byteLength(body, 'utf8') <= MAX_TEXT_BYTES, `${Buffer.byteLength(body, 'utf8')} bytes`);
+  const listed = body.split('\n').filter(l => l.startsWith('| #')).length;
+  assert.ok(listed > 0 && listed <= MAX_DASHBOARD_ROWS);
+  assert.ok(body.includes(`${300 - listed} more pull requests not listed (the dashboard is capped): https://github.com/iamgerwin/demo/pulls`));
+  assert.ok(body.trimEnd().endsWith('to pause all automation.'));
+
+  const few = renderDashboard(rows.slice(0, 3), { mode: 'shadow', configuredMode: 'shadow', now: NOW });
+  assert.doesNotMatch(few, /not listed/);
+});
+
+test('shadow tick with many open PRs still publishes the dashboard within the text policy', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: Array.from({ length: 120 }, (_, i) => ({ number: i + 1, headRefOid: sha('a') })) });
+  const result = await makeRunner(fake, files).execute(makeConfig());
+  assert.equal(result.results[0].dashboard, 'done');
+  assert.equal(getPrMaintExitCode(result), 0);
+  const body = fake.state.issues[0].body;
+  assert.ok(Buffer.byteLength(body, 'utf8') <= MAX_TEXT_BYTES);
+  assert.match(body, /more pull requests not listed/);
+});
+
+test('a dashboard the policy refuses is surfaced: failed tick, error log, decisions record', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [] });
+  // A breaker reason quoting a mention would be stripped; force a refusal via the hourly cap
+  new PrMaintLedger({ filePath: files.ledger }).save({ breaker: null, writes: Array(200).fill(NOW - 1000), repos: {} });
+  const result = await makeRunner(fake, files).execute(makeConfig());
+  assert.equal(result.results[0].dashboard, 'denied');
+  assert.match(result.results[0].dashboardError, /^rate: /);
+  assert.equal(result.summary.failed, 1);
+  assert.equal(getPrMaintExitCode(result), 1);
+  const record = readDecisions(files.decisions).find(d => d.type === 'dashboard.publish');
+  assert.match(record.reason, /dashboard not published: rate/);
+});
+
+test('the dashboard is recovered when it was closed, deleted or edited on GitHub', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [{ number: 1, headRefOid: sha('1') }] });
+  const runner = makeRunner(fake, files);
+  await runner.execute(makeConfig());
+  const first = fake.state.issues[0];
+  const body = first.body;
+
+  // Unchanged and intact: a read, no write
+  let before = fake.writes().length;
+  assert.equal((await runner.execute(makeConfig())).results[0].dashboard, 'unchanged');
+  assert.deepEqual(fake.writes().slice(before), []);
+
+  // Edited by someone: repaired in place
+  first.body = `${MARKERS.dashboard}\nvandalized`;
+  before = fake.writes().length;
+  await runner.execute(makeConfig());
+  assert.deepEqual(fake.writes().slice(before).map(w => w.name), ['update']);
+  assert.equal(first.body, body);
+
+  // Closed: a new one is opened
+  first.state = 'closed';
+  await runner.execute(makeConfig());
+  const second = fake.state.issues.find(i => i.state === 'open');
+  assert.ok(second && second.number !== first.number);
+  assert.equal(readLedger(files.ledger).dashboard.number, second.number);
+
+  // Deleted: recreated
+  fake.state.issues = fake.state.issues.filter(i => i !== second);
+  await runner.execute(makeConfig());
+  assert.equal(fake.state.issues.filter(i => i.state === 'open').length, 1);
+  assert.equal(fake.state.issues.find(i => i.state === 'open').body, body);
+});
+
+test('decide: a pending escalation whose needs-human is already on GitHub is acknowledged', () => {
+  const ledger = emptyLedger();
+  recordEscalation(ledger.escalations, 11, { reason: 'policy-denial', headSha: sha('a'), now: NOW });
+  const [row] = only([pr(11, { labels: ['sdg:waiting', NEEDS_HUMAN] })], ledger);
+  assert.equal(row.delivered, true);
+  assert.equal(row.escalation.pending, false);
+  assert.deepEqual(labelOps(row), []);
+  assert.equal(ledger.escalations['11'].pending, true, 'decide stays pure');
+});
+
+test('crash after the needs-human add: recovery acknowledges it, and a later human clear is honored', async (t) => {
+  const files = tmpFiles(t);
+  // GitHub has the label, the ledger (saved before the crash) still says pending
+  const fake = fakeGitHub({ prs: [{ number: 11, headRefOid: sha('a'), labels: ['sdg:waiting', NEEDS_HUMAN] }] });
+  seedLedger(files.ledger, {
+    escalations: { 11: { reason: 'policy-denial', detail: null, headSha: sha('a'), at: NOW - 5000, active: true, pending: true, history: [NOW - 5000], clears: [] } }
+  });
+  const runner = makeRunner(fake, files);
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.equal(readLedger(files.ledger).escalations['11'].pending, false);
+
+  // A human removes needs-human and pushes
+  fake.state.prs[0].labels = ['sdg:waiting'];
+  fake.state.prs[0].headRefOid = sha('b');
+  const before = fake.writes().length;
+  await runner.execute(makeConfig({ mode: 'act' }));
+  assert.ok(!fake.state.prs[0].labels.includes(NEEDS_HUMAN), 'needs-human was re-added over the human clear');
+  assert.ok(!fake.writes().slice(before).some(w => w.name === 'addLabels' && w.params.labels.includes(NEEDS_HUMAN)));
+  assert.equal(readLedger(files.ledger).escalations['11'].active, false);
 });
 
 test('renderDashboard shows mode, budget and breaker, and never mentions anyone', () => {

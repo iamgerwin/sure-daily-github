@@ -81,14 +81,17 @@ dashboard handler. Shadow mode also never creates labels, and never re-reads PRs
 3 snapshot   one GraphQL query per 50 open PRs: head, mergeable, labels, review threads, reviews, check contexts
 4 decide     pure decide(snapshot, ledger) → planned actions per PR (babysit PRs first)
 5 execute    every action: policy.check → handler → data/pr-maint-decisions.jsonl
-6 dashboard  re-rendered after the PRs (so a breaker trip this tick shows), written only on body change
+6 dashboard  re-rendered after the PRs (so a breaker trip this tick shows), read back from GitHub, written only when
+             the issue is missing, closed, not ours, or its body differs
 7 ledger     data/pr-maint-state.json
 ```
 
 **Fingerprint.** A PR is only decided again when
-`sha1(headSha, mergeable, checks, thread ids + last comment ids, review ids, labels − managed labels)` changes, or the
-mode changes. `checks` is computed from the check contexts *without* `sdg/merge-policy`, and the sticky comment isn't
-part of the snapshot, so none of our own writes wake a PR. An idle tick costs one GraphQL query and no writes.
+`sha1(headSha, mergeable, mergeStateStatus, checks, thread ids + last comment ids, review ids, labels − managed labels)`
+changes, the mode changes, or its managed labels differ from what the ledger recorded after our own last writes (so a
+managed label someone else added or removed is reconciled). `checks` is computed from the check contexts *without*
+`sdg/merge-policy`, and the sticky comment isn't part of the snapshot, so none of our own writes wake a PR. An idle tick
+costs one GraphQL query, one dashboard read, and no writes.
 
 **Idempotency.** GitHub is the source of truth. Labels are compared against the snapshot. The status is only posted when
 the head commit has no `sdg/merge-policy` context, and an existing one is never overwritten. The sticky and the dashboard
@@ -98,7 +101,8 @@ records, which live only in the state file in this release.
 
 ### Label state machine
 
-Labels are created (or repaired, for the AI-owned ones) on the first `act` tick:
+Labels are created (or repaired, for the AI-owned ones) on the first `act` tick. Each of those writes is admitted like an
+action (hourly cap, breaker, decisions log as `type: setup`); a setup cut short is finished on a later tick:
 
 | Label | Added by | Removed by | Meaning |
 |---|---|---|---|
@@ -126,8 +130,12 @@ needs-human present                            ⇒ frozen: only the sticky comme
 
 **`needs-human`.** A label without an escalation record was set by a human, and the AI never removes it. An escalation
 the AI recorded is cleared automatically when its condition holds, for example a new head for `attempts` or `uncertain`,
-or no longer conflicting for `non-text` or `lockfile`. That happens at most twice per PR in 7 days. The third escalation in 7
-days sticks as `flapping`. `policy-denial`, `gate-weakening` and `flapping` are cleared by humans only. The first
+or no longer conflicting for `non-text` or `lockfile` (GitHub must report `MERGEABLE` with a computed merge state;
+`UNKNOWN` keeps the label). That happens at most twice per PR in 7 days. The allowlisted conditions live in `policy.js`,
+and the `needs-human` rule enforces them again on the live PR (mergeability, and checks for `tests-red`) right before the
+write; any other reason waits for a human. A pending escalation whose `needs-human` is already on GitHub is acknowledged
+in the ledger before anything else is decided, so a crash after the label write can't override a later human clear. The
+third escalation in 7 days sticks as `flapping`. `policy-denial`, `gate-weakening` and `flapping` are cleared by humans only. The first
 escalation mentions the owner once in the sticky comment. That's the only `@`-mention the automation ever writes.
 
 ### Policy engine
@@ -144,12 +152,12 @@ escalation mentions the owner once in the sticky comment. That's the only `@`-me
 | `text-format` | deny | comments without their marker, a leading `/sdg`, `@`-mentions of anyone but the owner, text over 8 KB, status descriptions over 140 characters |
 | `status` | deny | any `sdg/merge-policy` state other than `pending` (the real verdict comes with the merge policy) |
 | `lifecycle` | deny | a second lifecycle label |
-| `needs-human` | deny | removing a human-set `needs-human`, a human-only reason, or a third auto-clear in 7 days |
+| `needs-human` | deny | removing a human-set `needs-human`, a human-only or unrecognized reason, a clearing condition that doesn't hold on the live PR, or a third auto-clear in 7 days |
 | `escalated` | deny | anything but the sticky and `needs-human` on an escalated PR |
 | `thread` | deny | resolving a resolved thread, or an owner thread that isn't fixed |
 | `mode` | deny | anything but the dashboard in shadow mode |
 | `paused` | deny | writes to a PR labeled `automation-paused` |
-| `rate` | trip | more than 20 writes on a PR in a tick, or 200 writes in an hour |
+| `rate` | trip | more than 20 writes on a PR in a tick, or 200 writes in an hour (creating the dashboard reserves both of its writes) |
 | `head-pin` | deny | the PR's head moved (re-read right before the write in act mode) or the PR closed |
 
 Content rules run before the mode rule, so shadow mode still surfaces impossible denials. A denial is logged and never
@@ -167,7 +175,9 @@ log is the dataset you review before promoting to `act`.
 
 - **Dashboard issue** "sdg: PR automation", marker `<!-- sdg:dashboard -->`, pinned when created. It shows the mode (and
   the configured mode if the breaker lowered it), the rate caps, the breaker state, and one row per open PR: state, next
-  step, blocker and pending label changes. To pause everything, label this issue `automation-paused`.
+  step, blocker and pending label changes. To pause everything, label this issue `automation-paused`. It is capped at
+  50 rows and 8 KB (UTF-8), with the number of PRs left out and a link to the PR list. A dashboard that can't be
+  published fails the tick (exit 1), is logged as an error, and gets a `dashboard.publish` line in the decisions log.
 - **Sticky comment** per PR, marker `<!-- sdg:status -->`: lifecycle state, why, next step, mode, head, priority, and the
   escalation with its `<!-- sdg:escalation reason=… clear=… n=… -->` record. It has no timestamps, so it's only edited
   when something changed.
