@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
+import { describeFailures } from '../src/core/executor.js';
 
 const config = { general: { timezone: 'UTC' }, randomization: {}, contentTemplates: [] };
 
@@ -199,7 +200,34 @@ test('honors repositorySelection.maxPerExecution', async () => {
 
   assert.deepEqual(created.map(c => c.repo), ['a']);
   const notSelected = results.filter(r => r.reason === 'Not selected this run').map(r => r.repo);
-  assert.deepEqual(notSelected, ['me/b', 'me/c']);
+  assert.deepEqual(notSelected, ['b', 'c']);
+});
+
+test('failed results carry owner and repo so the CLI summary can name them', async () => {
+  const { handler } = createHandler();
+  handler.client.issues.create = async () => { throw new Error('Not Found'); };
+
+  const results = await handler.processRepositories([repo({ repo: 'broken' })], {}, false, config);
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].success, false);
+  assert.equal(results[0].owner, 'me');
+  assert.equal(results[0].repo, 'broken');
+  assert.deepEqual(describeFailures(results), ['me/broken: Not Found']);
+});
+
+test('skipped and created results carry owner and repo', async () => {
+  const { handler } = createHandler();
+  const repos = [repo({ repo: 'a' }), repo({ repo: 'b' }), repo({ repo: 'off', enabled: false })];
+  const cfg = { ...config, repositorySelection: { strategy: 'sequential', maxPerExecution: 1 } };
+
+  const results = await handler.processRepositories(repos, {}, false, cfg);
+
+  for (const r of results) {
+    assert.equal(r.owner, 'me');
+    assert.ok(!r.repo.includes('/'), `repo should be the bare name, got ${r.repo}`);
+  }
+  assert.deepEqual(results.map(r => r.repo).sort(), ['a', 'b', 'off']);
 });
 
 test('round-robin rotates through repositories across runs', async () => {

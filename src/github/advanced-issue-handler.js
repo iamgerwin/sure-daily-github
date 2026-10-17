@@ -177,6 +177,8 @@ class AdvancedIssueHandler {
       state.repositories = {};
     }
     
+    // Results use the same { owner, repo } shape as the other handlers so the
+    // CLI failure summary can name the repository
     const results = [];
     const now = Date.now();
     const ready = [];
@@ -186,7 +188,8 @@ class AdvancedIssueHandler {
         results.push({
           success: true,
           skipped: true,
-          repo: `${repo.owner}/${repo.repo}`,
+          owner: repo.owner,
+          repo: repo.repo,
           reason: 'Repository disabled'
         });
         continue;
@@ -219,7 +222,8 @@ class AdvancedIssueHandler {
         results.push({
           success: true,
           skipped: true,
-          repo: `${repo.owner}/${repo.repo}`,
+          owner: repo.owner,
+          repo: repo.repo,
           reason: `Daily target reached (${repoState.issuesCreatedToday}/${repoState.todayTarget})`
         });
         continue;
@@ -231,7 +235,8 @@ class AdvancedIssueHandler {
         results.push({
           success: true,
           skipped: true,
-          repo: `${repo.owner}/${repo.repo}`,
+          owner: repo.owner,
+          repo: repo.repo,
           reason: `Waiting for interval (${minutesRemaining} minutes remaining)`
         });
         continue;
@@ -249,7 +254,8 @@ class AdvancedIssueHandler {
         results.push({
           success: true,
           skipped: true,
-          repo: `${repo.owner}/${repo.repo}`,
+          owner: repo.owner,
+          repo: repo.repo,
           reason: 'Not selected this run'
         });
       }
@@ -284,7 +290,8 @@ class AdvancedIssueHandler {
           
           results.push({
             success: true,
-            repo: `${repo.owner}/${repo.repo}`,
+            owner: repo.owner,
+            repo: repo.repo,
             dryRun: true,
             issue: issueContent,
             progress: `${repoState.issuesCreatedToday}/${repoState.todayTarget}`
@@ -326,7 +333,8 @@ class AdvancedIssueHandler {
           
           results.push({
             success: true,
-            repo: `${repo.owner}/${repo.repo}`,
+            owner: repo.owner,
+            repo: repo.repo,
             issue: {
               number: issue.number,
               url: issue.html_url,
@@ -343,7 +351,8 @@ class AdvancedIssueHandler {
         
         results.push({
           success: false,
-          repo: `${repo.owner}/${repo.repo}`,
+          owner: repo.owner,
+          repo: repo.repo,
           error: error.message
         });
       }
