@@ -335,10 +335,11 @@ const commentSize = (c) => (c.body || '').length + (c.diffHunk || '').length;
 
 // A failed batch only affects its own items: they are listed in
 // `batchFailures` ({ ids, infra, error }) while the other batches' results
-// are kept. Only when every batch fails is the whole call a failure.
+// are kept. Only when every batch fails is the whole call a failure; its
+// `batchFailures` still classify each item by its own batch.
 function settleBatches(failures, batchCount, result) {
   if (failures.length === batchCount) {
-    return { ok: false, infra: failures.every(f => f.infra), error: failures[0].error };
+    return { ok: false, infra: failures.every(f => f.infra), error: failures[0].error, batchFailures: failures };
   }
   return { ok: true, ...result, batchFailures: failures };
 }
@@ -409,7 +410,7 @@ export async function runImplement({ engine, model, cwd, pr, items, reportFile, 
     conflicting.push(...report.conflicting);
   }
   const { batchFailures, ...rest } = settleBatches(failures, batches.length, {});
-  if (!rest.ok) return rest;
+  if (!rest.ok) return { ...rest, batchFailures };
   return { ok: true, report: { fixes, missing, conflicting, batchFailures } };
 }
 

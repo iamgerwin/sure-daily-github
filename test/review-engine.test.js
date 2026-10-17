@@ -327,6 +327,26 @@ test('a failing later batch keeps the earlier batches\' results and only reports
   });
   assert.equal(allFail.ok, false);
   assert.match(allFail.error, /exited with code 1: down/);
+
+  // ...but each item keeps its own batch's class when the classes are mixed
+  const mixed = () => {
+    let call = 0;
+    return async () => {
+      if (++call === 1) throw Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' });
+      return { code: 1, stdout: '', stderr: 'down' };
+    };
+  };
+  const mixedTriage = await runTriage({
+    engine: 'opencode', model: 'm', cwd: '/w', pr, comments: big, diff: '', outputFile: path.join(dir, 'triage.json'), runner: mixed()
+  });
+  const mixedImplement = await runImplement({
+    engine: 'opencode', model: 'm', cwd: '/w', pr, items, reportFile: path.join(dir, 'implement.json'), runner: mixed()
+  });
+  for (const result of [mixedTriage, mixedImplement]) {
+    assert.equal(result.ok, false);
+    assert.equal(result.infra, false);
+    assert.deepEqual(result.batchFailures.map(f => [f.ids, f.infra]), [[['review_comment:200'], true], [['review_comment:201'], false]]);
+  }
 });
 
 test('large comment batches are split across engine calls, each under the size bound, covering every id', async () => {

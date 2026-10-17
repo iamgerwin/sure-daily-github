@@ -610,13 +610,14 @@ export class Babysitter {
     // Not charged an attempt: the engine could not start, the push raced
     // another push, or the implement report did not cover the comment
     const retrying = [];
-    if (!triage.ok && triage.infra) {
+    if (!triage.ok && triage.infra && !triage.batchFailures) {
       for (const comment of pending) retrying.push({ comment, error: `triage failed: ${triage.error}` });
-    } else if (!triage.ok) {
+    } else if (!triage.ok && !triage.batchFailures) {
       for (const comment of pending) failures.push({ comment, action: null, error: `triage failed: ${triage.error}` });
     } else {
-      const byId = new Map(triage.decisions.map(d => [d.id, d]));
-      // A failed triage batch only affects its own comments
+      const byId = new Map((triage.decisions || []).map(d => [d.id, d]));
+      // A failed triage batch only affects its own comments, also when every
+      // batch failed
       const failedBatch = batchFailureMap(triage.batchFailures);
       for (const comment of pending) {
         const batch = failedBatch.get(comment.id);
@@ -709,6 +710,21 @@ export class Babysitter {
       }
       // An interrupted run keeps its push intent for the next run to reconcile
       this.checkInterrupted();
+      if (!fix.ok && !fix.reschedule && ctx.ledger.getPushIntent(prKey)) {
+        // The push was attempted and errored, but it may still have landed:
+        // nothing is settled or charged until the next run checks the head
+        const failed = outcomes(fix);
+        ctx.ledger.markPushUnconfirmed(prKey, { error: fix.error, settled: failed.settled, failures: failed.failures });
+        logger.warn('Babysit push outcome unknown; reconciling next run', { owner, repo, number: pr.number, error: fix.error });
+        return {
+          success: false,
+          error: `push outcome unknown (${fix.error}); reconciling next run`,
+          counts,
+          commitSha: null,
+          failures: [],
+          retrying: pending.map(comment => ({ id: comment.id, error: fix.error }))
+        };
+      }
       if (!fix.ok) {
         ctx.ledger.clearPushIntent(prKey);
         logger.warn('Babysit fix was not pushed', { owner, repo, number: pr.number, error: fix.error });
@@ -744,7 +760,11 @@ export class Babysitter {
       env: scrubEnv(process.env)
     });
     this.checkInterrupted();
-    if (!implement.ok) return { ok: false, infra: Boolean(implement.infra), error: `engine failed: ${implement.error}` };
+    if (!implement.ok) {
+      // Per-batch failures still decide, item by item, what is charged
+      const report = implement.batchFailures ? { fixes: [], batchFailures: implement.batchFailures } : undefined;
+      return { ok: false, infra: Boolean(implement.infra), error: `engine failed: ${implement.error}`, report };
+    }
     const report = implement.report;
     if (!report || !Array.isArray(report.fixes)) {
       return { ok: false, infra: true, error: 'engine did not write a valid implement report' };
@@ -1034,7 +1054,8 @@ export class Babysitter {
   // A push intent left by a run that died around its push. If the branch head
   // is the expected SHA, the push landed: its stored outcomes are recorded and
   // their replies delivered, without running the engine again. Otherwise the
-  // push never happened and the comments stay pending. A failed lookup keeps
+  // push never happened and the comments stay pending (or, for a push that
+  // errored, get the failed outcomes it held back). A failed lookup keeps
   // the intent (and keeps the PR from being processed) until the next run.
   async reconcilePushIntents(ctx, selected, prFilter, results) {
     const { client, ledger } = ctx;
@@ -1051,6 +1072,21 @@ export class Babysitter {
       if (current.error) {
         logger.warn('Could not reconcile an earlier push; retrying next run', { owner, repo, number, error: current.error });
         results.push({ ...result, success: false, error: current.error });
+        continue;
+      }
+      if (current.head !== intent.expectedSha && intent.notLanded) {
+        // The push errored and did not land after all: apply the failed
+        // outcomes (charging the attempts) the run that pushed held back
+        logger.warn('An earlier errored push did not land; charging its comments', {
+          owner, repo, number, expected: intent.expectedSha, head: current.head, error: intent.notLanded.error
+        });
+        try {
+          await this.postReplies(ctx, { owner, repo }, { number }, intent.sourceHead, intent.notLanded.settled, intent.notLanded.failures, null, counts);
+          results.push({ ...result, reason: 'earlier push did not land', success: counts.failed === 0 });
+        } catch (error) {
+          logger.error('Failed to reconcile an earlier push', { owner, repo, number, error: error.message });
+          results.push({ ...result, success: false, error: error.message });
+        }
         continue;
       }
       if (current.head !== intent.expectedSha) {

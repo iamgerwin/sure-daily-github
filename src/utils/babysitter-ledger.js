@@ -216,6 +216,16 @@ export class BabysitterLedger {
     this.save();
   }
 
+  // The push errored, but the server may have accepted it with only the
+  // response lost. The intent stays; `notLanded` holds the outcomes (with the
+  // charged failures) to apply if the next run finds the push did not land.
+  markPushUnconfirmed(prKey, { error, settled, failures }) {
+    const intent = this.data.pushIntents[prKey];
+    if (!intent) return;
+    intent.notLanded = { error: String(error ?? 'unknown error'), settled, failures };
+    this.save();
+  }
+
   getPushIntent(prKey) {
     return this.data.pushIntents[prKey] || null;
   }
