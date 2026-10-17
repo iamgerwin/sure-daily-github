@@ -14,7 +14,9 @@
 - 🖥️ **VPS-Ready** - Systemd service included for production deployment
 - 🎲 **Randomized Activity** - Range-based counts with time-based variations
 - 🗂️ **Multi-Repo Selection** - Sequential, random, weighted, and round-robin strategies
- - 🧮 **Stateful Limits** - Hourly/Daily/Weekly counters with timezone-aware resets
+- 🧮 **Stateful Limits** - Hourly/Daily/Weekly counters with timezone-aware resets
+- 🍼 **PR Babysitting** - Addresses review comments on labeled PRs, never merges ([docs/BABYSIT.md](./docs/BABYSIT.md))
+- 🔧 **Conflict Fixer** - Resolves merge conflicts on open PRs behind a test gate ([docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md))
 
 ## Quick Start
 
@@ -93,7 +95,7 @@ node src/cli.js run --dry-run
 # Run unit tests
 npm test
 
-# Check repository status
+# Check repository status (times shown in general.timezone)
 node src/cli.js status
 ```
 
@@ -114,11 +116,16 @@ sure-daily-github init              # Create example configuration
 sure-daily-github validate          # Validate configuration file
 sure-daily-github run [--dry-run]   # Run once (manual trigger)
 sure-daily-github start             # Start scheduler (daemon mode)
-sure-daily-github status            # Check repository status
+sure-daily-github status            # Check repository status (times in general.timezone)
 sure-daily-github babysit [--dry-run] [--repo owner/repo] [--pr N]
                                     # Address review comments on PRs labeled "babysit"
+sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [--pr N]
+                                    # Resolve merge conflicts on open PRs (pushes only if tests pass)
 sure-daily-github --help            # Show all commands
 ```
+
+Every command accepts `--config <path>` except `init`. The scheduler (`start`) is covered in
+[docs/SCHEDULER.md](./docs/SCHEDULER.md) and [docs/SCHEDULER_SETUP.md](./docs/SCHEDULER_SETUP.md).
 
 ### Babysit
 
@@ -129,6 +136,20 @@ branch, and replies on every thread. Bot reviewers are tagged back for a
 re-review. It never merges. Configure it in the `babysit:` block; set
 `babysit.enabled: true` to also run it on the scheduler. See
 [docs/BABYSIT.md](./docs/BABYSIT.md).
+
+### Fix Conflicts
+
+`fix-conflicts` merges the base branch into conflicted open PRs and pushes
+the result (never forced) only if the repository's own tests pass
+(`testCommand`, else `npm test`, else a `test` rule in the makefile). Source
+hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
+`escalate`) can send them to manual review instead. Test files
+(`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
+both sides, and a test-count guard leaves the PR for review if a resolved test
+file has fewer tests than either parent. Nothing runs until a repository is
+allowed in the `conflictFixer:` block (default: empty allowlist). Runs are
+idempotent via the run lock and a per-PR head-SHA ledger. See
+[docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md).
 
 ## VPS Deployment
 
@@ -209,6 +230,8 @@ randomization:
     weekly: { min: 50, max: 150 }
 ```
 
+Ranges must be whole numbers ≥ 1 with `min` ≤ `max`; invalid ranges are rejected when the configuration loads.
+
 #### Repository Selection (Optional)
 
 ```yaml
@@ -239,8 +262,10 @@ repositorySelection:
 | `commitMessage` | string | ❌ | Commit message template |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
 | `weight` | number | ❌ | Positive weight for weighted selection (default: 1) |
+| `testCommand` | string | ❌ | Test command for `fix-conflicts` (overrides detection) |
+| `conflictFixer` | boolean | ❌ | Per-repo `fix-conflicts` gate override |
 
-> See docs/RANDOMIZATION.md for detailed examples.
+> See [docs/RANDOMIZATION.md](./docs/RANDOMIZATION.md) for detailed examples, [docs/BABYSIT.md](./docs/BABYSIT.md) for the `babysit:` block, and [docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md) for the `conflictFixer:` block.
 
 ## State Management
 
@@ -248,8 +273,9 @@ repositorySelection:
 - Timezone-aware resets using `general.timezone` (default `UTC`)
 - Graceful fallbacks on state corruption (automatic `.bak` backup)
 - Override storage path with `SDG_STATE_FILE`
+- Exclusive run lock (`data/run.lock`) shared by `run`, the scheduler, `babysit`, and `fix-conflicts`
 
-See docs/STATE.md for details.
+See [docs/STATE.md](./docs/STATE.md) for details.
 
 ## Backward Compatibility
 
@@ -315,22 +341,16 @@ Recommended VPS specs:
 ## Development
 
 ```bash
-# Run tests (if implemented)
+# Run tests (node --test)
 npm test
 
 # Run with debug logging
 LOG_LEVEL=debug node src/cli.js run
-
-# Format code (if using prettier)
-npm run format
-
-# Lint code (if using eslint)
-npm run lint
 ```
 
 ### Continuous Integration
 
-GitHub Actions (`.github/workflows/test.yml`) runs `npm test` on every pull request to `master` and on every push to `master`.
+GitHub Actions (`.github/workflows/test.yml`) runs `npm test` on Node.js 22 on every pull request to `master` and on every push to `master`.
 The job is named `test` so a branch ruleset can require it as a status check.
 See [docs/PR_MAINTENANCE.md](./docs/PR_MAINTENANCE.md) for the one-time `master` ruleset setup.
 
@@ -342,19 +362,30 @@ sure-daily-github/
 │   ├── cli.js              # CLI entry point
 │   ├── core/
 │   │   ├── scheduler.js    # Cron scheduling
-│   │   └── executor.js     # Main execution logic
+│   │   ├── executor.js     # Main execution logic
+│   │   ├── babysitter.js   # babysit command
+│   │   ├── conflict-fixer.js    # fix-conflicts command
+│   │   └── conflict-resolver.js # Per-hunk conflict resolution
 │   ├── github/
 │   │   ├── client.js       # GitHub API client
-│   │   └── commit-handler.js
+│   │   ├── commit-handler.js
+│   │   └── issue-handler.js / advanced-issue-handler.js
 │   ├── config/
-│   │   └── loader.js       # Configuration loader
+│   │   └── loader.js       # Configuration loader and validation
 │   └── utils/
 │       ├── logger.js       # Logging utility
-│       └── state.js        # State management
+│       ├── state.js        # State management
+│       ├── run-lock.js     # Shared run lock
+│       ├── randomizer.js   # Range and selection randomization
+│       ├── test-detector.js     # Test command detection (npm / make)
+│       └── *-ledger.js     # babysit and fix-conflicts ledgers
 ├── config/
 │   └── config.example.yaml
 ├── deployment/
 │   └── sure-daily-github.service
+├── docs/                   # Feature documentation
+├── scripts/                # health-check.sh, verify-status.sh
+├── .github/workflows/test.yml
 ├── .env.example
 └── package.json
 ```
@@ -435,5 +466,11 @@ systemctl status sure-daily-github
 ### Documentation
 
 - **Setup Guide**: See [docs/SCHEDULER_SETUP.md](./docs/SCHEDULER_SETUP.md)
-- **Troubleshooting**: See [docs/SCHEDULER_SETUP.md#troubleshooting](./docs/SCHEDULER_SETUP.md)
+- **Troubleshooting**: See [docs/SCHEDULER_SETUP.md#troubleshooting](./docs/SCHEDULER_SETUP.md#troubleshooting)
+- **Scheduler**: See [docs/SCHEDULER.md](./docs/SCHEDULER.md)
+- **Randomization**: See [docs/RANDOMIZATION.md](./docs/RANDOMIZATION.md)
+- **State**: See [docs/STATE.md](./docs/STATE.md)
+- **Babysit**: See [docs/BABYSIT.md](./docs/BABYSIT.md)
+- **Conflict Fixer**: See [docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md)
+- **CI & Ruleset**: See [docs/PR_MAINTENANCE.md](./docs/PR_MAINTENANCE.md)
 - **Version History**: See [CHANGELOG.md](./CHANGELOG.md)
