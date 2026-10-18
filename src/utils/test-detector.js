@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import { clampTimerMs } from './process.js';
 
 // Keep only the end of the output: that is where test runners print failures
 const MAX_OUTPUT_CHARS = 64 * 1024;
@@ -79,7 +80,7 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
     const timer = setTimeout(() => {
       timedOut = true;
       killGroup(child);
-    }, timeoutMs);
+    }, clampTimerMs(timeoutMs));
 
     child.on('error', (error) => {
       clearTimeout(timer);
