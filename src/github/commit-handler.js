@@ -49,21 +49,23 @@ class CommitHandler {
     return `${basePath}/${date}-${timestamp}.md`;
   }
 
-  // The config loader normalizes dailyTarget to { min, max }; state limits need a number
-  resolveDailyMax(dailyTarget) {
+  // The config loader normalizes dailyTarget to { min, max }; state limits need a
+  // number, so a real range resolves to today's rolled target for the repository
+  resolveDailyTarget({ owner, repo, dailyTarget }, timezone = 'UTC', now = new Date()) {
     if (dailyTarget && typeof dailyTarget === 'object') {
-      return dailyTarget.max;
+      return state.getDailyTarget(owner, repo, dailyTarget, timezone, now);
     }
     return dailyTarget || 1;
   }
 
   async createDailyCommit(repoConfig, contentTemplate, dryRun = false, timezone = 'UTC') {
-    const { owner, repo, branch, path: basePath, commitMessage, dailyTarget } = repoConfig;
+    const { owner, repo, branch, path: basePath, commitMessage } = repoConfig;
 
     try {
       // Check if commit is needed
-      if (!state.isCommitNeeded(owner, repo, this.resolveDailyMax(dailyTarget), timezone)) {
-        logger.info('Daily target already met', { owner, repo, target: dailyTarget });
+      const target = this.resolveDailyTarget(repoConfig, timezone);
+      if (!state.isCommitNeeded(owner, repo, target, timezone)) {
+        logger.info('Daily target already met', { owner, repo, target });
         return { success: true, skipped: true, reason: 'target_met' };
       }
 
@@ -117,10 +119,11 @@ class CommitHandler {
     // so maxPerExecution slots are not spent on repos whose target is met
     const ready = [];
     for (const repo of enabled) {
-      if (state.isCommitNeeded(repo.owner, repo.repo, this.resolveDailyMax(repo.dailyTarget), timezone)) {
+      const target = this.resolveDailyTarget(repo, timezone);
+      if (state.isCommitNeeded(repo.owner, repo.repo, target, timezone)) {
         ready.push(repo);
       } else {
-        logger.info('Daily target already met', { owner: repo.owner, repo: repo.repo, target: repo.dailyTarget });
+        logger.info('Daily target already met', { owner: repo.owner, repo: repo.repo, target });
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'target_met' });
       }
     }
@@ -159,7 +162,7 @@ class CommitHandler {
 
     for (const repo of repositories) {
       const repoState = state.getRepoState(repo.owner, repo.repo);
-      const target = this.resolveDailyMax(repo.dailyTarget);
+      const target = this.resolveDailyTarget(repo, timezone);
       // Daily window counter covers both commits and issues (simple issue mode reuses this status)
       const { allowed: needsCommit, counts } = state.isWithinLimits(repo.owner, repo.repo, { dailyMax: target }, timezone);
 

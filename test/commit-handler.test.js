@@ -177,3 +177,24 @@ test('processRepositories rotates repos across runs with round-robin in commit m
 
   assert.deepEqual(calls, ['rr-sel-a', 'rr-sel-b', 'rr-sel-c']);
 });
+
+test('createDailyCommit stops at the rolled daily target, not always dailyTarget.max', async () => {
+  const { handler, calls } = stubbedHandler();
+  const ranged = { ...repoConfig, repo: 'ranged', dailyTarget: { min: 1, max: 3 } };
+  const target = handler.resolveDailyTarget(ranged);
+  assert.ok(target >= 1 && target <= 3);
+
+  for (let i = 0; i < 5; i++) await handler.createDailyCommit(ranged, {}, false);
+
+  assert.equal(calls.length, target);
+  assert.equal(state.getCounts('me', 'ranged').daily, target);
+});
+
+test('getStatus reports the same rolled target the run uses', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const ranged = { ...repoConfig, repo: 'ranged-status', dailyTarget: { min: 1, max: 50 } };
+  const target = handler.resolveDailyTarget(ranged);
+
+  const [status] = await handler.getStatus([ranged]);
+  assert.equal(status.target, target);
+});
