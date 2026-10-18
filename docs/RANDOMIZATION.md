@@ -40,6 +40,8 @@ general:
 
 This will randomly generate between 12 and 50 issues per execution.
 
+In commit mode, a range picks one target per repository per day (for example, 3 to 8 commits) and the repository stops receiving commits once that day's target is reached.
+
 ### Repository-Specific Targets
 
 Each repository can have its own target range:

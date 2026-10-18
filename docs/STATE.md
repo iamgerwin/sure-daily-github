@@ -23,6 +23,7 @@ Limits are evaluated before each action:
 
 - When `randomization.timeVariations.enabled: true`, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps.
 - Otherwise, the repository `dailyTarget` (number or range) determines the daily cap.
+- A `dailyTarget` range (`{ min, max }`) in commit mode rolls one target per repository per day, stored as `dailyTarget: { day, min, max, value }` in that repository's state, so every run that day and `status` use the same value. A new day or a changed range rolls a new target.
 
 ## Graceful Fallbacks
 
