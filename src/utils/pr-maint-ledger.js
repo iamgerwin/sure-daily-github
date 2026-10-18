@@ -9,14 +9,24 @@ export function emptyState() {
   return { breaker: null, writes: [], repos: {} };
 }
 
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const objectOr = (value, fallback) => (isPlainObject(value) ? value : fallback);
+
 export function repoState(state, owner, repo) {
   const key = `${owner}/${repo}`.toLowerCase();
-  state.repos[key] = state.repos[key] || {};
-  const entry = state.repos[key];
-  entry.prs = entry.prs || {};
-  entry.escalations = entry.escalations || {};
-  entry.dashboard = entry.dashboard || {};
+  const entry = state.repos[key] = objectOr(state.repos[key], {});
+  entry.prs = objectOr(entry.prs, {});
+  entry.escalations = objectOr(entry.escalations, {});
+  entry.dashboard = objectOr(entry.dashboard, {});
   return entry;
+}
+
+// A field of the wrong shape (hand edit, older schema) falls back to its
+// default instead of crashing every tick; the rest of the ledger is kept
+function normalize(parsed) {
+  const breaker = isPlainObject(parsed.breaker) && Number.isFinite(parsed.breaker.until) ? parsed.breaker : null;
+  const writes = Array.isArray(parsed.writes) ? parsed.writes.filter(Number.isFinite) : [];
+  return { ...parsed, breaker, writes, repos: objectOr(parsed.repos, {}) };
 }
 
 // Cache plus budget counters for pr-maint: per-PR fingerprints and written
@@ -30,8 +40,7 @@ export class PrMaintLedger {
   load() {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptyState();
-      return { ...emptyState(), ...parsed };
+      return isPlainObject(parsed) ? normalize(parsed) : emptyState();
     } catch (_) {
       return emptyState();
     }
