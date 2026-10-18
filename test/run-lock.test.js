@@ -132,3 +132,58 @@ test('executor.execute releases the lock even when the run throws', async (t) =>
   await assert.rejects(executor.execute({}), /boom/);
   assert.equal(fs.existsSync(filePath), false);
 });
+
+function lockDirEntries(filePath) {
+  return fs.readdirSync(path.dirname(filePath)).sort();
+}
+
+test('acquireRunLock never exposes a partially written lock', (t) => {
+  const filePath = useTmpLockFile(t);
+  const originalLink = fs.linkSync;
+  let seen = null;
+  t.mock.method(fs, 'linkSync', (src, dest) => {
+    // The lock path must not exist before the link, and the source is complete
+    assert.equal(fs.existsSync(dest), false);
+    seen = JSON.parse(fs.readFileSync(src, 'utf8'));
+    return originalLink(src, dest);
+  });
+
+  const lock = acquireRunLock();
+  assert.equal(lock.acquired, true);
+  assert.equal(seen.pid, process.pid);
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock'], 'temp file is cleaned up');
+  lock.release();
+});
+
+test('acquireRunLock leaves no temp file behind when the lock is held', (t) => {
+  const filePath = useTmpLockFile(t);
+  writeForeignLock(filePath);
+
+  const result = acquireRunLock();
+  assert.equal(result.acquired, false);
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
+});
+
+test('acquireRunLock falls back to an exclusive create without hard links', (t) => {
+  const filePath = useTmpLockFile(t);
+  t.mock.method(fs, 'linkSync', () => {
+    throw Object.assign(new Error('not supported'), { code: 'ENOTSUP' });
+  });
+
+  const first = acquireRunLock();
+  assert.equal(first.acquired, true);
+  assert.equal(JSON.parse(fs.readFileSync(filePath, 'utf8')).pid, process.pid);
+  assert.equal(acquireRunLock().acquired, false, 'fallback is still exclusive');
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
+  first.release();
+});
+
+test('acquireRunLock surfaces unexpected link errors', (t) => {
+  const filePath = useTmpLockFile(t);
+  t.mock.method(fs, 'linkSync', () => {
+    throw Object.assign(new Error('disk gone'), { code: 'EIO' });
+  });
+
+  assert.throws(() => acquireRunLock(), /disk gone/);
+  assert.deepEqual(lockDirEntries(filePath), []);
+});
