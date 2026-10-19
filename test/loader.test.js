@@ -497,3 +497,29 @@ test('validate rejects invalid repo gating settings', () => {
     /Repository 0: conflictFixer must be true or false/
   );
 });
+
+test('validate rejects repository labels that are not a list of names', () => {
+  for (const labels of ['bug', ['bug', ''], ['bug', 3], { name: 'bug' }]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, labels }] }),
+      /Repository 0: labels must be a list of non-empty label names/
+    );
+  }
+});
+
+test('validate rejects contentTemplates labels that are not a list of names', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplates: [{ title: 'a' }, { title: 'b', labels: 'bug' }] }),
+    /contentTemplates\[1\]\.labels must be a list of non-empty label names/
+  );
+});
+
+test('validate accepts label lists and defaults repository labels', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, labels: ['bug', 'help wanted'] }, { owner: 'me', repo: 'other' }],
+    contentTemplates: [{ title: 'a', labels: ['feature'] }, { title: 'b' }]
+  });
+  assert.deepEqual(cfg.repositories[0].labels, ['bug', 'help wanted']);
+  assert.deepEqual(cfg.repositories[1].labels, ['automated']);
+  assert.deepEqual(cfg.contentTemplates[0].labels, ['feature']);
+});
