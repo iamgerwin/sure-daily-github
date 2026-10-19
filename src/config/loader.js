@@ -56,6 +56,15 @@ function validateCountRange(range, label, errors) {
   }
 }
 
+// GitHub expects a list of label names; a bare string such as `labels: bug`
+// would be spread into one label per character ("b", "u", "g")
+function validateLabels(labels, label, errors) {
+  if (labels === undefined || labels === null) return;
+  if (!Array.isArray(labels) || labels.some(name => typeof name !== 'string' || !name.trim())) {
+    errors.push(`${label} must be a list of non-empty label names`);
+  }
+}
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -256,6 +265,7 @@ class ConfigLoader {
           && (typeof repo.weight !== 'number' || !Number.isFinite(repo.weight) || repo.weight <= 0)) {
           errors.push(`Repository ${idx}: weight must be a positive number`);
         }
+        validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
         if (repo.testCommand !== undefined && repo.testCommand !== null
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
@@ -309,6 +319,12 @@ class ConfigLoader {
 
     if (config.contentTemplates !== undefined && !Array.isArray(config.contentTemplates)) {
       errors.push('contentTemplates must be an array');
+    } else if (config.contentTemplates) {
+      config.contentTemplates.forEach((template, idx) => {
+        if (template && typeof template === 'object') {
+          validateLabels(template.labels, `contentTemplates[${idx}].labels`, errors);
+        }
+      });
     }
 
     // Validate general settings
