@@ -4,6 +4,13 @@ import { spawn } from 'child_process';
 const MAX_OUTPUT_CHARS = 256 * 1024;
 const KILL_GRACE_MS = 5000;
 const POLL_MS = 50;
+// Node fires a timer after 1ms when its delay exceeds a signed 32-bit int
+// (~24.8 days), so a very long configured timeout would kill the command at once
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+export function clampTimerMs(ms) {
+  return Math.min(ms, MAX_TIMER_MS);
+}
 
 // Process groups (by leader pid) still running, so an interrupted run can kill
 // them: they are detached and would otherwise outlive this process. A group
@@ -110,7 +117,7 @@ export function runProcess(cmd, args = [], { cwd, env = process.env, timeoutMs =
         timedOut = true;
         kill('SIGTERM');
         setTimeout(() => kill('SIGKILL'), KILL_GRACE_MS).unref();
-      }, timeoutMs);
+      }, clampTimerMs(timeoutMs));
     }
   });
 }

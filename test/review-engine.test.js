@@ -452,6 +452,14 @@ test('runProcess kills a command that exceeds its timeout', async () => {
   assert.ok(Date.now() - started < 10000, 'process should be killed quickly');
 });
 
+test('runProcess does not kill a command when the timeout exceeds the timer limit', async () => {
+  // 25 days in ms overflows a 32-bit timer delay, which Node turns into 1ms
+  const result = await runProcess(process.execPath, ['-e', 'setTimeout(() => console.log("done"), 300)'], { timeoutMs: 25 * 24 * 60 * 60 * 1000 });
+  assert.equal(result.timedOut, false);
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), 'done');
+});
+
 test('runProcess resolves with an error for a missing binary', async () => {
   const result = await runProcess('sdg-definitely-not-a-binary', []);
   assert.equal(result.code, null);

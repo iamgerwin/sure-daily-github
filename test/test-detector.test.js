@@ -93,6 +93,12 @@ test('runTestCommand kills a command that exceeds the timeout', async (t) => {
   assert.notEqual(result.code, 0);
 });
 
+test('runTestCommand does not kill a command when the timeout exceeds the timer limit', async (t) => {
+  // 25 days in ms overflows a 32-bit timer delay, which Node turns into 1ms
+  const result = await runTestCommand('sleep 0.3; echo done', { cwd: repoDir(t), env: process.env, timeoutMs: 25 * 24 * 60 * 60 * 1000 });
+  assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
+});
+
 test('tailLines keeps the last lines of output', () => {
   assert.equal(tailLines('a\nb\nc\n', 2), 'b\nc');
 });
