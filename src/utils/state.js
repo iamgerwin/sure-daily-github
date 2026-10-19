@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -183,6 +184,22 @@ export class StateManager {
   getCounts(owner, repo, timezone = 'UTC', now = new Date()) {
     const counters = this.ensureWindows(owner, repo, timezone, now);
     return { hourly: counters.hourly.count, daily: counters.daily.count, weekly: counters.weekly.count };
+  }
+
+  // A { min, max } range rolls one target per repository per day, persisted so
+  // every run that day (and `status`) agree on it. Changing the range re-rolls.
+  getDailyTarget(owner, repo, { min, max }, timezone = 'UTC', now = new Date()) {
+    if (min === max) return max;
+    const repoState = this.getRepoState(owner, repo);
+    const day = this.getPeriodKeys(timezone, now).daily;
+    const saved = repoState.dailyTarget;
+    if (saved?.day === day && saved.min === min && saved.max === max && Number.isInteger(saved.value)) {
+      return saved.value;
+    }
+    const value = crypto.randomInt(min, max + 1);
+    repoState.dailyTarget = { day, min, max, value };
+    this.save();
+    return value;
   }
 
   // Round-robin repository selection cursor, persisted so rotation continues across runs

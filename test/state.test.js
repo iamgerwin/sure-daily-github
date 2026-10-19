@@ -150,3 +150,43 @@ test('lastCommitDate tracks the last recorded commit, not the last window check'
   sm.recordCommit('me', 'demo', tz, laterDay);
   assert.equal(sm.getRepoState('me', 'demo').lastCommitDate, '2025-03-14');
 });
+
+test('getDailyTarget rolls a range once per day and keeps it across reloads', () => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+  const day1 = new Date('2026-10-18T10:00:00Z');
+  const range = { min: 3, max: 8 };
+
+  const target = sm.getDailyTarget('me', 'demo', range, 'UTC', day1);
+  assert.ok(Number.isInteger(target) && target >= 3 && target <= 8);
+  for (let i = 0; i < 20; i++) {
+    assert.equal(sm.getDailyTarget('me', 'demo', range, 'UTC', day1), target);
+  }
+  assert.equal(new StateManager({ filePath }).getDailyTarget('me', 'demo', range, 'UTC', day1), target);
+});
+
+test('getDailyTarget re-rolls on a new day or a changed range, and returns fixed targets as-is', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const day1 = new Date('2026-10-18T10:00:00Z');
+  const day2 = new Date('2026-10-19T10:00:00Z');
+
+  sm.getDailyTarget('me', 'demo', { min: 1, max: 100 }, 'UTC', day1);
+  sm.getDailyTarget('me', 'demo', { min: 1, max: 100 }, 'UTC', day2);
+  assert.equal(sm.getRepoState('me', 'demo').dailyTarget.day, '2026-10-19');
+
+  const narrowed = sm.getDailyTarget('me', 'demo', { min: 4, max: 5 }, 'UTC', day2);
+  assert.ok(narrowed === 4 || narrowed === 5);
+  assert.deepEqual(sm.getRepoState('me', 'demo').dailyTarget, { day: '2026-10-19', min: 4, max: 5, value: narrowed });
+
+  assert.equal(sm.getDailyTarget('me', 'fixed', { min: 7, max: 7 }, 'UTC', day1), 7);
+  assert.equal(sm.getRepoState('me', 'fixed').dailyTarget, undefined);
+});
+
+test('getDailyTarget ignores a malformed saved target', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const now = new Date('2026-10-18T10:00:00Z');
+  sm.getRepoState('me', 'demo').dailyTarget = { day: '2026-10-18', min: 2, max: 3, value: 'lots' };
+
+  const target = sm.getDailyTarget('me', 'demo', { min: 2, max: 3 }, 'UTC', now);
+  assert.ok(target === 2 || target === 3);
+});
