@@ -41,6 +41,26 @@ function isStale(holder, now) {
   return now - (holder.startedAt || 0) > staleMs();
 }
 
+// Filesystems without hard links; fall back to a plain exclusive create there
+const NO_LINK_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+
+// Publishes the lock fully written: the contents go to a private temp file that
+// is then hard-linked into place, which fails with EEXIST if the lock exists.
+// A plain open('wx') + write leaves an empty lock visible for a moment, and a
+// concurrent caller would read it as unparseable, treat it as stale and take it.
+function createLockFile(filePath, contents) {
+  const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpFile, contents, { flag: 'wx' });
+  try {
+    fs.linkSync(tmpFile, filePath);
+  } catch (error) {
+    if (!NO_LINK_CODES.has(error.code)) throw error;
+    fs.writeFileSync(filePath, contents, { flag: 'wx' });
+  } finally {
+    fs.rmSync(tmpFile, { force: true });
+  }
+}
+
 // Acquires an exclusive cross-process lock so concurrent executions (e.g. the
 // scheduler service plus a manual `run`) cannot race on the state files.
 // Returns { acquired: true, release } or { acquired: false, holder }.
@@ -50,9 +70,7 @@ export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } =
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const fd = fs.openSync(filePath, 'wx');
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: now }));
-      fs.closeSync(fd);
+      createLockFile(filePath, JSON.stringify({ pid: process.pid, startedAt: now }));
       return { acquired: true, release: () => releaseRunLock(filePath) };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
