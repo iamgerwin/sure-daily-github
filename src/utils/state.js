@@ -5,6 +5,9 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/state.json');
 
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+
 export class StateManager {
   constructor(options = {}) {
     this.filePath = options.filePath || process.env.SDG_STATE_FILE || DEFAULT_STATE_FILE;
@@ -17,7 +20,7 @@ export class StateManager {
         const data = fs.readFileSync(this.filePath, 'utf8');
         const parsed = JSON.parse(data);
         // Ensure base structure
-        if (!parsed || typeof parsed !== 'object' || !parsed.repositories) {
+        if (!isPlainObject(parsed) || !isPlainObject(parsed.repositories)) {
           return { repositories: {}, meta: { version: 2 } };
         }
         // Attach meta version if missing
@@ -54,7 +57,7 @@ export class StateManager {
 
   getRepoState(owner, repo) {
     const key = `${owner}/${repo}`;
-    if (!this.state.repositories[key]) {
+    if (!isPlainObject(this.state.repositories[key])) {
       this.state.repositories[key] = {
         // Legacy fields (kept for backward compatibility)
         lastCommitDate: null,
@@ -103,7 +106,13 @@ export class StateManager {
     const repoState = this.getRepoState(owner, repo);
     const keys = this.getPeriodKeys(timezone, now);
 
-    const counters = repoState.counters || (repoState.counters = { hourly: { key: null, count: 0 }, daily: { key: null, count: 0 }, weekly: { key: null, count: 0 } });
+    // A window or total of the wrong shape (hand edit, older schema) falls back to
+    // a fresh one instead of crashing the run or blocking the repo for good
+    const counters = repoState.counters = isPlainObject(repoState.counters) ? repoState.counters : {};
+    for (const period of ['hourly', 'daily', 'weekly']) {
+      const window = isPlainObject(counters[period]) ? counters[period] : (counters[period] = { key: null, count: 0 });
+      if (!isCount(window.count)) window.count = 0;
+    }
 
     if (counters.hourly.key !== keys.hourly) {
       counters.hourly.key = keys.hourly;
@@ -121,7 +130,10 @@ export class StateManager {
     }
 
     // Ensure totals object
-    if (!repoState.totals) repoState.totals = { issues: 0, commits: 0 };
+    if (!isPlainObject(repoState.totals)) repoState.totals = { issues: 0, commits: 0 };
+    for (const total of ['issues', 'commits']) {
+      if (!isCount(repoState.totals[total])) repoState.totals[total] = 0;
+    }
 
     return counters;
   }
