@@ -29,10 +29,20 @@ function isRateLimited(error) {
     && (headers['retry-after'] !== undefined || headers['x-ratelimit-remaining'] === '0');
 }
 
+// GraphQL reads are POSTs to /graphql. A document that never names a mutation
+// or subscription is read-only; matching the word anywhere (comments, field
+// names) only errs towards not retrying.
+export function isIdempotentRequest(request) {
+  const { method, url, query } = typeof request === 'string' ? { method: request } : request || {};
+  if (IDEMPOTENT_METHODS.has(String(method).toUpperCase())) return true;
+  return url === '/graphql' && typeof query === 'string' && !/\b(mutation|subscription)\b/.test(query);
+}
+
 // Rate-limited requests were rejected before being processed, so any method is
 // safe to retry. 5xx and network/timeout failures may have been applied server
 // side, so only idempotent reads are retried to avoid duplicate issues/commits.
-export function getRetryDelayMs(error, method, attempt, baseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS) {
+// `request` is the request options (or just its method).
+export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS) {
   const backoff = baseDelayMs * 2 ** attempt;
 
   if (isRateLimited(error)) {
@@ -48,7 +58,7 @@ export function getRetryDelayMs(error, method, attempt, baseDelayMs = DEFAULT_RE
   }
 
   const transient = error.status === undefined || error.status >= 500;
-  if (transient && IDEMPOTENT_METHODS.has(String(method).toUpperCase())) {
+  if (transient && isIdempotentRequest(request)) {
     return backoff;
   }
 
@@ -78,7 +88,7 @@ export function createOctokit(options = {}) {
         return await request(requestOptions);
       } catch (error) {
         const delay = attempt < retries
-          ? getRetryDelayMs(error, requestOptions.method, attempt, baseDelayMs)
+          ? getRetryDelayMs(error, requestOptions, attempt, baseDelayMs)
           : null;
         if (delay === null) throw error;
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, getRequestRetries } from '../src/github/octokit.js';
+import { createOctokit, getRetryDelayMs, getRequestRetries, isIdempotentRequest } from '../src/github/octokit.js';
 
 // Serves the queued responses in order, recording each request method
 async function startServer(responses) {
@@ -50,6 +50,39 @@ test('POST requests are retried when rate limited with retry-after', async () =>
   } finally {
     srv.close();
   }
+});
+
+test('GraphQL queries are retried after a transient 5xx', async () => {
+  const srv = await startServer([{ status: 502 }, { status: 200 }]);
+  try {
+    await srv.octokit.graphql('query ($owner: String!) { repository(owner: $owner, name: "r") { id } }', { owner: 'me' });
+    assert.deepEqual(srv.requests, ['POST', 'POST']);
+  } finally {
+    srv.close();
+  }
+});
+
+test('GraphQL mutations are not retried after a 5xx to avoid duplicate writes', async () => {
+  const srv = await startServer([{ status: 502 }, { status: 200 }]);
+  try {
+    await assert.rejects(srv.octokit.graphql('mutation ($id: ID!) { pinIssue(input: { issueId: $id }) { clientMutationId } }', { id: 'x' }));
+    assert.equal(srv.requests.length, 1);
+  } finally {
+    srv.close();
+  }
+});
+
+test('isIdempotentRequest only treats reads as idempotent', () => {
+  assert.equal(isIdempotentRequest('GET'), true);
+  assert.equal(isIdempotentRequest({ method: 'head', url: '/x' }), true);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/graphql', query: '{ viewer { login } }' }), true);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/graphql', query: 'query Q { viewer { login } }' }), true);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/graphql', query: '  mutation { a }' }), false);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/graphql', query: 'subscription { a }' }), false);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/graphql', query: 'query A { a } mutation B { b }' }), false);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/graphql' }), false);
+  assert.equal(isIdempotentRequest({ method: 'POST', url: '/repos/o/r/issues', query: '{ a }' }), false);
+  assert.equal(isIdempotentRequest(undefined), false);
 });
 
 test('retries stop after the configured limit', async () => {
