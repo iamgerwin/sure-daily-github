@@ -107,6 +107,25 @@ test('selectRepositories weighted uses weights (stubbed Math.random sequence)', 
   }
 });
 
+test('selectRepositories weighted picks the last repo when rounding leaves a remainder', () => {
+  // 0.7 + 2.3 + 0.2 rounds so that subtracting each weight from the top draw stays above zero
+  const repos = [
+    { id: 'A', enabled: true, weight: 0.7 },
+    { id: 'B', enabled: true, weight: 2.3 },
+    { id: 'C', enabled: true, weight: 0.2 }
+  ];
+
+  const originalRandom = Math.random;
+  Math.random = () => 0.9999999999999999;
+
+  try {
+    const selected = randomizer.selectRepositories(repos, { strategy: 'weighted', maxPerExecution: 1 });
+    assert.deepEqual(selected.map(repo => repo.id), ['C']);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test('selectRoundRobinRepositories rotates from index', () => {
   const repos = [
     { id: 'a' },
