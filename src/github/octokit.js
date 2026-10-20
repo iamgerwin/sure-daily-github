@@ -1,5 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import logger from '../utils/logger.js';
+import { clampTimerMs } from '../utils/process.js';
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 export const DEFAULT_REQUEST_RETRIES = 2;
@@ -9,9 +10,11 @@ export const MAX_RETRY_DELAY_MS = 60000;
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD']);
 
+// Capped at the timer limit: AbortSignal.timeout fires after 1ms beyond it, which
+// would abort every request at once
 export function getRequestTimeoutMs() {
   const value = Number(process.env.GITHUB_REQUEST_TIMEOUT_MS);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_REQUEST_TIMEOUT_MS;
+  return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 export function getRequestRetries() {
