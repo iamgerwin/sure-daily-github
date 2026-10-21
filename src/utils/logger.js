@@ -17,16 +17,31 @@ export function resolveLogLevel(value) {
   return Object.hasOwn(LOG_LEVELS, level) ? level : 'info';
 }
 
-class Logger {
-  constructor() {
-    this.logDir = path.join(__dirname, '../../logs');
+// Logging is called from inside catch blocks, so it must never throw: an
+// unwritable log directory (read-only mount, permissions, full disk) or
+// unserializable meta falls back to console-only output instead of crashing
+export class Logger {
+  constructor({ logDir = path.join(__dirname, '../../logs') } = {}) {
+    this.logDir = logDir;
+    this.fileErrorReported = false;
     this.ensureLogDir();
   }
 
   ensureLogDir() {
-    if (!fs.existsSync(this.logDir)) {
+    try {
       fs.mkdirSync(this.logDir, { recursive: true });
+      return true;
+    } catch (error) {
+      this.reportFileError(error);
+      return false;
     }
+  }
+
+  // Warn once per process so a broken log directory does not flood the console
+  reportFileError(error) {
+    if (this.fileErrorReported) return;
+    this.fileErrorReported = true;
+    console.error(`Log file output unavailable (${this.logDir}), logging to console only: ${error.message}`);
   }
 
   // Read on every call: this module is imported before loader.js runs
@@ -41,7 +56,14 @@ class Logger {
 
   format(level, message, meta = {}) {
     const timestamp = new Date().toISOString();
-    const metaStr = Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
+    let metaStr = '';
+    if (meta && Object.keys(meta).length > 0) {
+      try {
+        metaStr = ` ${JSON.stringify(meta)}`;
+      } catch (error) {
+        metaStr = ` [unserializable meta: ${error.message}]`;
+      }
+    }
     return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
   }
 
@@ -62,7 +84,20 @@ class Logger {
 
     // File output
     const logFile = path.join(this.logDir, `${new Date().toISOString().split('T')[0]}.log`);
-    fs.appendFileSync(logFile, formatted + '\n');
+    try {
+      fs.appendFileSync(logFile, formatted + '\n');
+    } catch (error) {
+      // A long-running scheduler can outlive a deleted logs directory: recreate it once
+      if (error.code !== 'ENOENT' || !this.ensureLogDir()) {
+        this.reportFileError(error);
+        return;
+      }
+      try {
+        fs.appendFileSync(logFile, formatted + '\n');
+      } catch (retryError) {
+        this.reportFileError(retryError);
+      }
+    }
   }
 
   error(message, meta) {
