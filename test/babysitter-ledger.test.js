@@ -104,6 +104,23 @@ test('a corrupt ledger is backed up and replaced with an empty one', (t) => {
   }
 });
 
+test('array comments or prs sections are replaced so new records survive a reload', () => {
+  const filePath = tmpLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ version: 1, comments: [], prs: [] }));
+
+  const ledger = new BabysitterLedger({ filePath });
+  assert.deepEqual(ledger.data.comments, {});
+  assert.deepEqual(ledger.data.prs, {});
+  ledger.recordOutcome(key, { state: 'addressed', pr: 7, replyId: 3 });
+  ledger.markForkNotified('me/demo#8', { replyId: 4 });
+
+  const reloaded = new BabysitterLedger({ filePath });
+  assert.equal(reloaded.getComment(key).state, 'addressed');
+  assert.equal(reloaded.shouldProcess(key), false);
+  assert.equal(reloaded.getPr('me/demo#8').forkNotice.replyId, 4);
+});
+
 test('the ledger path defaults to SDG_BABYSITTER_STATE_FILE', (t) => {
   const filePath = tmpLedgerPath();
   process.env.SDG_BABYSITTER_STATE_FILE = filePath;
