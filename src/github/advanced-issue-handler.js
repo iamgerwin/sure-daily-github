@@ -103,6 +103,26 @@ class AdvancedIssueHandler {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
+  // Keeps today's rolled target while the configured range is unchanged, so an
+  // edited dailyTarget takes effect the same day instead of tomorrow (matching
+  // commit mode). Returns true when a new target was rolled.
+  resolveTodayTarget(repoState, dailyTarget) {
+    const { min, max } = typeof dailyTarget === 'object' ? dailyTarget : { min: dailyTarget, max: dailyTarget };
+    const target = repoState.todayTarget;
+    const saved = repoState.targetRange;
+    // State written before targetRange was recorded keeps its target if it still fits the range
+    const sameRange = saved
+      ? saved.min === min && saved.max === max
+      : target >= min && target <= max;
+    if (Number.isInteger(target) && sameRange) {
+      if (!saved) repoState.targetRange = { min, max };
+      return false;
+    }
+    repoState.todayTarget = this.getRandomInt(min, max);
+    repoState.targetRange = { min, max };
+    return true;
+  }
+
   getRandomElement(array) {
     if (!array || array.length === 0) return null;
     return array[Math.floor(Math.random() * array.length)];
@@ -207,13 +227,8 @@ class AdvancedIssueHandler {
 
       const repoState = this.getRepoState(state, repo);
 
-      // Determine today's target if not set
-      if (repoState.todayTarget === null && repo.dailyTarget) {
-        if (typeof repo.dailyTarget === 'object') {
-          repoState.todayTarget = this.getRandomInt(repo.dailyTarget.min, repo.dailyTarget.max);
-        } else {
-          repoState.todayTarget = repo.dailyTarget;
-        }
+      // Determine today's target if not set, or re-roll it when the configured range changed
+      if (repo.dailyTarget && this.resolveTodayTarget(repoState, repo.dailyTarget)) {
         logger.info(`Set daily target for ${repo.repo}`, { target: repoState.todayTarget });
       }
       
