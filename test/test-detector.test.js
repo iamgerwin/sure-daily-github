@@ -40,6 +40,16 @@ test('detectTestCommand uses npm test, installing only when a lockfile exists', 
   assert.deepEqual(detectTestCommand(locked, {}, { installDeps: false }), { install: null, test: 'npm test' });
 });
 
+test('detectTestCommand installs from an npm-shrinkwrap.json without a package-lock.json', (t) => {
+  const shrinkwrapped = repoDir(t, { 'package.json': pkg({ test: 'node --test' }), 'npm-shrinkwrap.json': '{}' });
+  assert.deepEqual(detectTestCommand(shrinkwrapped), { install: 'npm ci', test: 'npm test' });
+  assert.deepEqual(detectTestCommand(shrinkwrapped, {}, { installDeps: false }), { install: null, test: 'npm test' });
+  assert.deepEqual(
+    detectTestCommand(shrinkwrapped, { testCommand: 'npm run test:unit' }),
+    { install: 'npm ci', test: 'npm run test:unit' }
+  );
+});
+
 test('detectTestCommand ignores the npm init stub test script', (t) => {
   const dir = repoDir(t, { 'package.json': pkg({ test: 'echo "Error: no test specified" && exit 1' }) });
   assert.equal(detectTestCommand(dir), null);
