@@ -73,6 +73,17 @@ function validateLabels(labels, label, errors) {
   }
 }
 
+// The commit path is checked by normalizeRepoPath only when a commit is made,
+// so "./updates" or "../x" would pass `validate` and then fail every commit
+function validateRepoPath(repoPath, label, errors) {
+  if (repoPath === undefined || repoPath === null) return;
+  if (typeof repoPath !== 'string' && typeof repoPath !== 'number') {
+    errors.push(`${label} must be a directory path string`);
+  } else if (String(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
+    errors.push(`${label} must not contain "." or ".." segments`);
+  }
+}
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -275,6 +286,7 @@ class ConfigLoader {
           errors.push(`Repository ${idx}: weight must be a positive number`);
         }
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
+        validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
         if (repo.testCommand !== undefined && repo.testCommand !== null
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);

@@ -226,6 +226,31 @@ test('validate keeps positive weights and defaults a missing weight to 1', () =>
   assert.equal(cfg.repositories[1].weight, 1);
 });
 
+test('validate rejects a repository path with "." or ".." segments instead of failing every commit', () => {
+  for (const repoPath of ['./updates', '../outside', 'notes/../x', 'notes/.', '..']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, path: repoPath }] }),
+      /Repository 0: path must not contain "\." or "\.\." segments/,
+      `path ${repoPath} should be rejected`
+    );
+  }
+});
+
+test('validate rejects a repository path that is not a string or number', () => {
+  for (const repoPath of [['a'], { dir: 'a' }, true]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, path: repoPath }] }),
+      /Repository 0: path must be a directory path string/
+    );
+  }
+});
+
+test('validate keeps valid repository paths and defaults a missing path', () => {
+  const repos = ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024].map((repoPath, i) => ({ owner: 'me', repo: `r${i}`, path: repoPath }));
+  const cfg = config.validate({ repositories: [...repos, baseRepo] });
+  assert.deepEqual(cfg.repositories.map(repo => repo.path), ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024, 'daily-updates']);
+});
+
 test('validate rejects fractional or non-positive randomization.issueCount instead of crashing at run time', () => {
   for (const issueCount of [{ min: 1.5, max: 4 }, { min: 0, max: 4 }, { min: -2, max: 4 }, { min: '2', max: 4 }]) {
     assert.throws(
