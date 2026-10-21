@@ -25,11 +25,19 @@ function hasMakeTestTarget(dir) {
   return Boolean(name) && MAKE_TEST_RULE.test(fs.readFileSync(path.join(dir, name), 'utf8'));
 }
 
+// `npm ci` installs from either lockfile; npm-shrinkwrap.json takes precedence
+// when both exist, but a repo may ship only the shrinkwrap
+const NPM_LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json'];
+
+function hasNpmLockfile(dir) {
+  return NPM_LOCKFILES.some(file => fs.existsSync(path.join(dir, file)));
+}
+
 // Returns { install, test } shell commands, or null when the repository has no
 // test suite we can run. A configured testCommand is used as-is, but still gets
 // the dependency install a fresh clone needs.
 export function detectTestCommand(dir, repoConfig = {}, { installDeps = true } = {}) {
-  const install = installDeps && fs.existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : null;
+  const install = installDeps && hasNpmLockfile(dir) ? 'npm ci' : null;
   if (repoConfig.testCommand) {
     return { install, test: repoConfig.testCommand };
   }
