@@ -63,6 +63,69 @@ test('stops at the daily target across runs', async () => {
   assert.equal(created.length, 3);
 });
 
+test('re-rolls today\'s target when the dailyTarget range changes mid-day', async () => {
+  const { handler, created } = createHandler();
+
+  for (let i = 0; i < 2; i++) {
+    await handler.processRepositories([repo({ dailyTarget: { min: 5, max: 5 } })], {}, false, config);
+  }
+  assert.equal(readState(handler).repositories['me/demo'].todayTarget, 5);
+
+  // Lowering the range applies today: 2 issues already exist, so nothing more is created
+  for (let i = 0; i < 3; i++) {
+    await handler.processRepositories([repo({ dailyTarget: { min: 1, max: 2 } })], {}, false, config);
+  }
+
+  const saved = readState(handler).repositories['me/demo'];
+  assert.equal(created.length, 2);
+  assert.ok(saved.todayTarget >= 1 && saved.todayTarget <= 2);
+  assert.deepEqual(saved.targetRange, { min: 1, max: 2 });
+  assert.equal(saved.issuesCreatedToday, 2);
+});
+
+test('keeps today\'s rolled target across runs while the range is unchanged', async () => {
+  const { handler } = createHandler();
+  const ranged = repo({ dailyTarget: { min: 1, max: 1000 } });
+
+  await handler.processRepositories([ranged], {}, false, config);
+  const first = readState(handler).repositories['me/demo'].todayTarget;
+  await handler.processRepositories([ranged], {}, false, config);
+
+  assert.equal(readState(handler).repositories['me/demo'].todayTarget, first);
+});
+
+test('state without a recorded range keeps a target that fits the configured range', async () => {
+  const { handler, created } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 4, lastIssueTime: null, todayTarget: 4, nextIssueTime: null }
+    }
+  });
+
+  await handler.processRepositories([repo({ dailyTarget: { min: 2, max: 6 } })], {}, false, config);
+
+  const saved = readState(handler).repositories['me/demo'];
+  assert.equal(created.length, 0);
+  assert.equal(saved.todayTarget, 4);
+  assert.deepEqual(saved.targetRange, { min: 2, max: 6 });
+});
+
+test('state without a recorded range re-rolls a target outside the configured range', async () => {
+  const { handler, created } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 0, lastIssueTime: null, todayTarget: 9, nextIssueTime: null }
+    }
+  });
+
+  await handler.processRepositories([repo({ dailyTarget: { min: 1, max: 1 } })], {}, false, config);
+
+  assert.equal(created.length, 1);
+  assert.equal(readState(handler).repositories['me/demo'].todayTarget, 1);
+});
+
 test('dry run does not write to the state file', async () => {
   const { handler, created } = createHandler();
 
