@@ -550,6 +550,25 @@ test('validate accepts label lists and defaults repository labels', () => {
   assert.deepEqual(cfg.contentTemplates[0].labels, ['feature']);
 });
 
+test('validate accepts every GitHub token prefix, including GitHub App tokens', (t) => {
+  t.after(() => { process.env.GITHUB_TOKEN = 'ghp_test'; });
+  for (const token of ['ghp_x', 'github_pat_x', 'gho_x', 'ghs_x', 'ghu_x']) {
+    process.env.GITHUB_TOKEN = token;
+    assert.doesNotThrow(() => config.validate({ repositories: [baseRepo] }), token);
+  }
+});
+
+test('validate rejects a GITHUB_TOKEN with an unknown prefix', (t) => {
+  t.after(() => { process.env.GITHUB_TOKEN = 'ghp_test'; });
+  for (const token of ['ghr_x', 'token123', 'xghp_x']) {
+    process.env.GITHUB_TOKEN = token;
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo] }),
+      /GITHUB_TOKEN appears to be invalid format \(must start with ghp_, github_pat_, gho_, ghs_, ghu_\)/
+    );
+  }
+});
+
 test('validate rejects on/off flags that YAML parsed as strings instead of booleans', () => {
   // js-yaml follows YAML 1.2, where `no` and `off` are plain strings
   const { enabled } = yaml.load('enabled: off');
