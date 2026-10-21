@@ -23,6 +23,10 @@ function isValidTimezone(timezone) {
   }
 }
 
+// Personal (classic and fine-grained), OAuth, and GitHub App installation and
+// user-to-server tokens; the last two are what Actions and App-based setups pass
+const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
+
 const isTargetCount = (value) => Number.isInteger(value) && value >= 1 && value <= 100;
 
 // Accepts a whole number or a { min, max } range, each value within 1-100
@@ -212,8 +216,8 @@ class ConfigLoader {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
       errors.push('GITHUB_TOKEN environment variable is required');
-    } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
-      errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
+    } else if (!GITHUB_TOKEN_PREFIXES.some(prefix => token.startsWith(prefix))) {
+      errors.push(`GITHUB_TOKEN appears to be invalid format (must start with ${GITHUB_TOKEN_PREFIXES.join(', ')})`);
     }
 
     // Validate repositories

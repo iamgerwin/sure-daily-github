@@ -305,7 +305,7 @@ Existing configurations continue to work without changes. Optional blocks like `
 # Check token format
 echo $GITHUB_TOKEN
 
-# Should start with ghp_ or github_pat_
+# Should start with ghp_, github_pat_, gho_, ghs_ or ghu_
 
 # Test authentication
 node src/cli.js validate
