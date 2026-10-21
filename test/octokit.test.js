@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, getRequestRetries, isIdempotentRequest } from '../src/github/octokit.js';
+import { createOctokit, getRetryDelayMs, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest } from '../src/github/octokit.js';
+import { MAX_TIMER_MS } from '../src/utils/process.js';
 
 // Serves the queued responses in order, recording each request method
 async function startServer(responses) {
@@ -149,5 +150,30 @@ test('getRequestRetries reads GITHUB_REQUEST_RETRIES and falls back on invalid v
     assert.equal(getRequestRetries(), 2);
   } finally {
     delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+test('getRequestTimeoutMs caps GITHUB_REQUEST_TIMEOUT_MS at the timer limit', () => {
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '9999999999';
+  try {
+    assert.equal(getRequestTimeoutMs(), MAX_TIMER_MS);
+    process.env.GITHUB_REQUEST_TIMEOUT_MS = '45000';
+    assert.equal(getRequestTimeoutMs(), 45000);
+    process.env.GITHUB_REQUEST_TIMEOUT_MS = '-1';
+    assert.equal(getRequestTimeoutMs(), 30000);
+  } finally {
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+  }
+});
+
+test('a very long GITHUB_REQUEST_TIMEOUT_MS does not abort requests at once', async () => {
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '9999999999';
+  const srv = await startServer([{ status: 200 }]);
+  try {
+    const { data } = await srv.octokit.request('GET /user');
+    assert.equal(data.login, 'me');
+  } finally {
+    srv.close();
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
   }
 });
