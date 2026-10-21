@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import yaml from 'js-yaml';
 import config from '../src/config/loader.js';
 
 process.env.GITHUB_TOKEN = 'ghp_test';
@@ -522,4 +523,36 @@ test('validate accepts label lists and defaults repository labels', () => {
   assert.deepEqual(cfg.repositories[0].labels, ['bug', 'help wanted']);
   assert.deepEqual(cfg.repositories[1].labels, ['automated']);
   assert.deepEqual(cfg.contentTemplates[0].labels, ['feature']);
+});
+
+test('validate rejects on/off flags that YAML parsed as strings instead of booleans', () => {
+  // js-yaml follows YAML 1.2, where `no` and `off` are plain strings
+  const { enabled } = yaml.load('enabled: off');
+  assert.equal(enabled, 'off');
+  for (const value of [enabled, 'no', 'false', 0]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, enabled: value }] }),
+      /Repository 0: enabled must be true or false/
+    );
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], general: { dryRun: value } }),
+      /general\.dryRun must be true or false/
+    );
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], repositorySelection: { randomizeOrder: value } }),
+      /repositorySelection\.randomizeOrder must be true or false/
+    );
+  }
+});
+
+test('validate keeps boolean and unset on/off flags', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, enabled: false }, { owner: 'me', repo: 'other', enabled: null }],
+    general: { dryRun: true },
+    repositorySelection: { randomizeOrder: false }
+  });
+  assert.equal(cfg.repositories[0].enabled, false);
+  assert.equal(cfg.repositories[1].enabled, true);
+  assert.equal(cfg.general.dryRun, true);
+  assert.equal(config.validate({ repositories: [baseRepo] }).general.dryRun, false);
 });
