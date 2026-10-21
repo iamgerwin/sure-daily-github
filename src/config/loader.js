@@ -27,6 +27,14 @@ function isValidTimezone(timezone) {
 // user-to-server tokens; the last two are what Actions and App-based setups pass
 const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
 
+// YAML 1.2 (js-yaml) reads `no`, `off` and `"false"` as strings, which are
+// truthy, so a flag meant to switch something off would silently stay on
+function validateBooleanFlag(value, label, errors) {
+  if (value !== undefined && value !== null && typeof value !== 'boolean') {
+    errors.push(`${label} must be true or false`);
+  }
+}
+
 const isTargetCount = (value) => Number.isInteger(value) && value >= 1 && value <= 100;
 
 // Accepts a whole number or a { min, max } range, each value within 1-100
@@ -66,6 +74,17 @@ function validateLabels(labels, label, errors) {
   if (labels === undefined || labels === null) return;
   if (!Array.isArray(labels) || labels.some(name => typeof name !== 'string' || !name.trim())) {
     errors.push(`${label} must be a list of non-empty label names`);
+  }
+}
+
+// The commit path is checked by normalizeRepoPath only when a commit is made,
+// so "./updates" or "../x" would pass `validate` and then fail every commit
+function validateRepoPath(repoPath, label, errors) {
+  if (repoPath === undefined || repoPath === null) return;
+  if (typeof repoPath !== 'string' && typeof repoPath !== 'number') {
+    errors.push(`${label} must be a directory path string`);
+  } else if (String(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
+    errors.push(`${label} must not contain "." or ".." segments`);
   }
 }
 
@@ -237,6 +256,7 @@ class ConfigLoader {
         }
         if (!repo.owner) errors.push(`Repository ${idx}: owner is required`);
         if (!repo.repo) errors.push(`Repository ${idx}: repo is required`);
+        validateBooleanFlag(repo.enabled, `Repository ${idx}: enabled`, errors);
         if (repo.owner && !/^[a-zA-Z0-9-]+$/.test(repo.owner)) {
           errors.push(`Repository ${idx}: invalid owner format`);
         }
@@ -270,6 +290,7 @@ class ConfigLoader {
           errors.push(`Repository ${idx}: weight must be a positive number`);
         }
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
+        validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
         if (repo.testCommand !== undefined && repo.testCommand !== null
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
@@ -340,6 +361,8 @@ class ConfigLoader {
       errors.push(`general.mode must be one of: ${validModes.join(', ')}`);
     }
 
+    validateBooleanFlag(general.dryRun, 'general.dryRun', errors);
+
     // An invalid timezone would otherwise make every run throw a RangeError
     if (general.timezone && !isValidTimezone(general.timezone)) {
       errors.push(`general.timezone is not a valid IANA timezone: ${general.timezone}`);
@@ -382,6 +405,7 @@ class ConfigLoader {
         && (!Number.isInteger(maxPerExecution) || maxPerExecution < 1)) {
         errors.push('repositorySelection.maxPerExecution must be a positive whole number or null');
       }
+      validateBooleanFlag(config.repositorySelection.randomizeOrder, 'repositorySelection.randomizeOrder', errors);
     }
 
     // Validate schedule

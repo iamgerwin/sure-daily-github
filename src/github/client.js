@@ -112,6 +112,11 @@ class GitHubClient {
 
       // Check if file exists
       const existingFile = await this.getFile(owner, repo, path, branch);
+      // Only a 404 means "create"; writing without a sha after any other lookup
+      // failure would hide the real cause behind a misleading 422 from the API
+      if (!existingFile.success && !existingFile.notFound) {
+        throw new Error(`Could not check whether ${path} exists: ${existingFile.error}`);
+      }
 
       const params = {
         owner,

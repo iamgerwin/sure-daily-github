@@ -167,7 +167,7 @@ interpreter gap completely requires running the engine in a container.
    are stripped from their messages, keeping authors and trees. The working
    tree must be clean. Then the **test gate** runs: `testCommand`, or a command
    detected the same way as `fix-conflicts` (`npm test` after `npm ci` when a
-   `package-lock.json` exists, or a `Makefile` `test` target). If no test
+   `package-lock.json` or `npm-shrinkwrap.json` exists, or a `Makefile` `test` target). If no test
    command can be found, nothing is pushed. Set `testCommand: "true"` to opt a
    repository out deliberately. Afterwards HEAD must still be the tested
    commit and tracked files unmodified.

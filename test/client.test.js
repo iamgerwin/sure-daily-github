@@ -121,6 +121,22 @@ test('createOrUpdateFile fails without calling the API for an invalid path', asy
   assert.equal(calls.put.length, 0);
 });
 
+test('createOrUpdateFile does not write when the existence lookup fails with a non-404 error', async () => {
+  const { client, calls } = stubClient({
+    getContent: async () => {
+      const error = new Error('Resource not accessible by integration');
+      error.status = 403;
+      throw error;
+    }
+  });
+  const result = await client.createOrUpdateFile('me', 'demo', 'daily-updates/x.md', 'hi', 'docs: update', 'main');
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Could not check whether daily-updates\/x\.md exists: Resource not accessible by integration/);
+  assert.equal(calls.getContent.length, 1);
+  assert.equal(calls.put.length, 0);
+});
+
 test('getFile normalizes the path and reports 404 as notFound', async () => {
   const { client, calls } = stubClient();
   const result = await client.getFile('me', 'demo', 'daily-updates//x.md');

@@ -39,8 +39,10 @@ export class BabysitterLedger {
       }
       return {
         version: 1,
-        comments: parsed.comments && typeof parsed.comments === 'object' ? parsed.comments : {},
-        prs: parsed.prs && typeof parsed.prs === 'object' ? parsed.prs : {},
+        // An array passes a typeof check, but JSON.stringify drops the string keys
+        // written to it, so every record would vanish on save and be redone
+        comments: isObject(parsed.comments) ? parsed.comments : {},
+        prs: isObject(parsed.prs) ? parsed.prs : {},
         deliveries: isObject(parsed.deliveries) ? parsed.deliveries : {},
         pushIntents: isObject(parsed.pushIntents) ? parsed.pushIntents : {},
         cursor: isObject(parsed.cursor) ? parsed.cursor : null

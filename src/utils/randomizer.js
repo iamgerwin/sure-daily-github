@@ -172,7 +172,9 @@ class Randomizer {
       const currentTotalWeight = pool.reduce((sum, repo) => sum + (repo.weight || 1), 0);
       let random = Math.random() * currentTotalWeight;
 
-      let selectedIndex = 0;
+      // Floating-point rounding can leave a tiny remainder after subtracting
+      // every weight; that draw belongs to the last repo, not the first
+      let selectedIndex = pool.length - 1;
       for (let j = 0; j < pool.length; j++) {
         random -= (pool[j].weight || 1);
         if (random <= 0) {

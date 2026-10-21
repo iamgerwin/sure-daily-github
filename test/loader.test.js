@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import yaml from 'js-yaml';
 import config from '../src/config/loader.js';
 
 process.env.GITHUB_TOKEN = 'ghp_test';
@@ -223,6 +224,31 @@ test('validate keeps positive weights and defaults a missing weight to 1', () =>
   const cfg = config.validate({ repositories: [{ ...baseRepo, weight: 2.5 }, { owner: 'me', repo: 'other' }] });
   assert.equal(cfg.repositories[0].weight, 2.5);
   assert.equal(cfg.repositories[1].weight, 1);
+});
+
+test('validate rejects a repository path with "." or ".." segments instead of failing every commit', () => {
+  for (const repoPath of ['./updates', '../outside', 'notes/../x', 'notes/.', '..']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, path: repoPath }] }),
+      /Repository 0: path must not contain "\." or "\.\." segments/,
+      `path ${repoPath} should be rejected`
+    );
+  }
+});
+
+test('validate rejects a repository path that is not a string or number', () => {
+  for (const repoPath of [['a'], { dir: 'a' }, true]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, path: repoPath }] }),
+      /Repository 0: path must be a directory path string/
+    );
+  }
+});
+
+test('validate keeps valid repository paths and defaults a missing path', () => {
+  const repos = ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024].map((repoPath, i) => ({ owner: 'me', repo: `r${i}`, path: repoPath }));
+  const cfg = config.validate({ repositories: [...repos, baseRepo] });
+  assert.deepEqual(cfg.repositories.map(repo => repo.path), ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024, 'daily-updates']);
 });
 
 test('validate rejects fractional or non-positive randomization.issueCount instead of crashing at run time', () => {
@@ -541,4 +567,36 @@ test('validate rejects a GITHUB_TOKEN with an unknown prefix', (t) => {
       /GITHUB_TOKEN appears to be invalid format \(must start with ghp_, github_pat_, gho_, ghs_, ghu_\)/
     );
   }
+});
+
+test('validate rejects on/off flags that YAML parsed as strings instead of booleans', () => {
+  // js-yaml follows YAML 1.2, where `no` and `off` are plain strings
+  const { enabled } = yaml.load('enabled: off');
+  assert.equal(enabled, 'off');
+  for (const value of [enabled, 'no', 'false', 0]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, enabled: value }] }),
+      /Repository 0: enabled must be true or false/
+    );
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], general: { dryRun: value } }),
+      /general\.dryRun must be true or false/
+    );
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], repositorySelection: { randomizeOrder: value } }),
+      /repositorySelection\.randomizeOrder must be true or false/
+    );
+  }
+});
+
+test('validate keeps boolean and unset on/off flags', () => {
+  const cfg = config.validate({
+    repositories: [{ ...baseRepo, enabled: false }, { owner: 'me', repo: 'other', enabled: null }],
+    general: { dryRun: true },
+    repositorySelection: { randomizeOrder: false }
+  });
+  assert.equal(cfg.repositories[0].enabled, false);
+  assert.equal(cfg.repositories[1].enabled, true);
+  assert.equal(cfg.general.dryRun, true);
+  assert.equal(config.validate({ repositories: [baseRepo] }).general.dryRun, false);
 });
