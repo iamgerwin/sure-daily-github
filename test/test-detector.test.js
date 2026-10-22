@@ -109,6 +109,14 @@ test('runTestCommand does not kill a command when the timeout exceeds the timer 
   assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
 });
 
+test('runTestCommand keeps a multibyte character split across two writes intact', async (t) => {
+  // "✓" is e2 9c 93; the pause makes the two halves arrive as separate chunks
+  const script = 'process.stdout.write(Buffer.from([0xe2, 0x9c])); setTimeout(() => process.stdout.write(Buffer.from([0x93, 0x0a])), 100)';
+  const result = await runTestCommand(`"${process.execPath}" -e "${script}"`, { cwd: repoDir(t), env: process.env, timeoutMs: 10000 });
+  assert.equal(result.code, 0);
+  assert.equal(result.output, '✓\n');
+});
+
 test('tailLines keeps the last lines of output', () => {
   assert.equal(tailLines('a\nb\nc\n', 2), 'b\nc');
 });
