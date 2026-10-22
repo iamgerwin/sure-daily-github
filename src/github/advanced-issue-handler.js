@@ -172,12 +172,14 @@ class AdvancedIssueHandler {
     let title = template.title || `Automated Issue - ${replacements.date} ${replacements.time}`;
     let body = template.body || `# Automated Issue\n\n**Created:** ${timestamp}\n**Repository:** ${repo.repo}\n\n---\n*Automated issue created by sure-daily-github*`;
     
-    // Replace all placeholders
-    Object.entries(replacements).forEach(([key, value]) => {
-      const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
-      title = title.replace(regex, value);
-      body = body.replace(regex, value);
-    });
+    // One pass with a replacer function: values are inserted literally, so a
+    // configured title containing `$&`, `$'` or `$$` (string replacement
+    // patterns) or a `${...}` placeholder is not rewritten. Unknown
+    // placeholders are left as written.
+    const fill = text => text.replace(/\$\{(\w+)\}/g, (match, key) =>
+      Object.hasOwn(replacements, key) ? String(replacements[key]) : match);
+    title = fill(title);
+    body = fill(body);
     
     return {
       title,
