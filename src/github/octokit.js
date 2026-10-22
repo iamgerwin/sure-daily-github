@@ -7,6 +7,9 @@ export const DEFAULT_REQUEST_RETRIES = 2;
 export const DEFAULT_RETRY_BASE_DELAY_MS = 1000;
 // Never sleep longer than this for a rate limit reset; fail the run instead
 export const MAX_RETRY_DELAY_MS = 60000;
+// GitHub asks clients to wait at least a minute after a secondary rate limit
+// response that carries neither retry-after nor x-ratelimit-* headers
+export const SECONDARY_RATE_LIMIT_DELAY_MS = 60000;
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD']);
 
@@ -25,9 +28,17 @@ export function getRequestRetries() {
     : DEFAULT_REQUEST_RETRIES;
 }
 
+// A secondary (abuse) limit may arrive as a 403 without any rate limit
+// headers; only the error message then tells it apart from a permission error
+function isSecondaryRateLimit(error) {
+  return (error.status === 403 || error.status === 429)
+    && /secondary rate limit|abuse detection/i.test(String(error.message || ''));
+}
+
 function isRateLimited(error) {
   const headers = error.response?.headers || {};
   if (error.status === 429) return true;
+  if (isSecondaryRateLimit(error)) return true;
   return error.status === 403
     && (headers['retry-after'] !== undefined || headers['x-ratelimit-remaining'] === '0');
 }
@@ -50,13 +61,14 @@ export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_R
 
   if (isRateLimited(error)) {
     const headers = error.response?.headers || {};
-    let delay = backoff;
+    const fallback = isSecondaryRateLimit(error) ? Math.max(backoff, SECONDARY_RATE_LIMIT_DELAY_MS) : backoff;
+    let delay = fallback;
     if (headers['retry-after'] !== undefined) {
       delay = Number(headers['retry-after']) * 1000;
     } else if (headers['x-ratelimit-reset'] !== undefined) {
       delay = Number(headers['x-ratelimit-reset']) * 1000 - Date.now();
     }
-    if (!Number.isFinite(delay)) delay = backoff;
+    if (!Number.isFinite(delay)) delay = fallback;
     return delay > MAX_RETRY_DELAY_MS ? null : Math.max(delay, 0);
   }
 
