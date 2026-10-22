@@ -360,3 +360,27 @@ test('default issue title uses the configured timezone and falls back to UTC', (
   const utc = handler.generateIssueContent(repo(), {}, now);
   assert.equal(utc.title, 'Automated Issue - 2026-10-15 00:05:00');
 });
+
+test('inserts configured titles literally, without replacement patterns or nested placeholders', () => {
+  const { handler } = createHandler();
+  const bugTitle = "Totals show $$ instead of $& for ${date} in $' and $`";
+  const config = {
+    randomization: { bugTitles: [bugTitle] },
+    contentTemplates: [{ title: 'Bug: ${randomBugTitle}', body: '${randomBugTitle} in ${repo}' }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo({ repo: 'shop' }), config, new Date('2026-10-15T00:00:00Z'));
+
+  assert.equal(title, `Bug: ${bugTitle}`);
+  assert.equal(body, `${bugTitle} in shop`);
+});
+
+test('leaves unknown placeholders as written', () => {
+  const { handler } = createHandler();
+  const config = { contentTemplates: [{ title: '${unknown} ${repo}', body: '${constructor} ${toString}' }] };
+
+  const { title, body } = handler.generateIssueContent(repo({ repo: 'shop' }), config);
+
+  assert.equal(title, '${unknown} shop');
+  assert.equal(body, '${constructor} ${toString}');
+});
