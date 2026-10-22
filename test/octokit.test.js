@@ -169,6 +169,12 @@ test('getRetryDelayMs prefers retry-after over the secondary rate limit default'
   assert.equal(getRetryDelayMs(error, 'POST', 0), 3000);
 });
 
+test('getRetryDelayMs ignores a distant x-ratelimit-reset on a secondary rate limit with quota left', () => {
+  const reset = String(Math.floor(Date.now() / 1000) + 3600);
+  const error = { status: 403, message: SECONDARY_MESSAGE, response: { headers: { 'x-ratelimit-remaining': '4990', 'x-ratelimit-reset': reset } } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), SECONDARY_RATE_LIMIT_DELAY_MS);
+});
+
 test('POST requests are retried after a secondary rate limit with retry-after', async () => {
   const srv = await startServer([{ status: 403, message: SECONDARY_MESSAGE, headers: { 'retry-after': '0' } }, { status: 201 }]);
   try {

@@ -65,7 +65,9 @@ export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_R
     let delay = fallback;
     if (headers['retry-after'] !== undefined) {
       delay = Number(headers['retry-after']) * 1000;
-    } else if (headers['x-ratelimit-reset'] !== undefined) {
+    } else if (headers['x-ratelimit-remaining'] === '0' && headers['x-ratelimit-reset'] !== undefined) {
+      // Every response carries x-ratelimit-reset; it only applies once the
+      // primary limit is spent, not to a secondary limit with quota left
       delay = Number(headers['x-ratelimit-reset']) * 1000 - Date.now();
     }
     if (!Number.isFinite(delay)) delay = fallback;
