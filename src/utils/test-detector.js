@@ -82,6 +82,10 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
 
     const child = spawn(command, { cwd, env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     activeChildren.add(child);
+    // Decode on the stream so a multibyte character split across two reads is
+    // not turned into U+FFFD (decoding each chunk on its own would)
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     child.stdout.on('data', append);
     child.stderr.on('data', append);
 
