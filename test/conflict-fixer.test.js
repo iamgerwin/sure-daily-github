@@ -572,6 +572,29 @@ test('re-attempts a PR whose head SHA changed and overwrites the entry', async (
   });
 });
 
+test('a work root that cannot be written fails each PR and finishes its ledger entry', async (t) => {
+  const fx = await fixture(t);
+  const now = 1000 * MINUTE;
+  const second = { ...fx.pr, number: 8 };
+  const { fixer } = makeFixer(fx, [fx.pr, second], {
+    now: () => now,
+    workRoot: path.join(fx.root, 'missing'),
+    git: async () => assert.fail('git must not run')
+  });
+
+  const result = await fixer.run(config());
+
+  assert.equal(result.success, true, result.error);
+  assert.deepEqual(result.results.map(r => [r.pr, r.status]), [[7, 'error'], [8, 'error']]);
+  assert.match(result.results[0].error, /^#7: .*ENOENT/);
+  assert.equal(result.summary.failed, 2);
+  const entries = JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8'));
+  for (const key of [KEY, ledgerKey('me', 'demo', 8)]) {
+    assert.deepEqual(entries[key], { headSha: fx.pr.headRefOid, status: 'failed', startedAt: now, finishedAt: now });
+  }
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
+});
+
 test('scan-only and dry runs never write the ledger', async (t) => {
   const fx = await fixture(t);
   const { fixer } = makeFixer(fx, [fx.pr]);

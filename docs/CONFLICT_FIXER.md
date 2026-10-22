@@ -208,7 +208,7 @@ sure-daily-github fix-conflicts --scan-timeout 300
 | `head-moved` | Branch changed after the scan or before the push; nothing was pushed | 0 |
 | `scan-timeout` | Repo not fully listed within the scan budget | 0 |
 | `unknown` | GitHub still reported `UNKNOWN` mergeability after the re-polls | 0 |
-| `error` | Listing failed or an unexpected git error occurred | **1** |
+| `error` | Listing failed, the temp work directory could not be created, or an unexpected git error occurred | **1** |
 
 The command also exits 1 when the run itself fails: a held lock, a configuration error, an invalid `--scan-timeout`, or a bad `--repo` or `--pr` value.
 
