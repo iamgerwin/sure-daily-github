@@ -10,6 +10,7 @@ process.env.SDG_STATE_FILE = path.join(stateDir, 'state.json');
 
 const { default: IssueHandler } = await import('../src/github/issue-handler.js');
 const { default: state } = await import('../src/utils/state.js');
+const { describeFailures, getRunExitCode } = await import('../src/core/executor.js');
 
 const repoConfig = (repo) => ({
   owner: 'me',
@@ -18,7 +19,7 @@ const repoConfig = (repo) => ({
   dailyTarget: { min: 3, max: 3 }
 });
 
-function createHandler({ fail = false } = {}) {
+function createHandler({ fail = false, failFrom = Infinity } = {}) {
   const handler = new IssueHandler('ghp_test');
   const calls = [];
   handler.delay = async () => {};
@@ -28,7 +29,7 @@ function createHandler({ fail = false } = {}) {
         issues: {
           create: async (params) => {
             calls.push(params);
-            if (fail) throw new Error('boom');
+            if (fail || calls.length >= failFrom) throw new Error('boom');
             return { data: { number: calls.length, html_url: `https://x/${calls.length}`, title: params.title } };
           }
         }
@@ -109,6 +110,21 @@ test('run where issue creation fails is reported as failed', async () => {
   assert.equal(results[0].skipped, false);
   assert.equal(results[0].failed, 1);
   assert.deepEqual(summarize(results), { successful: 0, skipped: 0, failed: 1 });
+});
+
+test('run where a later issue fails after earlier ones succeed is reported as failed', async () => {
+  const { handler, calls } = createHandler({ failFrom: 2 });
+
+  const results = await handler.processRepositories([repoConfig('half-broken')], {}, false, {});
+
+  assert.equal(calls.length, 2);
+  assert.equal(results[0].success, false);
+  assert.equal(results[0].skipped, false);
+  assert.equal(results[0].successful, 1);
+  assert.equal(results[0].failed, 1);
+  assert.deepEqual(summarize(results), { successful: 0, skipped: 0, failed: 1 });
+  assert.deepEqual(describeFailures(results), ['me/half-broken: boom']);
+  assert.equal(getRunExitCode({ success: true, summary: summarize(results) }), 1);
 });
 
 test('generateIssueContent renders date and time in the configured timezone', () => {
