@@ -32,12 +32,16 @@ class CommitHandler {
       .replace(/\$\{timestamp\}/g, timestamp);
   }
 
+  // Supports the same ${date}, ${time} and ${timestamp} placeholders as the
+  // content template, plus ${repo}
   generateCommitMessage(template, repo, timezone = 'UTC', now = new Date()) {
-    const { date } = getTemplateDateParts(timezone, now);
+    const { date, time, timestamp } = getTemplateDateParts(timezone, now);
     const message = template || `docs: daily update ${date}`;
 
     return message
       .replace(/\$\{date\}/g, date)
+      .replace(/\$\{time\}/g, time)
+      .replace(/\$\{timestamp\}/g, timestamp)
       .replace(/\$\{repo\}/g, repo);
   }
 
@@ -58,7 +62,7 @@ class CommitHandler {
     return dailyTarget || 1;
   }
 
-  async createDailyCommit(repoConfig, contentTemplate, dryRun = false, timezone = 'UTC') {
+  async createDailyCommit(repoConfig, contentTemplate, dryRun = false, timezone = 'UTC', now = new Date()) {
     const { owner, repo, branch, path: basePath, commitMessage } = repoConfig;
 
     try {
@@ -74,10 +78,11 @@ class CommitHandler {
         return { success: true, dryRun: true };
       }
 
-      // Generate content and commit details
-      const content = this.generateContent(contentTemplate, timezone);
-      const message = this.generateCommitMessage(commitMessage, repo, timezone);
-      const filePath = this.generateFilePath(basePath, repo, timezone);
+      // Generate content and commit details from one clock reading, so a run
+      // crossing midnight cannot date the message, file name and body differently
+      const content = this.generateContent(contentTemplate, timezone, now);
+      const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
+      const filePath = this.generateFilePath(basePath, repo, timezone, now);
 
       // Create commit
       const result = await this.client.createOrUpdateFile(

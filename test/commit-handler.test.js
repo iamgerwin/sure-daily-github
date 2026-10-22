@@ -108,6 +108,41 @@ test('createDailyCommit renders templates in the configured timezone', async () 
   assert.ok(filePath.startsWith(`daily-updates/${localDate}-`));
 });
 
+test('commit message renders ${time} and ${timestamp} like the content template', () => {
+  const handler = new CommitHandler('ghp_test');
+  const now = new Date('2026-10-14T23:30:05Z');
+
+  assert.equal(
+    handler.generateCommitMessage('docs: ${repo} ${date} ${time} (${timestamp})', 'demo', 'Asia/Manila', now),
+    'docs: demo 2026-10-15 07:30:05 (2026-10-14T23:30:05.000Z)'
+  );
+});
+
+test('createDailyCommit dates the message, file and content from one clock reading', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.client = {
+    createOrUpdateFile: async (...args) => {
+      calls.push(args);
+      return { success: true, data: { commit: { sha: 'sha' } } };
+    }
+  };
+  const now = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila
+
+  await handler.createDailyCommit(
+    { ...repoConfig, repo: 'clock', commitMessage: 'docs: ${date} ${time}' },
+    { body: '${date} ${time}' },
+    false,
+    'Asia/Manila',
+    now
+  );
+
+  const [, , filePath, content, message] = calls[0];
+  assert.equal(message, 'docs: 2026-10-14 23:59:59');
+  assert.equal(content, '2026-10-14 23:59:59');
+  assert.equal(filePath, `daily-updates/2026-10-14-${now.getTime()}.md`);
+});
+
 function stubbedHandler() {
   const handler = new CommitHandler('ghp_test');
   const calls = [];
