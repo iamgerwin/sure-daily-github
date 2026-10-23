@@ -84,3 +84,11 @@ test('repoState keeps existing well-formed entries untouched', () => {
   assert.equal(entry.prs, prs);
   assert.equal(entry.dashboard.number, 4);
 });
+
+test('a failed save removes its temp file and rethrows', (t) => {
+  const { filePath, ledger } = tmpLedger(t);
+  // A directory at the ledger path makes the rename fail after the temp file is written
+  fs.mkdirSync(filePath, { recursive: true });
+  assert.throws(() => ledger.save(emptyState()));
+  assert.deepEqual(fs.readdirSync(path.dirname(filePath)), ['state.json']);
+});
