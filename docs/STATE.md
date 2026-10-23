@@ -29,7 +29,7 @@ Limits are evaluated before each action:
 ## Graceful Fallbacks
 
 - If the state file is missing or corrupted, the system starts fresh and keeps a `.bak` backup (when possible).
-- A repository entry, counter window, or total with the wrong shape (for example a hand edit that drops `count`) is reset to its default on its own; the rest of the state is kept.
+- A repository entry, counter window, or total with the wrong shape (for example a hand edit that drops `count`) is reset to its default on its own; the rest of the state is kept. The same applies to the legacy fields: a `commitsToday` or `totalCommits` that is not a non-negative whole number resets to `0`, and a `lastCommitDate` that is not a string resets to `null`.
 - The directory structure is created on demand; failures are logged without crashing the process.
 - Legacy methods `isCommitNeeded` and `recordCommit` are still supported and map to daily limits to preserve original behavior.
 
