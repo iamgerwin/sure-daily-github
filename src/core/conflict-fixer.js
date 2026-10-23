@@ -46,16 +46,19 @@ export function isConflicted(pr) {
 }
 
 // Unknown --repo values are rejected rather than ignored so a typo cannot
-// silently process nothing
+// silently process nothing. A repository named more than once (in any case)
+// is selected once, so it is not scanned, fixed, or ticked twice in one run.
 export function selectRepositories(repositories = [], filters = []) {
   const enabled = repositories.filter(r => r.enabled !== false);
   if (filters.length === 0) return enabled;
 
-  return filters.map(filter => {
+  const selected = [];
+  for (const filter of filters) {
     const match = enabled.find(r => `${r.owner}/${r.repo}`.toLowerCase() === String(filter).toLowerCase());
     if (!match) throw new Error(`Repository not configured or disabled: ${filter}`);
-    return match;
-  });
+    if (!selected.includes(match)) selected.push(match);
+  }
+  return selected;
 }
 
 // Opt-in gate: returns the skip reason for a repository, or null if allowed.
