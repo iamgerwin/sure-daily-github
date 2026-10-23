@@ -228,6 +228,66 @@ test('status does not report a previous day\'s progress as today', async () => {
   assert.equal(status.lastIssueTime, new Date(yesterday).toISOString());
 });
 
+test('the daily reset keeps a pending interval from the previous day', async () => {
+  const { handler, created } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  const next = Date.now() + 30 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: next }
+    }
+  });
+
+  const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 60, max: 60 } })], {}, false, config);
+
+  assert.equal(created.length, 0);
+  assert.match(result.reason, /Waiting for interval/);
+  const saved = readState(handler).repositories['me/demo'];
+  assert.equal(saved.issuesCreatedToday, 0);
+  assert.equal(saved.todayTarget, 3);
+  assert.equal(saved.lastIssueTime, yesterday);
+  assert.equal(saved.nextIssueTime, next);
+});
+
+test('the daily reset clears counts so a new day starts from zero', async () => {
+  const { handler, created } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, nextIssueTime: yesterday + 1000 },
+      'me/gone': 5
+    }
+  });
+
+  for (let i = 0; i < 5; i++) {
+    await handler.processRepositories([repo()], {}, false, config);
+  }
+
+  assert.equal(created.length, 3);
+  const { repositories } = readState(handler);
+  assert.equal(repositories['me/demo'].issuesCreatedToday, 3);
+  assert.deepEqual(repositories['me/gone'], { issuesCreatedToday: 0, lastIssueTime: null, todayTarget: null, nextIssueTime: null });
+});
+
+test('status reports a previous day\'s interval that has not elapsed yet', async () => {
+  const { handler } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  const next = Date.now() + 30 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, nextIssueTime: next }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+
+  assert.equal(status.issuesCreatedToday, 0);
+  assert.equal(status.nextIssueTime, new Date(next).toISOString());
+});
+
 test('status evaluates the day boundary in the configured timezone', async () => {
   const { handler } = createHandler();
   // 2026-01-01T23:30Z is already Jan 2 in Asia/Manila (UTC+8) but still Jan 1 in UTC
