@@ -50,6 +50,37 @@ test('detectTestCommand installs from an npm-shrinkwrap.json without a package-l
   );
 });
 
+test('detectTestCommand installs pnpm and yarn dependencies from their lockfiles', (t) => {
+  const pnpm = repoDir(t, { 'package.json': pkg({ test: 'vitest run' }), 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" });
+  assert.deepEqual(detectTestCommand(pnpm), { install: 'pnpm install --frozen-lockfile', test: 'npm test' });
+  assert.deepEqual(detectTestCommand(pnpm, {}, { installDeps: false }), { install: null, test: 'npm test' });
+
+  const yarn = repoDir(t, { 'package.json': pkg({ test: 'jest' }), 'yarn.lock': '# yarn lockfile v1\n' });
+  assert.deepEqual(detectTestCommand(yarn), { install: 'yarn install --frozen-lockfile', test: 'npm test' });
+  assert.deepEqual(
+    detectTestCommand(yarn, { testCommand: 'yarn test:unit' }),
+    { install: 'yarn install --frozen-lockfile', test: 'yarn test:unit' }
+  );
+});
+
+test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) => {
+  const mixed = repoDir(t, {
+    'package.json': pkg({ test: 'node --test' }),
+    'package-lock.json': '{}',
+    'pnpm-lock.yaml': '',
+    'yarn.lock': ''
+  });
+  assert.deepEqual(detectTestCommand(mixed), { install: 'npm ci', test: 'npm test' });
+
+  const pnpmAndYarn = repoDir(t, { 'package.json': pkg({ test: 'node --test' }), 'pnpm-lock.yaml': '', 'yarn.lock': '' });
+  assert.equal(detectTestCommand(pnpmAndYarn).install, 'pnpm install --frozen-lockfile');
+});
+
+test('detectTestCommand does not install for a Makefile-only repo with a lockfile', (t) => {
+  const dir = repoDir(t, { 'yarn.lock': '', Makefile: 'test:\n\t./run\n' });
+  assert.deepEqual(detectTestCommand(dir), { install: null, test: 'make test' });
+});
+
 test('detectTestCommand ignores the npm init stub test script', (t) => {
   const dir = repoDir(t, { 'package.json': pkg({ test: 'echo "Error: no test specified" && exit 1' }) });
   assert.equal(detectTestCommand(dir), null);

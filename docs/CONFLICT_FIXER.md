@@ -95,7 +95,7 @@ With no `conflictFixer` block at all, the mode is `allowlist` and the allowlist 
 3. Run `git merge --no-ff --no-commit` with `merge.conflictStyle=diff3`. A clean merge means GitHub's status was stale (`stale-status`).
 4. For each conflicting hunk in a source file, find its lines on both sides and take the newest `git blame` committer time for each. The newer side wins. If one side deleted the hunk, that side's newest commit to the file since the merge base is used instead. With `sourceHunks` set to anything but `push`, the PR is left for review instead. Test-file hunks are merged as described in [Test files](#test-files).
 5. Commit the merge: `Merge branch '<base>' into <head>`, and pin its SHA.
-6. Run the regression gate: the repo's `testCommand`, else `npm test`, else `make test`. `npm ci` runs first when `package-lock.json` or `npm-shrinkwrap.json` exists and `installDeps` is on, including before a `testCommand`.
+6. Run the regression gate: the repo's `testCommand`, else `npm test`, else `make test`. When `installDeps` is on, dependencies are installed first, including before a `testCommand`: `npm ci` for `package-lock.json` or `npm-shrinkwrap.json`, else `pnpm install --frozen-lockfile` for `pnpm-lock.yaml`, else `yarn install --frozen-lockfile` for `yarn.lock`. The matching package manager must be on `PATH`.
 7. Check that `HEAD` is still the pinned merge commit and that tracked files are unchanged.
 8. Push `<merge SHA>:refs/heads/<head>` without force.
 
@@ -149,7 +149,7 @@ conflictFixer:
   allowlist: ["yourusername/web"]
   denylist: []
   testTimeoutMinutes: 15     # per install/test command
-  installDeps: true          # npm ci first when package-lock.json or npm-shrinkwrap.json exists
+  installDeps: true          # install from the npm, pnpm or yarn lockfile first
   scanTimeoutSeconds: 120
   attemptTtlMinutes: 60
   retryCooldownMinutes: 240

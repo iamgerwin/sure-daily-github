@@ -105,7 +105,7 @@ schedule:
 #   denylist:                  # Always skipped, in every mode
 #     - "yourusername/legacy-repo"
 #   testTimeoutMinutes: 15     # Per install/test command
-#   installDeps: true          # Run "npm ci" first when package-lock.json exists
+#   installDeps: true          # Install from the npm, pnpm or yarn lockfile first
 #   scanTimeoutSeconds: 120    # Budget for listing PRs across all repos
 #                              # (incl. UNKNOWN re-polls); override per run
 #                              # with --scan-timeout <seconds>. Unscanned
