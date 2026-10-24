@@ -147,8 +147,8 @@ class IssueHandler {
         break; // Stop if we hit target or encounter error
       }
 
-      // Small delay between issues to avoid rate limiting
-      if (i < count - 1) {
+      // Small delay between issues to avoid rate limiting; a dry run makes no API call
+      if (!dryRun && i < count - 1) {
         await this.delay(2000);
       }
     }
@@ -189,7 +189,7 @@ class IssueHandler {
       strategy: selectionConfig.strategy
     });
 
-    for (const repo of selectedRepos) {
+    for (const [index, repo] of selectedRepos.entries()) {
       if (!repo.enabled) {
         logger.debug('Repository disabled, skipping', {
           owner: repo.owner,
@@ -245,8 +245,11 @@ class IssueHandler {
         });
       }
 
-      // Delay between repositories to avoid rate limiting
-      await this.delay(1000);
+      // Delay between repositories to avoid rate limiting, only after a repo
+      // that called the API and only when another repo follows
+      if (!dryRun && !results[results.length - 1].skipped && index < selectedRepos.length - 1) {
+        await this.delay(1000);
+      }
     }
 
     return results;

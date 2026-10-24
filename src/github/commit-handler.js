@@ -142,7 +142,7 @@ class CommitHandler {
       strategy: config?.repositorySelection?.strategy || 'sequential'
     });
 
-    for (const repo of selected) {
+    for (const [index, repo] of selected.entries()) {
       const result = await this.createDailyCommit(repo, contentTemplate, dryRun, timezone);
       results.push({
         owner: repo.owner,
@@ -150,8 +150,11 @@ class CommitHandler {
         ...result
       });
 
-      // Small delay to avoid rate limiting
-      await this.delay(1000);
+      // Small delay to avoid rate limiting, only after a repo that called the
+      // API (not a dry run or skip) and only when another repo follows
+      if (!dryRun && !result.skipped && index < selected.length - 1) {
+        await this.delay(1000);
+      }
     }
 
     return results;
