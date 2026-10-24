@@ -137,19 +137,19 @@ class Executor {
   async getStatus() {
     try {
       const cfg = config.get();
-      const token = config.getGitHubToken();
-      
       const mode = cfg.general.mode || 'commit';
 
+      // Status only reads the local state files, so the handlers are built
+      // without a token and never call GitHub
       // Commit mode tracks progress in StateManager, not the issue state file
       if (mode !== 'issue') {
-        const status = await new CommitHandler(token).getStatus(cfg.repositories, cfg.general.timezone);
+        const status = await new CommitHandler().getStatus(cfg.repositories, cfg.general.timezone);
         return { success: true, status };
       }
 
       const handler = usesAdvancedIssueHandler(cfg.repositories)
-        ? new AdvancedIssueHandler(token)
-        : new CommitHandler(token);
+        ? new AdvancedIssueHandler()
+        : new CommitHandler();
 
       const status = await handler.getStatus(cfg.repositories, cfg.general.timezone);
       return { success: true, status };

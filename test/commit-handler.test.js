@@ -198,3 +198,10 @@ test('getStatus reports the same rolled target the run uses', async () => {
   const [status] = await handler.getStatus([ranged]);
   assert.equal(status.target, target);
 });
+
+test('a CommitHandler built without a token reports status but refuses to authenticate', async () => {
+  const handler = new CommitHandler();
+  const [status] = await handler.getStatus([{ ...repoConfig, repo: 'tokenless' }]);
+  assert.equal(status.today, 0);
+  await assert.rejects(() => handler.init(), /GitHub token is required/);
+});
