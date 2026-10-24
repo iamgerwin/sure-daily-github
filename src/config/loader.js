@@ -376,7 +376,7 @@ class ConfigLoader {
     // otherwise throw from randomInt partway through an issue-mode run
     if (config.randomization?.enabled) {
       const rand = config.randomization;
-      if (rand.issueCount) {
+      if (rand.issueCount !== undefined && rand.issueCount !== null) {
         validateCountRange(rand.issueCount, 'randomization.issueCount', errors);
       }
       const timeVar = rand.timeVariations;
@@ -437,7 +437,12 @@ class ConfigLoader {
         mode: general.mode || 'commit',
         dryRun: general.dryRun || false
       },
-      randomization: config.randomization || {
+      // Without its own issueCount, randomization would otherwise create one
+      // issue a day per repo instead of following general.dailyTarget
+      randomization: config.randomization ? {
+        ...config.randomization,
+        issueCount: config.randomization.issueCount ?? normalizedGeneralTarget
+      } : {
         enabled: false,
         issueCount: normalizedGeneralTarget,
         timeVariations: {

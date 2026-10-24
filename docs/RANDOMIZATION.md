@@ -73,7 +73,7 @@ randomization:
     max: 50
 ```
 
-When randomization is enabled, it overrides individual repository `dailyTarget` ranges and uses the global `issueCount` range instead.
+When randomization is enabled, it overrides individual repository `dailyTarget` ranges and uses the global `issueCount` range instead. If `issueCount` is omitted, it defaults to `general.dailyTarget` (or 1 when that is unset).
 
 ### Time-Based Variations
 

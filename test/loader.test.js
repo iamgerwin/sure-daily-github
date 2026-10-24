@@ -252,7 +252,7 @@ test('validate keeps valid repository paths and defaults a missing path', () => 
 });
 
 test('validate rejects fractional or non-positive randomization.issueCount instead of crashing at run time', () => {
-  for (const issueCount of [{ min: 1.5, max: 4 }, { min: 0, max: 4 }, { min: -2, max: 4 }, { min: '2', max: 4 }]) {
+  for (const issueCount of [{ min: 1.5, max: 4 }, { min: 0, max: 4 }, { min: -2, max: 4 }, { min: '2', max: 4 }, 0, '']) {
     assert.throws(
       () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount } }),
       /randomization\.issueCount must (be positive whole numbers|have min and max values)/
@@ -304,6 +304,33 @@ test('validate accepts valid randomization ranges and ignores disabled sections'
     repositories: [baseRepo],
     randomization: { enabled: false, issueCount: { min: 1.5, max: 4 } }
   }));
+});
+
+test('validate defaults a missing randomization.issueCount to general.dailyTarget', () => {
+  const ranged = config.validate({
+    repositories: [baseRepo],
+    general: { dailyTarget: { min: 3, max: 7 } },
+    randomization: { enabled: true }
+  });
+  assert.deepEqual(ranged.randomization, { enabled: true, issueCount: { min: 3, max: 7 } });
+
+  const fixed = config.validate({
+    repositories: [baseRepo],
+    general: { dailyTarget: 4 },
+    randomization: { enabled: true, timeVariations: { enabled: false } }
+  });
+  assert.deepEqual(fixed.randomization.issueCount, { min: 4, max: 4 });
+
+  const unset = config.validate({ repositories: [baseRepo], randomization: { enabled: true } });
+  assert.deepEqual(unset.randomization.issueCount, { min: 1, max: 1 });
+
+  // A configured issueCount is kept as-is
+  const own = config.validate({
+    repositories: [baseRepo],
+    general: { dailyTarget: 4 },
+    randomization: { enabled: true, issueCount: { min: 9, max: 12 } }
+  });
+  assert.deepEqual(own.randomization.issueCount, { min: 9, max: 12 });
 });
 
 test('validate rejects duplicate repositories, ignoring case', () => {
