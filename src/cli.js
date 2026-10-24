@@ -239,12 +239,8 @@ program
       console.log(`Logs:      ./logs/\n`);
       console.log('Press Ctrl+C to stop\n');
 
-      // Keep process alive
-      process.on('SIGINT', () => {
-        console.log('\n\n👋 Stopping scheduler...');
-        scheduler.stop();
-        process.exit(0);
-      });
+      // Keep process alive; SIGINT and SIGTERM stop it
+      scheduler.installSignalHandlers();
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);
