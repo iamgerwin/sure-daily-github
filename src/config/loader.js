@@ -84,6 +84,11 @@ function validateRepoPath(repoPath, label, errors) {
   }
 }
 
+// Where commands without --config read the configuration (and `init` writes it)
+export function defaultConfigPath() {
+  return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
+}
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -191,9 +196,7 @@ class ConfigLoader {
 
   load(configPath = null) {
     // Determine config file path
-    const filePath = configPath
-      || process.env.CONFIG_PATH
-      || path.join(__dirname, '../../config/config.yaml');
+    const filePath = configPath || defaultConfigPath();
 
     try {
       if (!fs.existsSync(filePath)) {
