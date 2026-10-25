@@ -17,7 +17,7 @@ Node.js tool. Test suite: `npm test` (`node --test`). Keep changes minimal and b
 ## Process Flow (Software Factory blueprint)
 
 - blueprint/README.md is the reference for any process-flow decision in this project: the cron pipeline (create -> AI review -> conflict self-heal -> re-review -> human merge), the `status/*` label state machine, engine routing, token budgets, and the incident log.
-- Labels follow docs/LABELS.md. Labels, blueprint, and pipeline scripts change only together, in one pass, and only on explicit request.
+- Labels follow docs/LABELS.md. The label scheme is part of one change contract (full list in blueprint/README.md § Change policy): it changes only together with the rest of that contract, in one pass, and only on explicit request.
 - Invariants: one notification per work unit, a budget and an off switch on every automated path, idempotent phases, verified engine self-reports, human merge gate, zero AI attribution.
 
 ## Conflict Fixer (fix-conflicts)

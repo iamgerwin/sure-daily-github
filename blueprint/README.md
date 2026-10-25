@@ -64,7 +64,7 @@ What is still proof-of-concept grade:
 | Hardcoded names | Host paths, the repository, the assignee, the commit identity for clean merges, the base branch for creation (`master`), and the proxy port are literals. A few values have environment overrides. |
 | GitHub-specific | State lives in GitHub labels and comments. Detection relies on GitHub's `mergeable` field. All I/O goes through the `gh` CLI. |
 | Human merge gate | This is intentional. It also caps throughput at the owner's review bandwidth, which is why the backlog gate exists. |
-| Conflict test gate is not enforced by the script | A clean merge is pushed without running the test suite. A conflicted merge depends on the engine following its instruction to run `npm test`. The orchestrator verifies that the push landed, that no conflict markers or attribution remain, and that GitHub reports the PR as mergeable. It does not run the tests or check their results. The PR comment, and the live `status/conflict-resolved` label description defined in `docs/LABELS.md`, say "test suite green", which is stronger than what is actually verified. The bootstrap snippet in section 6 uses wording that claims only what is verified. |
+| Conflict test gate is not enforced by the script | A clean merge is pushed without running the test suite. A conflicted merge depends on the engine following its instruction to run `npm test`. The orchestrator verifies that the push landed, that no conflict markers or attribution remain, and that GitHub reports the PR as mergeable. It does not run the tests or check their results. The live `status/conflict-resolved` label description, the PR comment, and the bootstrap snippet in section 6 claim only what is verified ("branch merged with base"). Two places still overstate it: the patrol's channel notification ("conflict auto-resolved, tests green") and the `status/conflict-resolved` row of the status table in `docs/LABELS.md` ("test suite green"). |
 | Review is advisory | Findings are filtered to files the PR changed. They are not checked line by line, and the reviewer does not run the tests. The verdict is a triage signal, not a gate. |
 | Status labels can coexist | The conflict checker adds `status/conflict` without removing `status/ai-reviewed` or `status/awaiting-ai-review`. Section 3 defines the precedence rule for reading them. |
 | CI is not consulted | No stage reads GitHub check runs. |
@@ -283,6 +283,7 @@ stateDiagram-v2
     reviewed --> conflict : phase 0 detects CONFLICTING
     conflict --> conflict : verification failed, retry next tick, max 2 per day
     conflict --> resolved : merge pushed, mechanical checks pass, tests not checked
+    conflict --> resolved : PR no longer CONFLICTING
     resolved --> awaiting : phase 2 re-queues and clears review ledger
     merged --> [*]
 ```
@@ -433,9 +434,11 @@ invariants in section 6.
   comment. GNU `grep` with a basic regular expression treats it as literal
   text, so the metadata extraction matched nothing.
 - **Permanent fix.** A plain-text marker line (`===META=== score crit warn
-  verdict`) is matched with `grep '^===META==='`. Fixture tests cover the
-  whole parse chain (scorecard, then metadata, then notification string),
-  not just the step that produces the output.
+  verdict`) is matched with `grep '^===META==='`. The pipeline scripts have
+  no automated test suite (section 1), so the rule is procedural: after any
+  change to the parse chain, a hand-run fixture must exercise the whole chain
+  (scorecard, then metadata, then notification string), not just the step
+  that produces the output.
 
 ### 5.5 Speed-tier pricing inversion
 
@@ -586,8 +589,11 @@ yet be reviewed or repaired.
    as its own: head branch under the configured prefix (`auto-pr/...`), base
    branch equal to the configured base branch, initial label
    `status/awaiting-ai-review`, assigned to the configured owner, and a diff
-   of at most 800 lines. The reviewer ignores PRs on other head branches,
-   and Phase 0 of conflict repair ignores PRs not assigned to the owner.
+   of at most 800 lines. Both selection conditions are required, not
+   optional: the reviewer ignores PRs whose head branch is not under the
+   configured prefix, and Phase 0 of conflict repair ignores PRs not
+   assigned to the configured assignee. A smoke test on any other branch or
+   assignee proves nothing, because the job under test never selects it.
    Remove the kill switch and confirm that exactly one scorecard and one
    notification appear. Keep the PR open for the next step.
 7. **Conflict repair.** Enable it. Reuse the PR from step 6, which already
