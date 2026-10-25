@@ -143,6 +143,30 @@ test('createDailyCommit dates the message, file and content from one clock readi
   assert.equal(filePath, `daily-updates/2026-10-14-${now.getTime()}.md`);
 });
 
+test('createDailyCommit counts a commit in the day it is dated, not the day the API call returns', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.client = {
+    createOrUpdateFile: async (...args) => {
+      calls.push(args);
+      return { success: true, data: { commit: { sha: 'sha' } } };
+    }
+  };
+  const lastSecond = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila
+  const nextDay = new Date('2026-10-14T16:00:01Z'); // 00:00:01 the next day
+  const target = { ...repoConfig, repo: 'midnight', dailyTarget: { min: 1, max: 1 } };
+
+  await handler.createDailyCommit(target, {}, false, 'Asia/Manila', lastSecond);
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', lastSecond).daily, 1);
+  assert.equal(state.getRepoState('me', 'midnight').lastCommitDate, '2026-10-14');
+
+  // The next day's target is still open
+  const next = await handler.createDailyCommit(target, {}, false, 'Asia/Manila', nextDay);
+  assert.equal(next.skipped, undefined);
+  assert.equal(calls.length, 2);
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', nextDay).daily, 1);
+});
+
 function stubbedHandler() {
   const handler = new CommitHandler('ghp_test');
   const calls = [];
