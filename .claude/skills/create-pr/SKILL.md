@@ -99,7 +99,7 @@ gh pr create \
   --title "<conventional subject of main commit>" \
   --body-file <path-to-body.md> \
   --assignee iamgerwin \
-  --label ready-for-review
+  --label status/awaiting-ai-review
 ```
 
 ## 6. Final check
@@ -109,5 +109,5 @@ Before reporting done, verify with `gh pr view <url> --json title,body,labels,as
 - Branch matches `auto-pr/<N>-<kebab>` (optional `-vK`).
 - Title is a conventional subject.
 - Body has the required H2 sections in order.
-- Label `ready-for-review`, assignee `iamgerwin`, base `master`.
+- Label `status/awaiting-ai-review`, assignee `iamgerwin`, base `master`.
 - No AI attribution in any commit (`git log origin/master..HEAD --format=%B`), title, or body.
