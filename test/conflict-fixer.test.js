@@ -120,6 +120,11 @@ test('selectRepositories filters enabled repositories and rejects unknown filter
   assert.throws(() => selectRepositories(repos, ['me/b']), /not configured or disabled/);
 });
 
+test('selectRepositories selects a repository named more than once only once', () => {
+  const repos = [{ owner: 'me', repo: 'a' }, { owner: 'me', repo: 'c' }];
+  assert.deepEqual(selectRepositories(repos, ['me/a', 'Me/A', 'me/c', 'me/a']), [repos[0], repos[1]]);
+});
+
 test('summarize counts fixed, manual review, skipped, and failed results', () => {
   const summary = summarize([
     { status: 'fixed', success: true, skipped: false },
@@ -280,6 +285,16 @@ test('scan-only lists conflicted PRs without cloning', async (t) => {
   const result = await fixer.run(config(), { scanOnly: true });
 
   assert.deepEqual(result.results.map(r => [r.pr, r.status, r.reason]), [[7, 'conflicted', 'feature -> master']]);
+});
+
+test('a repository passed twice via --repo is scanned once', async (t) => {
+  const fx = await fixture(t);
+  const { fixer, client } = makeFixer(fx, [fx.pr], { git: async () => assert.fail('git must not run') });
+
+  const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo', 'ME/demo'] });
+
+  assert.equal(client.calls.list, 1);
+  assert.deepEqual(result.results.map(r => r.pr), [7]);
 });
 
 test('--pr filters to one pull request and requires a single repository', async (t) => {
@@ -570,6 +585,29 @@ test('re-attempts a PR whose head SHA changed and overwrites the entry', async (
   assert.deepEqual(JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8'))[KEY], {
     headSha: fx.pr.headRefOid, status: 'fixed', startedAt: now, finishedAt: now
   });
+});
+
+test('a work root that cannot be written fails each PR and finishes its ledger entry', async (t) => {
+  const fx = await fixture(t);
+  const now = 1000 * MINUTE;
+  const second = { ...fx.pr, number: 8 };
+  const { fixer } = makeFixer(fx, [fx.pr, second], {
+    now: () => now,
+    workRoot: path.join(fx.root, 'missing'),
+    git: async () => assert.fail('git must not run')
+  });
+
+  const result = await fixer.run(config());
+
+  assert.equal(result.success, true, result.error);
+  assert.deepEqual(result.results.map(r => [r.pr, r.status]), [[7, 'error'], [8, 'error']]);
+  assert.match(result.results[0].error, /^#7: .*ENOENT/);
+  assert.equal(result.summary.failed, 2);
+  const entries = JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8'));
+  for (const key of [KEY, ledgerKey('me', 'demo', 8)]) {
+    assert.deepEqual(entries[key], { headSha: fx.pr.headRefOid, status: 'failed', startedAt: now, finishedAt: now });
+  }
+  assert.equal(await fx.remoteHead(), fx.pr.headRefOid);
 });
 
 test('scan-only and dry runs never write the ledger', async (t) => {

@@ -27,12 +27,24 @@ function isProcessAlive(pid) {
   }
 }
 
-function readLock(filePath) {
+function readRaw(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return fs.readFileSync(filePath, 'utf8');
   } catch (_) {
     return null;
   }
+}
+
+function parseLock(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+function readLock(filePath) {
+  return parseLock(readRaw(filePath));
 }
 
 function isStale(holder, now) {
@@ -61,6 +73,34 @@ function createLockFile(filePath, contents) {
   }
 }
 
+// Two callers can judge the same lock stale; if the slower one simply deleted
+// the lock path it would delete the lock the faster one had just created, and
+// both would run. Renaming is atomic, so exactly one caller moves the lock aside,
+// and a caller that moved a lock other than the stale one it read (a fresh lock
+// taken meanwhile) puts it back before giving up.
+function reclaimStaleLock(filePath, staleRaw) {
+  const moved = `${filePath}.${process.pid}.${Date.now()}.stale`;
+  try {
+    fs.renameSync(filePath, moved);
+  } catch (error) {
+    // Already reclaimed by someone else
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  try {
+    const raw = readRaw(moved);
+    if (raw !== null && raw !== staleRaw) {
+      try {
+        createLockFile(filePath, raw);
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+    }
+  } finally {
+    fs.rmSync(moved, { force: true });
+  }
+}
+
 // Acquires an exclusive cross-process lock so concurrent executions (e.g. the
 // scheduler service plus a manual `run`) cannot race on the state files.
 // Returns { acquired: true, release } or { acquired: false, holder }.
@@ -76,11 +116,12 @@ export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } =
       if (error.code !== 'EEXIST') throw error;
     }
 
-    const holder = readLock(filePath);
+    const raw = readRaw(filePath);
+    const holder = parseLock(raw);
     if (attempt > 0 || !isStale(holder, now)) {
       return { acquired: false, holder };
     }
-    fs.rmSync(filePath, { force: true });
+    reclaimStaleLock(filePath, raw);
   }
 }
 

@@ -73,6 +73,32 @@ test('a repositories field that is not an object starts fresh so state persists'
   assert.equal(saved.repositories['me/demo'].counters.daily.count, 1);
 });
 
+test('a malformed repositories field keeps the round-robin cursor and backs up the file', () => {
+  const original = { repositories: [], roundRobin: { index: 2 } };
+  const { sm, filePath } = managerWith(original);
+
+  assert.equal(sm.getRoundRobinIndex(), 2);
+  assert.deepEqual(JSON.parse(fs.readFileSync(`${filePath}.bak`, 'utf8')), original);
+
+  sm.recordAction('me', 'demo', { type: 'issue', timezone: 'UTC', now: NOW });
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')).roundRobin, { index: 2 });
+});
+
+test('state that is valid JSON but not an object is backed up before starting fresh', () => {
+  const { sm, filePath } = managerWith([{ 'me/demo': { totalCommits: 40 } }]);
+
+  assert.deepEqual(sm.state.repositories, {});
+  assert.deepEqual(JSON.parse(fs.readFileSync(`${filePath}.bak`, 'utf8')), [{ 'me/demo': { totalCommits: 40 } }]);
+
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC', now: NOW });
+  assert.equal(fs.existsSync(`${filePath}.bak`), true);
+});
+
+test('well-formed state is not backed up', () => {
+  const { filePath } = managerWith({ repositories: {} });
+  assert.equal(fs.existsSync(`${filePath}.bak`), false);
+});
+
 test('well-formed counters are left untouched', () => {
   const { sm } = managerWith({
     repositories: {

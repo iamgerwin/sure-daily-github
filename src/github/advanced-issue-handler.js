@@ -11,6 +11,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root (like StateManager) so it does not depend on cwd
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+
 class AdvancedIssueHandler {
   constructor(token) {
     this.token = token;
@@ -35,7 +38,10 @@ class AdvancedIssueHandler {
     try {
       const data = await fs.readFile(this.stateFile, 'utf-8');
       const parsed = JSON.parse(data);
-      if (!parsed.repositories) parsed.repositories = {};
+      if (!isPlainObject(parsed)) throw new Error('issue state is not a JSON object');
+      // An array would drop every repo entry on save (so the daily target is
+      // never reached) and a string or number would crash the run
+      if (!isPlainObject(parsed.repositories)) parsed.repositories = {};
       return parsed;
     } catch (error) {
       if (error.code !== 'ENOENT') {
@@ -93,6 +99,17 @@ class AdvancedIssueHandler {
     const lastResetDate = this.getDateInTimezone(lastReset, timezone);
     
     return nowDate !== lastResetDate;
+  }
+
+  // A new day clears counts and targets but keeps the issue timing, so an issue
+  // created just before midnight still holds the next one back for its interval
+  resetRepositories(repositories) {
+    return Object.fromEntries(Object.entries(repositories).map(([key, entry]) => [key, {
+      issuesCreatedToday: 0,
+      lastIssueTime: entry?.lastIssueTime ?? null,
+      todayTarget: null,
+      nextIssueTime: entry?.nextIssueTime ?? null
+    }]));
   }
 
   getDateInTimezone(date, timezone) {
@@ -172,12 +189,14 @@ class AdvancedIssueHandler {
     let title = template.title || `Automated Issue - ${replacements.date} ${replacements.time}`;
     let body = template.body || `# Automated Issue\n\n**Created:** ${timestamp}\n**Repository:** ${repo.repo}\n\n---\n*Automated issue created by sure-daily-github*`;
     
-    // Replace all placeholders
-    Object.entries(replacements).forEach(([key, value]) => {
-      const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
-      title = title.replace(regex, value);
-      body = body.replace(regex, value);
-    });
+    // One pass with a replacer function: values are inserted literally, so a
+    // configured title containing `$&`, `$'` or `$$` (string replacement
+    // patterns) or a `${...}` placeholder is not rewritten. Unknown
+    // placeholders are left as written.
+    const fill = text => text.replace(/\$\{(\w+)\}/g, (match, key) =>
+      Object.hasOwn(replacements, key) ? String(replacements[key]) : match);
+    title = fill(title);
+    body = fill(body);
     
     return {
       title,
@@ -194,7 +213,7 @@ class AdvancedIssueHandler {
     if (this.shouldResetDaily(state, timezone)) {
       logger.info('Performing daily reset', { timezone });
       state.lastDailyReset = new Date().toISOString();
-      state.repositories = {};
+      state.repositories = this.resetRepositories(state.repositories);
     }
     
     // Results use the same { owner, repo } shape as the other handlers so the
@@ -215,8 +234,8 @@ class AdvancedIssueHandler {
         continue;
       }
       
-      // Initialize repo state if not exists
-      if (!this.getRepoState(state, repo)) {
+      // Initialize repo state if not exists, or replace an entry of the wrong shape
+      if (!isPlainObject(this.getRepoState(state, repo))) {
         state.repositories[this.getRepoKey(repo)] = {
           issuesCreatedToday: 0,
           lastIssueTime: null,
@@ -226,6 +245,9 @@ class AdvancedIssueHandler {
       }
 
       const repoState = this.getRepoState(state, repo);
+      // A missing or non-numeric count would never reach the target (NaN >= n
+      // is false), so issues would keep being created; start it over instead
+      if (!isCount(repoState.issuesCreatedToday)) repoState.issuesCreatedToday = 0;
 
       // Determine today's target if not set, or re-roll it when the configured range changed
       if (repo.dailyTarget && this.resolveTodayTarget(repoState, repo.dailyTarget)) {
@@ -263,7 +285,7 @@ class AdvancedIssueHandler {
     // Apply repositorySelection (strategy, maxPerExecution) to the repositories
     // that can take an issue now, so selection slots are not spent on repos
     // that are done for the day or still waiting for their interval
-    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore);
+    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({
@@ -396,12 +418,16 @@ class AdvancedIssueHandler {
     for (const repo of repositories) {
       const repoState = state.repositories[this.getRepoKey(repo)] || state.repositories[repo.repo] || {};
       const todayState = stale ? {} : repoState;
+      // The next run's reset keeps a pending interval, so it still applies
+      const nextIssueTime = stale && repoState.nextIssueTime > Date.now()
+        ? repoState.nextIssueTime
+        : todayState.nextIssueTime;
       statuses.push({
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
         todayTarget: todayState.todayTarget || 'Not set',
         lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: todayState.nextIssueTime ? new Date(todayState.nextIssueTime).toISOString() : 'Any time'
+        nextIssueTime: nextIssueTime ? new Date(nextIssueTime).toISOString() : 'Any time'
       });
     }
     

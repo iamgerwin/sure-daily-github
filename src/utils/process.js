@@ -102,8 +102,12 @@ export function runProcess(cmd, args = [], { cwd, env = process.env, timeoutMs =
       } catch (_) {}
     };
 
-    child.stdout.on('data', (chunk) => { stdout = appendTail(stdout, chunk.toString()); });
-    child.stderr.on('data', (chunk) => { stderr = appendTail(stderr, chunk.toString()); });
+    // Decode on the stream so a multibyte character split across two reads is
+    // not turned into U+FFFD (decoding each chunk on its own would)
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout = appendTail(stdout, chunk); });
+    child.stderr.on('data', (chunk) => { stderr = appendTail(stderr, chunk); });
     child.on('error', (error) => finish({ code: null, error }));
     child.on('close', (code, signal) => finish({ code, signal }));
     if (input !== null) {
