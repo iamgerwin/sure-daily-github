@@ -403,16 +403,20 @@ class AdvancedIssueHandler {
     const statuses = [];
     // State from a previous day is only cleared by the next run; report what that run will see
     const stale = this.shouldResetDaily(state, timezone);
+    const now = Date.now();
 
     for (const repo of repositories) {
       const repoState = state.repositories[this.getRepoKey(repo)] || state.repositories[repo.repo] || {};
       const todayState = stale ? {} : repoState;
+      // An elapsed interval no longer holds the repo back (processRepositories
+      // only waits while now < nextIssueTime), so it must not read as a future time
+      const waiting = todayState.nextIssueTime && now < todayState.nextIssueTime;
       statuses.push({
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
         todayTarget: todayState.todayTarget || 'Not set',
         lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: todayState.nextIssueTime ? new Date(todayState.nextIssueTime).toISOString() : 'Any time'
+        nextIssueTime: waiting ? new Date(todayState.nextIssueTime).toISOString() : 'Any time'
       });
     }
     
