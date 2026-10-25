@@ -46,11 +46,18 @@ export class PrMaintLedger {
     }
   }
 
-  // Temp file + rename so a crash mid-write never leaves a truncated ledger
+  // Temp file + rename so a crash mid-write never leaves a truncated ledger.
+  // A failed write or rename removes the temp file before rethrowing, so
+  // repeated failures do not leave one orphaned file per process in data/.
   save(state) {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmpFile = `${this.filePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2));
-    fs.renameSync(tmpFile, this.filePath);
+    try {
+      fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2));
+      fs.renameSync(tmpFile, this.filePath);
+    } catch (error) {
+      try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
+      throw error;
+    }
   }
 }

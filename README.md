@@ -124,7 +124,7 @@ sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [-
 sure-daily-github --help            # Show all commands
 ```
 
-Every command accepts `--config <path>` except `init`. The scheduler (`start`) is covered in
+Every command accepts `--config <path>`; without it they read `CONFIG_PATH` or `config/config.yaml` in the project root, which is also where `init` writes. The scheduler (`start`) is covered in
 [docs/SCHEDULER.md](./docs/SCHEDULER.md) and [docs/SCHEDULER_SETUP.md](./docs/SCHEDULER_SETUP.md).
 
 ### Babysit

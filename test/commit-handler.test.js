@@ -143,6 +143,30 @@ test('createDailyCommit dates the message, file and content from one clock readi
   assert.equal(filePath, `daily-updates/2026-10-14-${now.getTime()}.md`);
 });
 
+test('createDailyCommit counts a commit in the day it is dated, not the day the API call returns', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.client = {
+    createOrUpdateFile: async (...args) => {
+      calls.push(args);
+      return { success: true, data: { commit: { sha: 'sha' } } };
+    }
+  };
+  const lastSecond = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila
+  const nextDay = new Date('2026-10-14T16:00:01Z'); // 00:00:01 the next day
+  const target = { ...repoConfig, repo: 'midnight', dailyTarget: { min: 1, max: 1 } };
+
+  await handler.createDailyCommit(target, {}, false, 'Asia/Manila', lastSecond);
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', lastSecond).daily, 1);
+  assert.equal(state.getRepoState('me', 'midnight').lastCommitDate, '2026-10-14');
+
+  // The next day's target is still open
+  const next = await handler.createDailyCommit(target, {}, false, 'Asia/Manila', nextDay);
+  assert.equal(next.skipped, undefined);
+  assert.equal(calls.length, 2);
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', nextDay).daily, 1);
+});
+
 function stubbedHandler() {
   const handler = new CommitHandler('ghp_test');
   const calls = [];
@@ -213,6 +237,20 @@ test('processRepositories rotates repos across runs with round-robin in commit m
   assert.deepEqual(calls, ['rr-sel-a', 'rr-sel-b', 'rr-sel-c']);
 });
 
+test('a commit-mode dry run does not advance the round-robin rotation', async () => {
+  const { handler, calls } = stubbedHandler();
+  const repos = selectionRepos.map(r => ({ ...r, repo: `rr-dry-${r.repo}`, dailyTarget: { min: 5, max: 5 } }));
+  const config = { repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+  state.setRoundRobinIndex(1);
+
+  await handler.processRepositories(repos, {}, true, config);
+  await handler.processRepositories(repos, {}, true, config);
+  assert.equal(state.getRoundRobinIndex(), 1);
+
+  await handler.processRepositories(repos, {}, false, config);
+  assert.deepEqual(calls, ['rr-dry-sel-b']);
+});
+
 test('createDailyCommit stops at the rolled daily target, not always dailyTarget.max', async () => {
   const { handler, calls } = stubbedHandler();
   const ranged = { ...repoConfig, repo: 'ranged', dailyTarget: { min: 1, max: 3 } };
@@ -232,4 +270,29 @@ test('getStatus reports the same rolled target the run uses', async () => {
 
   const [status] = await handler.getStatus([ranged]);
   assert.equal(status.target, target);
+});
+
+test('processRepositories waits between commits but not after the last repo', async () => {
+  const { handler, calls } = stubbedHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+  const repos = selectionRepos.map(r => ({ ...r, repo: `pace-${r.repo}` }));
+
+  await handler.processRepositories(repos, {}, false, {});
+
+  assert.equal(calls.length, 3);
+  assert.deepEqual(delays, [1000, 1000]);
+});
+
+test('processRepositories does not wait on rate-limit delays in a dry run', async () => {
+  const { handler, calls } = stubbedHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+  const repos = selectionRepos.map(r => ({ ...r, repo: `pace-dry-${r.repo}` }));
+
+  const results = await handler.processRepositories(repos, {}, true, {});
+
+  assert.equal(calls.length, 0);
+  assert.ok(results.every(r => r.dryRun));
+  assert.deepEqual(delays, []);
 });

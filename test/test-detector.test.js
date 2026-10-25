@@ -63,6 +63,19 @@ test('detectTestCommand installs pnpm and yarn dependencies from their lockfiles
   );
 });
 
+test('detectTestCommand installs bun dependencies from a text or binary lockfile', (t) => {
+  for (const lockfile of ['bun.lock', 'bun.lockb']) {
+    const bun = repoDir(t, { 'package.json': pkg({ test: 'bun test' }), [lockfile]: '' });
+    assert.deepEqual(detectTestCommand(bun), { install: 'bun install --frozen-lockfile', test: 'npm test' }, lockfile);
+    assert.deepEqual(detectTestCommand(bun, {}, { installDeps: false }), { install: null, test: 'npm test' }, lockfile);
+    assert.deepEqual(
+      detectTestCommand(bun, { testCommand: 'bun test --bail' }),
+      { install: 'bun install --frozen-lockfile', test: 'bun test --bail' },
+      lockfile
+    );
+  }
+});
+
 test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) => {
   const mixed = repoDir(t, {
     'package.json': pkg({ test: 'node --test' }),
@@ -74,6 +87,9 @@ test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) =>
 
   const pnpmAndYarn = repoDir(t, { 'package.json': pkg({ test: 'node --test' }), 'pnpm-lock.yaml': '', 'yarn.lock': '' });
   assert.equal(detectTestCommand(pnpmAndYarn).install, 'pnpm install --frozen-lockfile');
+
+  const yarnAndBun = repoDir(t, { 'package.json': pkg({ test: 'node --test' }), 'yarn.lock': '', 'bun.lock': '' });
+  assert.equal(detectTestCommand(yarnAndBun).install, 'yarn install --frozen-lockfile');
 });
 
 test('detectTestCommand does not install for a Makefile-only repo with a lockfile', (t) => {

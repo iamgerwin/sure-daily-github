@@ -98,3 +98,66 @@ test('GitHub requests are aborted after GITHUB_REQUEST_TIMEOUT_MS', async () => 
     server.close();
   }
 });
+
+test('handleShutdown stops the scheduler and exits when no babysit scan is running', (t) => {
+  const originalRunning = babysitter.isRunning;
+  babysitter.isRunning = () => false;
+  t.after(() => { babysitter.isRunning = originalRunning; });
+
+  let stopped = false;
+  scheduler.task = { stop: () => { stopped = true; } };
+  scheduler.running = true;
+  const exits = [];
+
+  assert.equal(scheduler.handleShutdown('SIGTERM', { exit: code => exits.push(code) }), true);
+  assert.equal(stopped, true);
+  assert.equal(scheduler.isRunning(), false);
+  assert.deepEqual(exits, [0]);
+});
+
+test('handleShutdown leaves the exit to an in-flight babysit scan', (t) => {
+  const originalRunning = babysitter.isRunning;
+  babysitter.isRunning = () => true;
+  t.after(() => { babysitter.isRunning = originalRunning; });
+
+  scheduler.task = { stop: () => {} };
+  scheduler.running = true;
+  const exits = [];
+
+  assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), false);
+  assert.equal(scheduler.isRunning(), false);
+  assert.deepEqual(exits, []);
+
+  // A repeated signal still defers to the babysit scan
+  assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), false);
+  assert.deepEqual(exits, []);
+});
+
+test('installSignalHandlers handles SIGINT and SIGTERM until removed', (t) => {
+  const originalRunning = babysitter.isRunning;
+  babysitter.isRunning = () => false;
+  t.after(() => { babysitter.isRunning = originalRunning; });
+
+  const exits = [];
+  const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+  const remove = scheduler.installSignalHandlers({ exit: code => exits.push(code) });
+  try {
+    process.emit('SIGINT', 'SIGINT');
+    process.emit('SIGTERM', 'SIGTERM');
+    assert.deepEqual(exits, [0, 0]);
+  } finally {
+    remove();
+  }
+  assert.equal(process.listenerCount('SIGINT'), before.SIGINT);
+  assert.equal(process.listenerCount('SIGTERM'), before.SIGTERM);
+});
+
+test('babysitter.isRunning reflects whether a scan holds the lock', () => {
+  assert.equal(babysitter.isRunning(), false);
+  babysitter.lock = { release() {} };
+  try {
+    assert.equal(babysitter.isRunning(), true);
+  } finally {
+    babysitter.lock = null;
+  }
+});

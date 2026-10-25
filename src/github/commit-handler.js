@@ -66,9 +66,10 @@ class CommitHandler {
     const { owner, repo, branch, path: basePath, commitMessage } = repoConfig;
 
     try {
-      // Check if commit is needed
-      const target = this.resolveDailyTarget(repoConfig, timezone);
-      if (!state.isCommitNeeded(owner, repo, target, timezone)) {
+      // Check, date and count the commit from the same clock reading: counting it
+      // after the API call could land a 23:59:59 commit in the next day's window
+      const target = this.resolveDailyTarget(repoConfig, timezone, now);
+      if (!state.isCommitNeeded(owner, repo, target, timezone, now)) {
         logger.info('Daily target already met', { owner, repo, target });
         return { success: true, skipped: true, reason: 'target_met' };
       }
@@ -78,8 +79,6 @@ class CommitHandler {
         return { success: true, dryRun: true };
       }
 
-      // Generate content and commit details from one clock reading, so a run
-      // crossing midnight cannot date the message, file name and body differently
       const content = this.generateContent(contentTemplate, timezone, now);
       const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
       const filePath = this.generateFilePath(basePath, repo, timezone, now);
@@ -95,7 +94,7 @@ class CommitHandler {
       );
 
       if (result.success) {
-        state.recordCommit(owner, repo, timezone);
+        state.recordCommit(owner, repo, timezone, now);
         logger.info('Daily commit created', {
           owner,
           repo,
@@ -133,7 +132,7 @@ class CommitHandler {
       }
     }
 
-    const selected = randomizer.selectRepositories(ready, config?.repositorySelection);
+    const selected = randomizer.selectRepositories(ready, config?.repositorySelection, state, { dryRun });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });
@@ -147,7 +146,7 @@ class CommitHandler {
       strategy: config?.repositorySelection?.strategy || 'sequential'
     });
 
-    for (const repo of selected) {
+    for (const [index, repo] of selected.entries()) {
       const result = await this.createDailyCommit(repo, contentTemplate, dryRun, timezone);
       results.push({
         owner: repo.owner,
@@ -155,8 +154,11 @@ class CommitHandler {
         ...result
       });
 
-      // Small delay to avoid rate limiting
-      await this.delay(1000);
+      // Small delay to avoid rate limiting, only after a repo that called the
+      // API (not a dry run or skip) and only when another repo follows
+      if (!dryRun && !result.skipped && index < selected.length - 1) {
+        await this.delay(1000);
+      }
     }
 
     return results;

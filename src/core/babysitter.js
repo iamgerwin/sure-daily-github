@@ -297,6 +297,12 @@ export class Babysitter {
     (this.options.exit || ((code) => process.exit(code)))(signal === 'SIGINT' ? 130 : 143);
   }
 
+  // True while a scan holds the lock, which is also while its signal handlers
+  // are installed
+  isRunning() {
+    return Boolean(this.lock);
+  }
+
   installSignalHandlers() {
     const handlers = SIGNALS.map(signal => [signal, () => { this.interrupt(signal); }]);
     handlers.forEach(([signal, handler]) => process.on(signal, handler));

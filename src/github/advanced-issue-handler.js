@@ -101,6 +101,17 @@ class AdvancedIssueHandler {
     return nowDate !== lastResetDate;
   }
 
+  // A new day clears counts and targets but keeps the issue timing, so an issue
+  // created just before midnight still holds the next one back for its interval
+  resetRepositories(repositories) {
+    return Object.fromEntries(Object.entries(repositories).map(([key, entry]) => [key, {
+      issuesCreatedToday: 0,
+      lastIssueTime: entry?.lastIssueTime ?? null,
+      todayTarget: null,
+      nextIssueTime: entry?.nextIssueTime ?? null
+    }]));
+  }
+
   getDateInTimezone(date, timezone) {
     return new Date(date.toLocaleString('en-US', { timeZone: timezone })).toDateString();
   }
@@ -202,7 +213,7 @@ class AdvancedIssueHandler {
     if (this.shouldResetDaily(state, timezone)) {
       logger.info('Performing daily reset', { timezone });
       state.lastDailyReset = new Date().toISOString();
-      state.repositories = {};
+      state.repositories = this.resetRepositories(state.repositories);
     }
     
     // Results use the same { owner, repo } shape as the other handlers so the
@@ -274,7 +285,7 @@ class AdvancedIssueHandler {
     // Apply repositorySelection (strategy, maxPerExecution) to the repositories
     // that can take an issue now, so selection slots are not spent on repos
     // that are done for the day or still waiting for their interval
-    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore);
+    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({
@@ -407,12 +418,16 @@ class AdvancedIssueHandler {
     for (const repo of repositories) {
       const repoState = state.repositories[this.getRepoKey(repo)] || state.repositories[repo.repo] || {};
       const todayState = stale ? {} : repoState;
+      // The next run's reset keeps a pending interval, so it still applies
+      const nextIssueTime = stale && repoState.nextIssueTime > Date.now()
+        ? repoState.nextIssueTime
+        : todayState.nextIssueTime;
       statuses.push({
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
         todayTarget: todayState.todayTarget || 'Not set',
         lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: todayState.nextIssueTime ? new Date(todayState.nextIssueTime).toISOString() : 'Any time'
+        nextIssueTime: nextIssueTime ? new Date(nextIssueTime).toISOString() : 'Any time'
       });
     }
     
