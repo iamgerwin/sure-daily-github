@@ -14,6 +14,12 @@
 
 Node.js tool. Test suite: `npm test` (`node --test`). Keep changes minimal and behavior-focused; follow the commit message style in `git log`.
 
+## Process Flow (Software Factory blueprint)
+
+- blueprint/README.md is the reference for any process-flow decision in this project: the cron pipeline (create -> AI review -> conflict self-heal -> re-review -> human merge), the `status/*` label state machine, engine routing, token budgets, and the incident log.
+- Labels follow docs/LABELS.md. Labels, blueprint, and pipeline scripts change only together, in one pass, and only on explicit request.
+- Invariants: one notification per work unit, a budget and an off switch on every automated path, idempotent phases, verified engine self-reports, human merge gate, zero AI attribution.
+
 ## Conflict Fixer (fix-conflicts)
 
 - `fix-conflicts` scans configured repos' open PRs and auto-resolves merge conflicts (newer change per hunk; test files keep both sides, `conflictFixer.sourceHunks` can escalate source hunks) behind a mandatory test gate. It pushes nothing unless the target repo's tests pass and the repo is explicitly allowed (`conflictFixer` block: allowlist/denylist/per-repo; default is allowlist-empty = nothing runs).
