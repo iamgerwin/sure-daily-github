@@ -70,7 +70,7 @@ What is still proof-of-concept grade:
 | CI is not consulted | No stage reads GitHub check runs. |
 | Partial kill switches | Only the review stage has a marker-file kill switch. Creation and conflict repair are stopped by disabling their cron entries. |
 | Pipeline scripts have no test suite | Script changes are checked with hand-run fixtures. |
-| Observability | Observability is limited to channel messages and per-script log files. There are no metrics. |
+| Observability | Observability is limited to channel messages and per-script log files. There are no metrics. A PR stuck in a deferred state (5.8) produces no notification. |
 
 What separates it from production:
 
@@ -484,9 +484,18 @@ invariants in section 6.
   for a while after a push.
 - **Permanent fix.** Every phase is idempotent and converges over successive
   ticks. Not finding a PR yet is never treated as a failure, and `UNKNOWN` is
-  deferred. The cost is at most one extra tick (30 minutes) per transition.
+  deferred. In practice a deferred transition typically resolves within one
+  or two ticks (observed, not guaranteed; GitHub does not bound the lag).
   After a push, verification waits about 10 seconds before reading
   `mergeable`.
+- **Detecting persistent deferral.** A transition that is stuck rather than
+  lagging shows up as a PR whose `mergeable` stays `UNKNOWN`, or a labeled PR
+  that the next tick's label query does not return, across multiple
+  consecutive ticks. The intended detection mechanism reuses the creation
+  job's failure-streak pattern (`fail_streak`): count consecutive ticks
+  without progress per PR, and after 3 such ticks notify the owner once.
+  Conflict repair does not implement this counter yet. Until it does, a stuck
+  PR is visible only in the patrol log.
 
 ### Other recorded pitfalls
 
