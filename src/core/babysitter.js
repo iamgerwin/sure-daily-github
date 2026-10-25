@@ -822,7 +822,9 @@ export class Babysitter {
       }
     }
 
-    const changedFiles = (await git(['diff', '--name-only', headSha, finalHead])).trim().split('\n').filter(Boolean);
+    // -z lists paths verbatim; without it git C-quotes non-ASCII and special
+    // characters ("d\303\251j\303\240.md"), and those quoted names end up in replies
+    const changedFiles = (await git(['diff', '--name-only', '-z', headSha, finalHead])).split('\0').filter(Boolean);
     this.checkInterrupted();
     const fix = { ok: true, commitSha: finalHead, changedFiles };
     beforePush?.(fix);
