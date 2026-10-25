@@ -233,3 +233,28 @@ test('getStatus reports the same rolled target the run uses', async () => {
   const [status] = await handler.getStatus([ranged]);
   assert.equal(status.target, target);
 });
+
+test('processRepositories waits between commits but not after the last repo', async () => {
+  const { handler, calls } = stubbedHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+  const repos = selectionRepos.map(r => ({ ...r, repo: `pace-${r.repo}` }));
+
+  await handler.processRepositories(repos, {}, false, {});
+
+  assert.equal(calls.length, 3);
+  assert.deepEqual(delays, [1000, 1000]);
+});
+
+test('processRepositories does not wait on rate-limit delays in a dry run', async () => {
+  const { handler, calls } = stubbedHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+  const repos = selectionRepos.map(r => ({ ...r, repo: `pace-dry-${r.repo}` }));
+
+  const results = await handler.processRepositories(repos, {}, true, {});
+
+  assert.equal(calls.length, 0);
+  assert.ok(results.every(r => r.dryRun));
+  assert.deepEqual(delays, []);
+});
