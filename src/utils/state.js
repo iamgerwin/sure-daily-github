@@ -58,6 +58,17 @@ export class StateManager {
 
   getRepoState(owner, repo) {
     const key = `${owner}/${repo}`;
+    // GitHub names are case-insensitive: an entry recorded under other casing is
+    // the same repository, so re-casing the config must not reset its counters
+    if (!isPlainObject(this.state.repositories[key])) {
+      const lower = key.toLowerCase();
+      const existing = Object.keys(this.state.repositories)
+        .find(k => k.toLowerCase() === lower && isPlainObject(this.state.repositories[k]));
+      if (existing) {
+        this.state.repositories[key] = this.state.repositories[existing];
+        delete this.state.repositories[existing];
+      }
+    }
     if (!isPlainObject(this.state.repositories[key])) {
       this.state.repositories[key] = {
         // Legacy fields (kept for backward compatibility)
