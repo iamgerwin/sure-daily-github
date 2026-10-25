@@ -11,7 +11,8 @@ Related sources:
 |---|---|
 | `$H/.hermes/scripts/sdg-*.sh`, `claude-watchdog.sh` | The pipeline. Ground truth when this document and the code disagree. |
 | `$H/.hermes/skills/devops/auto-pr-pipeline/SKILL.md` | Operational runbook: manual procedures, pitfalls, recovery steps. |
-| `docs/LABELS.md` | Canonical label scheme and `gh` bootstrap commands. |
+| `docs/LABELS.md` | Canonical label scheme: names, colors, descriptions, and `gh` bootstrap commands. |
+| `blueprint/LABELS.md` | Label states and workflow: owner of every label in all four families, which routine sets and removes each `status/*` label, the full transition table with triggers and guards, and the `quality/*` contract. |
 | `.claude/skills/create-pr/SKILL.md` | Branch name, PR title and PR description template. |
 
 `$H` is the Hermes home on the host (`/home/gerwin/.local/share/hermes-vps`).
@@ -66,7 +67,7 @@ What is still proof-of-concept grade:
 |---|---|
 | Single repository | Every script hardcodes one repository slug, one local clone, and one worktree path per job (conflict repair, fix rounds). |
 | Single assignee | The conflict checker selects PRs assigned to one user. The creation prompt assigns every PR to that user. Review and fix rounds select by head branch (`auto-pr/*`), not by assignee. |
-| Hardcoded names | Host paths, the repository, the assignee, the commit identity for clean merges, the base branch for creation (`master`), and the proxy port are literals. A few values have environment overrides. |
+| Hardcoded names | Host paths, the repository, the assignee, the commit identity for script-made commits, the base branch for creation (`master`), and the proxy port are literals. A few values have environment overrides. |
 | GitHub-specific | State lives in GitHub labels and comments. Detection relies on GitHub's `mergeable` field. All I/O goes through the `gh` CLI. |
 | Human merge gate | This is intentional. It also caps throughput at the owner's review bandwidth, which is why the backlog gate exists. |
 | Conflict test gate is not enforced by the script | A clean merge is pushed without running the test suite. A conflicted merge depends on the engine following its instruction to run `npm test`. The orchestrator verifies that the push landed, that no conflict markers or attribution remain, and that GitHub reports the PR as mergeable. It does not run the tests or check their results. The live `status/conflict-resolved` label description, the PR comment, and the bootstrap snippet in section 6 claim only what is verified ("branch merged with base"). Two places still overstate it: the patrol's channel notification ("conflict auto-resolved, tests green") and the `status/conflict-resolved` row of the status table in `docs/LABELS.md` ("test suite green"). |
@@ -117,7 +118,7 @@ standard output to the configured destination.
 
 | Schedule | Script | Purpose | Engine | Guards | Delivers to |
 |---|---|---|---|---|---|
-| `0,30 * * * *` | `sdg-autopr.sh` | Creates one PR per due slot. Claude Code plans, codes, tests, branches, commits, pushes, and opens the PR with label `status/awaiting-ai-review`. The script then checks the result and posts the notification. | Claude Code, `claude-opus-5-5`, under `headroom wrap` | Deterministic daily plan (3 to 10 PRs), 40-minute cooldown, catch-up window closes at 22:30, backlog gate (more than 30 open `auto-pr/*` PRs pauses creation), circuit breaker (3 consecutive failed cycles stops creation for the day), 60 turns, 30-minute timeout, run lock and repo lock, attribution audit after the cycle | Review channel |
+| `0,30 * * * *` | `sdg-autopr.sh` | Creates one PR per due slot. Claude Code plans, codes, tests, branches, commits, pushes, and opens the PR with labels `status/awaiting-ai-review` and `quality/low`. The script then checks the result and posts the notification. | Claude Code, `claude-opus-5-5`, under `headroom wrap` | Deterministic daily plan (3 to 10 PRs), 40-minute cooldown, catch-up window closes at 22:30, backlog gate (more than 30 open `auto-pr/*` PRs pauses creation), circuit breaker (3 consecutive failed cycles stops creation for the day), 60 turns, 30-minute timeout, run lock and repo lock, attribution audit after the cycle | Review channel |
 | `5,35 * * * *` | `sdg-conflict-patrol.sh` | Phase 0 labels conflicting PRs. Phase 1 resolves them. Phase 2 sends resolved PRs back for review. | `git merge` when the merge is clean. Otherwise Claude Code, `claude-opus-5-5`, under `headroom wrap`. | 2 attempts per PR per day, `UNKNOWN` mergeability deferred to the next tick, repo lock, orchestrator verification, 40 turns, 25-minute timeout | Review channel |
 | `10,40 * * * *` | `sdg-fixround.sh` | Takes at most one `status/fix-round` PR per tick. Claude Code addresses every finding in `findings-<pr>.json` in a dedicated worktree, one commit per finding, and does not push. The script verifies the result, runs `npm test` itself, pushes only if the tests pass, then changes the label to `status/awaiting-ai-review` and clears the review ledger. Findings whose reviewed head SHA no longer matches the PR head are stale: the PR is re-queued for review without an engine run. | Claude Code, `claude-opus-5-5`, called directly (no `headroom wrap`). `git push` is disallowed for the engine. | 4 engine runs per day (counted at dispatch), 2 attempts per PR per day, 1 engine run per tick, repo lock, `UNKNOWN` mergeability deferred, `CONFLICTING` PRs left to conflict repair, PRs also carrying another in-flight `status/*` label skipped, 40 turns, 25-minute timeout, 10-minute orchestrator test run, kill switch | Review channel |
 | `20,50 * * * *` | `sdg-autoreview.sh` | Phase 0 (push detection) re-queues `status/ai-reviewed` PRs whose head moved since their review. Then reviews each PR labeled `status/awaiting-ai-review` on an `auto-pr/*` branch, posts one scorecard comment, and applies the score gate: 8 or more goes to `status/ai-reviewed`; below 8 goes to `status/fix-round` with the findings saved; below 8 at round 10 goes to `status/ai-reviewed` with a "human review required" comment. | `claude-haiku-5-5` (`claude -p`) for diffs of 400 lines or fewer. `openai/gpt-6.1-sol` (OpenCode) for 401 to 800 lines. | One review per code state (the ledger records the reviewed head SHA), 10 reviews per day, 2 per tick, diffs over 800 lines skipped, 60,000-character input cap, per-PR lifetime round budget, kill switch, run lock | Review channel |
@@ -126,8 +127,9 @@ standard output to the configured destination.
 The jobs are staggered so that they rarely overlap. The watchdog runs five
 minutes before each creation tick, so a broken toolchain is repaired before
 the job that relies on it most. The fix-round job runs ten minutes before
-each review tick, so a pushed fix is normally re-reviewed in the same
-half-hour. Creation, conflict repair, and fix rounds share the repo lock
+each review tick: a fix round that finishes within ten minutes is
+re-reviewed in the same half-hour, and a longer one at the next review
+tick. Creation, conflict repair, and fix rounds share the repo lock
 (below), so a long run of one makes the others skip their ticks.
 
 ### Score gate and round budget
@@ -188,7 +190,12 @@ The routing follows from where open-ended reasoning is needed:
   successful reviews, a failed metered attempt is still billed, and nothing
   caps the engine's output tokens. A hard daily bound would require counting
   attempts rather than successes against the budget, and capping output
-  tokens or spend on the metered engine.
+  tokens or spend on the metered engine. The score gate does not raise this
+  estimate: fix-round re-reviews draw on the same 10-per-day budget.
+- **Fixing is unbounded again.** Addressing a finding means reading code
+  beyond the diff, editing, and getting the tests to pass, so fix rounds use
+  the implementation model with repository access, not the review models.
+  They run on the subscription and are capped at 4 runs a day.
 - **Speed tiers are never used** (`-fast`, `-ultrafast`). They cost more per
   token, not less (see incident 5.5). Batch review has no latency requirement.
 - **A fallback must reset the model ID.** If the OpenCode run fails, the
@@ -201,6 +208,26 @@ The creation and conflict-repair Claude Code launches go through
 without the proxy. Where the proxy is used, the port must be set on every
 launch. The proxy process is stopped after each run, because a leftover
 proxy holds about 700 MB of memory.
+
+### Quality tiers
+
+`quality/*` labels set the engine-and-effort contract for a PR: which models
+run the work, how hard they think, and how many review rounds are expected.
+They are independent of `priority/*`, which sets urgency only. The labels
+and their contracts are defined in `docs/LABELS.md`; `blueprint/LABELS.md`
+section 8 describes who sets them and what enforces them.
+
+| Tier | Who sets it | Contract |
+|---|---|---|
+| `quality/low` | Creation, on every daily-stream PR (an instruction in the creation prompt, not verified by the script) | The cron path in this document: Opus implements, diff-scoped review routed by size, score gate at 8, automated fix rounds. |
+| `quality/mid` | A person or the orchestrator, by upgrading | A full-strength review model regardless of diff size, and an owner look before merge. |
+| `quality/high` | A person or the orchestrator, for architectural or process work | The orchestrator implements with Opus at `ultrathink` effort, reviews with GPT-6.1-Sol at `#xhigh` effort, runs a multi-round score-gated fix loop, and works through the findings and trade-offs with the owner before the merge decision. |
+
+No cron job reads `quality/*` today. Review still routes by diff size, and a
+higher-tier PR on an `auto-pr/*` branch still goes through the cron review
+and fix rounds. The mid and high obligations are carried out by the
+orchestrator on top of the cron path, under the same rules as the cron
+loop: a round budget it does not reset itself, and a human merge.
 
 ### Concurrency and isolation
 
@@ -222,10 +249,10 @@ Worktree isolation:
   (`wt-fixround`), one PR at a time.
 - **Creation** works in the primary clone after a hard reset to
   `origin/master`. The repo lock keeps it from interfering with conflict
-  repair.
+  repair and fix rounds.
 - **Manually started jobs** (feature implementation, manual review and fix
-  sessions, documentation) each get their own worktree on their own branch. They never
-  share a checkout with each other or with the cron jobs.
+  sessions, documentation) each get their own worktree on their own branch.
+  They never share a checkout with each other or with the cron jobs.
 
 ### State on disk
 
@@ -272,8 +299,11 @@ delivers nothing when the output is empty. The pipeline builds on that:
 
 ## 3. The PR state machine
 
-State is held in `status/*` labels on the PR (see `docs/LABELS.md`). Those
-labels are owned by the automation. People read them and do not set them.
+State is held in `status/*` labels on the PR. `docs/LABELS.md` holds their
+canonical descriptions; `blueprint/LABELS.md` is the label-workflow
+reference, with every transition, its trigger, its guards, and the routine
+that performs it. This section is the summary. The `status/*` labels are
+owned by the automation. People read them and do not set them.
 They describe where the automation stands with a PR, not whether the PR may
 be merged.
 
@@ -332,6 +362,9 @@ ignored by the fix-round job and excluded from push detection, so nothing
 would ever clear it.
 
 ### Label lifecycle
+
+This diagram is literally identical to the one in `blueprint/LABELS.md`
+section 5.
 
 ```mermaid
 stateDiagram-v2
@@ -675,10 +708,11 @@ make one project's locks and kill switch stop the other.
 Enable consumers before producers, so that nothing is created that cannot
 yet be reviewed or repaired.
 
-1. **Labels.** Create the label families from `docs/LABELS.md`. The
-   bootstrap there renames legacy labels with `gh label edit`. On a new
-   repository those legacy names do not exist, so create the `status/*`
-   labels directly:
+1. **Labels.** Create all four label families (`status/*`, `type/*`,
+   `priority/*`, `quality/*`) from `docs/LABELS.md`. If the copy in use
+   still has the older bootstrap that renames legacy labels with
+   `gh label edit`, it fails on a new repository, where those names do not
+   exist. Create the `status/*` and `quality/*` labels directly instead:
    ```bash
    R=<owner>/<repo>
    for l in \
@@ -686,11 +720,14 @@ yet be reviewed or repaired.
      "status/ai-reviewed:1D76DB:Bot-owned: AI scorecard posted (verdict, mergeability, findings). Awaiting human merge decision." \
      "status/conflict:D73A4A:Bot-owned: merge conflict detected; automated resolution in progress (max 2 attempts/day)." \
      "status/conflict-resolved:0E8A16:Bot-owned: conflict auto-resolved, branch merged with base; re-queuing for AI review." \
-     "status/fix-round:A62D03:Bot-owned: automation is working through AI review findings on this PR; one commit per finding."; do
+     "status/fix-round:A62D03:Bot-owned: automation is working through AI review findings on this PR; one commit per finding." \
+     "quality/low:C2E0C6:Routine automated change; single-pass review, standard score gate. Default for daily PR stream." \
+     "quality/mid:FBBC04:Meaningful change; full-strength review model regardless of diff size." \
+     "quality/high:5319E7:Architectural or high-stakes; top model + max effort, multi-round score-gated loop."; do
      IFS=: read -r n c d <<<"$l"; gh label create "$n" -R "$R" --color "$c" --description "$d" --force
    done
    ```
-   Then run the `type/*` and `priority/*` loop from `docs/LABELS.md`. Use
+   Then create the `type/*` and `priority/*` labels from `docs/LABELS.md`. Use
    `gh label create --force` for `type/bug`, `type/feature`, and `type/docs`
    if the repository's default labels have been removed.
 2. **Repository rules.** Copy `CLAUDE.md` (the no-attribution rule and test
@@ -769,15 +806,21 @@ pipeline.
 
 ### Change policy
 
-The label scheme, this blueprint, the label documentation, and the scripts
+The label scheme, this blueprint, both label documents, and the scripts
 form one contract.
 
 - Change them only on explicit request from the repository owner, never as
   an incidental cleanup.
 - When one changes, update all of them in one atomic pass: the GitHub labels,
   `sdg-autopr.sh`, `sdg-autoreview.sh`, `sdg-fixround.sh`,
-  `sdg-conflict-patrol.sh`, `.claude/skills/create-pr/SKILL.md`, `docs/LABELS.md`, this document, and
-  the runbook.
+  `sdg-conflict-patrol.sh`, `.claude/skills/create-pr/SKILL.md`,
+  `docs/LABELS.md`, `blueprint/LABELS.md`, this document, and the runbook.
+- Keep the two label documents consistent. `docs/LABELS.md` holds the
+  canonical names, colors, descriptions, and the `gh` bootstrap for new
+  repositories. `blueprint/LABELS.md` holds the movement view: owners,
+  routines, transitions, and guards. A label or transition added to one is
+  added to the other in the same change, and the lifecycle diagram in
+  `blueprint/LABELS.md` stays literally identical to the one in section 3.
 - Before shipping a change to a guard, replay the historical logs against it
   to see what it would have blocked or allowed.
 - When this document and the scripts disagree, the scripts describe what the
