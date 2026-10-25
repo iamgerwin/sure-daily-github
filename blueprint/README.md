@@ -221,12 +221,14 @@ delivers nothing when the output is empty. The pipeline builds on that:
 
 State is held in `status/*` labels on the PR (see `docs/LABELS.md`). Those
 labels are owned by the automation. People read them and do not set them.
+They describe where the automation stands with a PR, not whether the PR may
+be merged.
 
 ### States
 
 | State (label) | Owner | Entry condition | Exit transitions | Guards |
 |---|---|---|---|---|
-| `status/awaiting-ai-review` | Bot (review) | Creation opens the PR with this label. Conflict repair Phase 2 re-adds it after a repair. | Becomes `status/ai-reviewed` once the scorecard comment has been posted. Otherwise stays with a ledger entry written and needs manual review: diff over 800 lines (`skipped-size`), or no engine produced usable output (`failed`). | Ledger `done-<pr>`, 10 per day, 2 per tick, 800-line cap, 60,000-character cap, kill switch. Only `auto-pr/*` head branches are picked up. |
+| `status/awaiting-ai-review` | Bot (review) | Creation opens the PR with this label. Conflict repair Phase 2 re-adds it after a repair. | Becomes `status/ai-reviewed` once the scorecard comment has been posted. Otherwise stays with a ledger entry written and needs manual review: diff over 800 lines (`skipped-size`), or no engine produced usable output (`failed`). The human owner reviews such a PR by hand and may merge it; its label stays `status/awaiting-ai-review`. | Ledger `done-<pr>`, 10 per day, 2 per tick, 800-line cap, 60,000-character cap, kill switch. Only `auto-pr/*` head branches are picked up. |
 | `status/ai-reviewed` | Human | The review posted its scorecard. | Human merges, which ends the lifecycle. Human asks for fixes, which leads to `status/fix-round`. Phase 0 sees `CONFLICTING` and adds `status/conflict`. | Human merge gate. No automated exit to merged. |
 | `status/conflict` | Bot (conflict repair) | Phase 0: the PR is open, assigned to the owner, `mergeable` is `CONFLICTING`, and it has neither `status/conflict` nor `status/conflict-resolved`. | Becomes `status/conflict-resolved` once a repair passes verification, or once the PR is found to be no longer `CONFLICTING`. Stays when verification fails, until the next tick. Stays when the attempt cap is reached, until the next day or a human acts. | 2 attempts per PR per day (clean merges count as attempts), `UNKNOWN` deferred, repo lock, verification: push landed, no attribution in the last commit, no conflict markers, GitHub reports neither `CONFLICTING` nor `UNKNOWN`. |
 | `status/conflict-resolved` | Bot (conflict repair) | Phase 1 succeeded: the branch was merged with its base and passed the mechanical checks listed above. The label does not mean the tests passed. | Phase 2 replaces it with `status/awaiting-ai-review` and deletes `autoreview/done-<pr>`, so the merged result gets reviewed again. | Phase 0 skips PRs with this label, so they cannot be relabeled in a loop. |
@@ -242,8 +244,20 @@ and `status/conflict`. Read the current state with this precedence:
 conflict > conflict-resolved > fix-round > awaiting-ai-review > ai-reviewed
 ```
 
-A PR is ready for a merge decision only when `status/ai-reviewed` is its sole
-`status/*` label.
+**Merge permission.** Lifecycle labels reflect automation state, not merge
+permission. The human owner may merge any PR at any time, whatever its
+labels say. `status/ai-reviewed` as the sole `status/*` label means only
+that the automation has finished with the PR in its current code state and
+posted a scorecard.
+
+**Manual review.** When the cron reviewer skips a PR (diff over 800 lines)
+or gets no usable output from any engine, it writes the ledger entry
+`done-<pr>` and leaves the label at `status/awaiting-ai-review`. The owner
+reviews the PR by hand and merges it, or not, without changing the label.
+The ledger entry blocks only the cron reviewer from picking the PR up again.
+Nothing else reads it: conflict repair, merging, and manual sessions ignore
+it. If the PR later conflicts, conflict repair Phase 2 deletes the entry as
+usual, and the cron reviewer tries again on the merged result.
 
 ### Label lifecycle
 
@@ -260,6 +274,7 @@ stateDiagram-v2
     [*] --> awaiting : creation opens PR
     awaiting --> reviewed : scorecard posted
     awaiting --> manual : over 800 lines or engine output unusable
+    manual --> merged : human owner reviews by hand and merges, label unchanged
     reviewed --> merged : human merges
     reviewed --> fixround : human requests fixes
     fixround --> reviewed : fixes pushed and re-reviewed, max 3 rounds
@@ -290,9 +305,12 @@ flowchart TD
     R1 -->|yes| R2{"Diff size"}
     R2 -->|at most 400 lines| R3["Haiku via claude -p, diff only"]
     R2 -->|401 to 800 lines| R4["GPT Sol via OpenCode, diff only"]
-    R2 -->|over 800 lines| R5["Skip with note, human reviews"]
+    R2 -->|over 800 lines| R5["Manual review: label stays status/awaiting-ai-review, ledger entry blocks only the cron reviewer"]
     R3 --> R6["Keep findings in changed files, post one scorecard"]
     R4 --> R6
+    R3 -->|no usable output, fallback included| R5
+    R4 -->|no usable output, fallback included| R5
+    R5 -->|human owner reviews by hand and merges at any time| M
     R6 --> G["status/ai-reviewed"]
 
     G --> H{"Human decision"}
@@ -561,7 +579,7 @@ pipeline.
 | Engine self-reports are verified | Check that the push landed, that HEAD matches the remote, that there are no conflict markers or attribution, that GitHub reports the PR as mergeable, and, in a production version, that the tests passed. "Done" from an engine is a claim, not a result. |
 | A human makes the merge decision | Review is diff-scoped and advisory. A `critical` verdict means "check this manually", not "this is true". |
 | Zero AI attribution | Enforced in three places: the engine prompts, the `includeCoAuthoredBy:false` setting on conflict-repair runs, and creation's audit after the push, which strips trailers and cleans the PR title and body. Conflict repair rejects any commit message that mentions attribution. |
-| `status/*` labels are owned by the automation | Humans read lifecycle labels and do not set them. Otherwise the state machine cannot reason about them. |
+| `status/*` labels are owned by the automation | Humans read lifecycle labels and do not set them. Otherwise the state machine cannot reason about them. The labels describe automation state, not merge permission: the owner may merge any PR at any time. |
 | Engine input is bounded | Review sees the diff and description, never the repository. Every input has a cap. |
 | Shared checkouts sit behind one lock, and every other job has its own worktree | Two jobs in one checkout destroy each other's work. |
 
