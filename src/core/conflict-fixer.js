@@ -338,10 +338,11 @@ class ConflictFixer {
       return done('skipped', { reason: 'head and base are the same branch' });
     }
 
-    const root = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
-    this.activeDir = root;
-    const dir = path.join(root, 'repo');
-    fs.mkdirSync(dir);
+    // Created inside the try below: a work root that cannot be written (full or
+    // missing temp dir) must fail only this PR and still finish its ledger entry,
+    // not abort the run and leave the entry in-progress until the attempt TTL
+    let root = null;
+    let dir = null;
     // Hooks are switched off on the command line, which beats anything the
     // tested code writes to .git/hooks or core.hooksPath in .git/config
     const git = (args, options = {}) => this.git(['-c', `core.hooksPath=${os.devNull}`, ...args], {
@@ -361,6 +362,11 @@ class ConflictFixer {
     };
 
     try {
+      root = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
+      this.activeDir = root;
+      dir = path.join(root, 'repo');
+      fs.mkdirSync(dir);
+
       await must(['init', '-q']);
       // Merge needs an identity even with --no-commit
       await must(['config', 'user.name', identity.name]);
@@ -455,7 +461,7 @@ class ConflictFixer {
       return done('error', { error: `#${pr.number}: ${error.message}`, reason: error.message });
     } finally {
       this.activeDir = null;
-      fs.rmSync(root, { recursive: true, force: true });
+      if (root) fs.rmSync(root, { recursive: true, force: true });
       if (this.activePushDir) {
         fs.rmSync(this.activePushDir, { recursive: true, force: true });
         this.activePushDir = null;
