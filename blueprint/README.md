@@ -47,8 +47,9 @@ What earns the term:
   processed by the next stage without special cases.
 - **A closed repair loop for the most common failure.** When a PR stops
   merging cleanly because its base branch moved, the pipeline detects it,
-  repairs it, verifies the repair, and sends the result back for another
-  review. No person is involved.
+  repairs it, runs mechanical checks on the pushed result, and sends it back
+  for another review. No person is involved. The checks do not include the
+  test suite (see the conflict test gate limit below).
 - **Throttles on every producer.** A daily plan, a cooldown, a backlog gate,
   a circuit breaker, and review budgets keep output and spending bounded.
 - **Toolchain self-maintenance.** A watchdog repairs the engine toolchain
@@ -63,7 +64,7 @@ What is still proof-of-concept grade:
 | Hardcoded names | Host paths, the repository, the assignee, the commit identity for clean merges, the base branch for creation (`master`), and the proxy port are literals. A few values have environment overrides. |
 | GitHub-specific | State lives in GitHub labels and comments. Detection relies on GitHub's `mergeable` field. All I/O goes through the `gh` CLI. |
 | Human merge gate | This is intentional. It also caps throughput at the owner's review bandwidth, which is why the backlog gate exists. |
-| Conflict test gate is not enforced by the script | A clean merge is pushed without running the test suite. A conflicted merge depends on the engine following its instruction to run `npm test`. The orchestrator verifies that the push landed, that no conflict markers or attribution remain, and that GitHub reports the PR as mergeable. It does not run the tests or check their results. The PR comment says "full test suite green", which is stronger than what is actually verified. |
+| Conflict test gate is not enforced by the script | A clean merge is pushed without running the test suite. A conflicted merge depends on the engine following its instruction to run `npm test`. The orchestrator verifies that the push landed, that no conflict markers or attribution remain, and that GitHub reports the PR as mergeable. It does not run the tests or check their results. The PR comment, and the live `status/conflict-resolved` label description defined in `docs/LABELS.md`, say "test suite green", which is stronger than what is actually verified. The bootstrap snippet in section 6 uses wording that claims only what is verified. |
 | Review is advisory | Findings are filtered to files the PR changed. They are not checked line by line, and the reviewer does not run the tests. The verdict is a triage signal, not a gate. |
 | Status labels can coexist | The conflict checker adds `status/conflict` without removing `status/ai-reviewed` or `status/awaiting-ai-review`. Section 3 defines the precedence rule for reading them. |
 | CI is not consulted | No stage reads GitHub check runs. |
@@ -224,7 +225,7 @@ labels are owned by the automation. People read them and do not set them.
 | `status/awaiting-ai-review` | Bot (review) | Creation opens the PR with this label. Conflict repair Phase 2 re-adds it after a repair. | Becomes `status/ai-reviewed` once the scorecard comment has been posted. Otherwise stays with a ledger entry written and needs manual review: diff over 800 lines (`skipped-size`), or no engine produced usable output (`failed`). | Ledger `done-<pr>`, 10 per day, 2 per tick, 800-line cap, 60,000-character cap, kill switch. Only `auto-pr/*` head branches are picked up. |
 | `status/ai-reviewed` | Human | The review posted its scorecard. | Human merges, which ends the lifecycle. Human asks for fixes, which leads to `status/fix-round`. Phase 0 sees `CONFLICTING` and adds `status/conflict`. | Human merge gate. No automated exit to merged. |
 | `status/conflict` | Bot (conflict repair) | Phase 0: the PR is open, assigned to the owner, `mergeable` is `CONFLICTING`, and it has neither `status/conflict` nor `status/conflict-resolved`. | Becomes `status/conflict-resolved` once a repair passes verification, or once the PR is found to be no longer `CONFLICTING`. Stays when verification fails, until the next tick. Stays when the attempt cap is reached, until the next day or a human acts. | 2 attempts per PR per day (clean merges count as attempts), `UNKNOWN` deferred, repo lock, verification: push landed, no attribution in the last commit, no conflict markers, GitHub reports neither `CONFLICTING` nor `UNKNOWN`. |
-| `status/conflict-resolved` | Bot (conflict repair) | Phase 1 succeeded. | Phase 2 replaces it with `status/awaiting-ai-review` and deletes `autoreview/done-<pr>`, so the merged result gets reviewed again. | Phase 0 skips PRs with this label, so they cannot be relabeled in a loop. |
+| `status/conflict-resolved` | Bot (conflict repair) | Phase 1 succeeded: the branch was merged with its base and passed the mechanical checks listed above. The label does not mean the tests passed. | Phase 2 replaces it with `status/awaiting-ai-review` and deletes `autoreview/done-<pr>`, so the merged result gets reviewed again. | Phase 0 skips PRs with this label, so they cannot be relabeled in a loop. |
 | `status/fix-round` | Bot (manually started fix session) | A human asks for the review findings to be addressed. No cron job sets this label. | Fixes are pushed (one commit per finding), then reviewed again, which leads back to `status/ai-reviewed`. | At most 3 review-and-fix rounds. At the cap the session stops and offers three options: run one more targeted round, merge with a tracking issue for what remains, or hold. |
 | Merged or closed | Human | Explicit human action | None (end of lifecycle) | Merge commits only (`gh pr merge --merge`). Merges happen only on explicit request. |
 
@@ -261,7 +262,7 @@ stateDiagram-v2
     awaiting --> conflict : phase 0 detects CONFLICTING
     reviewed --> conflict : phase 0 detects CONFLICTING
     conflict --> conflict : verification failed, retry next tick, max 2 per day
-    conflict --> resolved : merge pushed and verified
+    conflict --> resolved : merge pushed, mechanical checks pass, tests not checked
     resolved --> awaiting : phase 2 re-queues and clears review ledger
     merged --> [*]
 ```
@@ -299,9 +300,9 @@ flowchart TD
     F -.->|base branch moves| P
     P --> P0["Phase 0: CONFLICTING PR labeled status/conflict"]
     P0 --> P1{"git merge of base is clean?"}
-    P1 -->|yes| P2["Push merge commit, no LLM"]
-    P1 -->|no| P3["Claude Code Opus resolves in worktree, runs npm test, pushes"]
-    P2 --> V{"Orchestrator verification passes?"}
+    P1 -->|yes| P2["Push merge commit, no LLM, no tests run"]
+    P1 -->|no| P3["Claude Code Opus resolves in worktree, is told to run npm test, pushes"]
+    P2 --> V{"Orchestrator checks pass? Push landed, no markers or attribution, mergeable. Test results not checked."}
     P3 --> V
     V -->|no| V0["Retry next tick, max 2 attempts per day"]
     V -->|yes| V1["status/conflict-resolved"]
@@ -513,7 +514,7 @@ yet be reviewed or repaired.
      "status/awaiting-ai-review:FBCA04:Bot-owned: PR created, queued for automated diff review (scorecard). Next: status/ai-reviewed." \
      "status/ai-reviewed:1D76DB:Bot-owned: AI scorecard posted (verdict, mergeability, findings). Awaiting human merge decision." \
      "status/conflict:D73A4A:Bot-owned: merge conflict detected; automated resolution in progress (max 2 attempts/day)." \
-     "status/conflict-resolved:0E8A16:Bot-owned: conflict auto-resolved, full test suite green; re-queuing for AI review." \
+     "status/conflict-resolved:0E8A16:Bot-owned: conflict auto-resolved, branch merged with base; re-queuing for AI review." \
      "status/fix-round:A62D03:Bot-owned: automation is working through AI review findings on this PR; one commit per finding."; do
      IFS=: read -r n c d <<<"$l"; gh label create "$n" -R "$R" --color "$c" --description "$d" --force
    done
