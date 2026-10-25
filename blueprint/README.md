@@ -520,6 +520,7 @@ invariants in section 6.
 | Parameter | Current value | Where it is set today |
 |---|---|---|
 | Hermes home | `/home/gerwin/.local/share/hermes-vps` | `H=` in all four scripts and in the headroom launcher |
+| State root (mandatory, one per project) | `$H/.autopr-sdg`, with `autoreview/` and `conflict-patrol/` below it | `STATE=` in `sdg-autopr.sh`, `sdg-plan.sh`, `sdg-autoreview.sh`, and `sdg-conflict-patrol.sh`, plus the lock and kill-switch paths derived from `$H/.autopr-sdg` |
 | Repository | `iamgerwin/sure-daily-github` | `R=` in all three `sdg-*` scripts |
 | Local clone and conflict worktree | `$H/Developer/_personal/sure-daily-github`, `.../wt-conflict` | `REPO=`, `WT=` |
 | Assignee | `iamgerwin` | Creation prompt (`--assignee`), Phase 0 filter, notification text |
@@ -535,6 +536,14 @@ invariants in section 6.
 | Test command | `npm test` (after `npm ci`) | Engine prompts, conflict repair |
 | Proxy port | `8789` | `SDG_AUTOPR_PORT` in creation. A literal in conflict repair. |
 | Notification channel | Review channel for the three `sdg-*` jobs. Direct messages for the watchdog. | Each Hermes cron entry's `deliver` field |
+
+Every adaptation must use its own state root. Logs, quota counts, locks,
+the kill switch, and the `done-<pr>` review ledgers all live there. PR
+numbers are repository-local, so a ledger shared with another repository
+would contain `done-<n>` entries for numbers the new repository has not
+reviewed yet, and would silently suppress those reviews. A shared root would
+also merge quota counts and circuit-breaker state across projects, and would
+make one project's locks and kill switch stop the other.
 
 ### Bring-up checklist
 
@@ -566,16 +575,20 @@ yet be reviewed or repaired.
 3. **Parameters.** Set every value in the table above. Search the scripts
    for the old repository slug, assignee, and paths. No literal from this
    project may remain.
-4. **Watchdog.** Enable it first and confirm that a run on a healthy host
+4. **State root.** Create a new, empty state root for this project and point
+   every script at it. Confirm that no script still reads or writes
+   `$H/.autopr-sdg`, and that the new root contains no `done-<pr>` files
+   before review is enabled.
+5. **Watchdog.** Enable it first and confirm that a run on a healthy host
    prints nothing.
-5. **Review.** Create the kill-switch file, enable the cron entry, open one
+6. **Review.** Create the kill-switch file in the new state root, enable the cron entry, open one
    PR by hand with `status/awaiting-ai-review`, remove the kill switch, and
    confirm that exactly one scorecard and one notification appear.
-6. **Conflict repair.** Enable it. Create a deliberate conflict on a test PR
+7. **Conflict repair.** Enable it. Create a deliberate conflict on a test PR
    and follow it through `status/conflict`, `status/conflict-resolved`, and
    `status/awaiting-ai-review`. Confirm that the review ledger was cleared and
    a second scorecard was posted.
-7. **Creation.** Enable it last, with a small plan and a low backlog gate.
+8. **Creation.** Enable it last, with a small plan and a low backlog gate.
    Confirm the daily summary at the end of the first day.
 
 ### Invariants
