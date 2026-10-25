@@ -164,6 +164,18 @@ test('selectRepositories round-robin advances the cursor across runs', () => {
   assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['b', 'c']);
 });
 
+test('selectRepositories round-robin dry run previews the pick without moving the cursor', () => {
+  const repos = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const store = memoryCursorStore(1);
+  const cfg = { strategy: 'round-robin', maxPerExecution: 1 };
+
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store, { dryRun: true }).map(r => r.id), ['b']);
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store, { dryRun: true }).map(r => r.id), ['b']);
+  assert.equal(store.index, 1);
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['b']);
+  assert.equal(store.index, 2);
+});
+
 test('selectRepositories round-robin wraps a stale cursor and skips disabled repos', () => {
   const repos = [
     { id: 'a', enabled: true },

@@ -285,7 +285,7 @@ class AdvancedIssueHandler {
     // Apply repositorySelection (strategy, maxPerExecution) to the repositories
     // that can take an issue now, so selection slots are not spent on repos
     // that are done for the day or still waiting for their interval
-    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore);
+    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({
