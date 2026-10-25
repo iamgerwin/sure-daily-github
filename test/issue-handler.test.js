@@ -145,3 +145,27 @@ test('createDailyIssue passes the configured timezone to issue templates', async
 
   assert.equal(calls[0].title, localDate);
 });
+
+test('rate-limit delays only separate real API calls, never trail the last repo', async () => {
+  const { handler, calls } = createHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+
+  await handler.processRepositories([repoConfig('pace-a'), repoConfig('pace-b')], {}, false, {});
+
+  assert.equal(calls.length, 6);
+  assert.deepEqual(delays, [2000, 2000, 1000, 2000, 2000]);
+});
+
+test('dry runs and limit-reached repos do not wait on rate-limit delays', async () => {
+  for (let i = 0; i < 3; i++) state.recordAction('me', 'pace-full');
+  const { handler, calls } = createHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+
+  await handler.processRepositories([repoConfig('pace-dry-a'), repoConfig('pace-dry-b')], {}, true, {});
+  await handler.processRepositories([repoConfig('pace-full')], {}, false, {});
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(delays, []);
+});

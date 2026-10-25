@@ -20,9 +20,16 @@ export class StateManager {
       if (fs.existsSync(this.filePath)) {
         const data = fs.readFileSync(this.filePath, 'utf8');
         const parsed = JSON.parse(data);
-        // Ensure base structure
-        if (!isPlainObject(parsed) || !isPlainObject(parsed.repositories)) {
+        // Valid JSON of the wrong shape is replaced on the next save, so it is
+        // backed up like unparseable state. Only a malformed repositories
+        // section is reset; the rest (e.g. the round-robin cursor) is kept.
+        if (!isPlainObject(parsed)) {
+          this.backup('Error loading state, starting fresh: state is not a JSON object');
           return { repositories: {}, meta: { version: 2 } };
+        }
+        if (!isPlainObject(parsed.repositories)) {
+          this.backup('Error loading state, resetting repositories: section is not an object');
+          parsed.repositories = {};
         }
         // Attach meta version if missing
         if (!parsed.meta) parsed.meta = { version: 2 };
@@ -30,13 +37,16 @@ export class StateManager {
       }
     } catch (error) {
       // Graceful fallback: back up corrupted state and reinit
-      try {
-        const backup = `${this.filePath}.bak`;
-        fs.copyFileSync(this.filePath, backup);
-      } catch (_) {}
-      console.error('Error loading state, starting fresh:', error.message);
+      this.backup(`Error loading state, starting fresh: ${error.message}`);
     }
     return { repositories: {}, meta: { version: 2 } };
+  }
+
+  backup(message) {
+    try {
+      fs.copyFileSync(this.filePath, `${this.filePath}.bak`);
+    } catch (_) {}
+    console.error(message);
   }
 
   save() {
