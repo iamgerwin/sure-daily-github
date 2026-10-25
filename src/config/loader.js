@@ -103,6 +103,11 @@ function validateContentTemplate(template, label, errors) {
   validateTemplateText(template.body, `${label}.body`, errors);
 }
 
+// Where commands without --config read the configuration (and `init` writes it)
+export function defaultConfigPath() {
+  return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
+}
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -210,9 +215,7 @@ class ConfigLoader {
 
   load(configPath = null) {
     // Determine config file path
-    const filePath = configPath
-      || process.env.CONFIG_PATH
-      || path.join(__dirname, '../../config/config.yaml');
+    const filePath = configPath || defaultConfigPath();
 
     try {
       if (!fs.existsSync(filePath)) {
@@ -405,15 +408,21 @@ class ConfigLoader {
       validateDailyTarget(general.dailyTarget, 'dailyTarget', errors);
     }
 
+    // Checked before the enabled branches below: a string such as "off" is
+    // truthy, so it would switch randomization or the scheduler on
+    validateBooleanFlag(config.randomization?.enabled, 'randomization.enabled', errors);
+    validateBooleanFlag(config.randomization?.timeVariations?.enabled, 'randomization.timeVariations.enabled', errors);
+    validateBooleanFlag(config.schedule?.enabled, 'schedule.enabled', errors);
+
     // Validate randomization settings; a fractional or inverted range would
     // otherwise throw from randomInt partway through an issue-mode run
-    if (config.randomization?.enabled) {
+    if (config.randomization?.enabled === true) {
       const rand = config.randomization;
-      if (rand.issueCount) {
+      if (rand.issueCount !== undefined && rand.issueCount !== null) {
         validateCountRange(rand.issueCount, 'randomization.issueCount', errors);
       }
       const timeVar = rand.timeVariations;
-      if (timeVar?.enabled) {
+      if (timeVar?.enabled === true) {
         for (const period of ['hourly', 'daily', 'weekly']) {
           if (timeVar[period] !== undefined && timeVar[period] !== null) {
             validateCountRange(timeVar[period], `randomization.timeVariations.${period}`, errors);
@@ -438,9 +447,9 @@ class ConfigLoader {
     }
 
     // Validate schedule
-    if (config.schedule?.enabled && !config.schedule.cron) {
+    if (config.schedule?.enabled === true && !config.schedule.cron) {
       errors.push('Cron expression is required when schedule is enabled');
-    } else if (config.schedule?.enabled && !cron.validate(config.schedule.cron)) {
+    } else if (config.schedule?.enabled === true && !cron.validate(config.schedule.cron)) {
       // Otherwise `validate` passes and the scheduler only throws once `start` runs
       errors.push(`schedule.cron is not a valid cron expression: ${config.schedule.cron}`);
     }
@@ -470,7 +479,12 @@ class ConfigLoader {
         mode: general.mode || 'commit',
         dryRun: general.dryRun || false
       },
-      randomization: config.randomization || {
+      // Without its own issueCount, randomization would otherwise create one
+      // issue a day per repo instead of following general.dailyTarget
+      randomization: config.randomization ? {
+        ...config.randomization,
+        issueCount: config.randomization.issueCount ?? normalizedGeneralTarget
+      } : {
         enabled: false,
         issueCount: normalizedGeneralTarget,
         timeVariations: {

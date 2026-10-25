@@ -191,6 +191,63 @@ function writeState(handler, state) {
   fs.writeFileSync(handler.stateFile, JSON.stringify(state));
 }
 
+test('backs up a state file that is valid JSON but not an object', async () => {
+  const { handler } = createHandler();
+  writeState(handler, null);
+
+  const state = await handler.loadState();
+
+  assert.deepEqual(state.repositories, {});
+  assert.ok(fs.readdirSync(path.dirname(handler.stateFile)).some(f => f.startsWith('issue-state.json.corrupt-')));
+});
+
+for (const [label, repositories] of [['an array', []], ['a string', 'oops'], ['a number', 7]]) {
+  test(`stops at the daily target when the repositories section is ${label}`, async () => {
+    const { handler, created } = createHandler();
+    writeState(handler, { lastDailyReset: new Date().toISOString(), repositories });
+
+    for (let i = 0; i < 5; i++) {
+      await handler.processRepositories([repo()], {}, false, config);
+    }
+
+    assert.equal(created.length, 3);
+    assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 3);
+  });
+}
+
+for (const [label, entry] of [
+  ['missing its count', { todayTarget: 3 }],
+  ['with a non-numeric count', { issuesCreatedToday: 'two', todayTarget: 3 }],
+  ['with a negative count', { issuesCreatedToday: -4, todayTarget: 3 }],
+  ['that is not an object', 5]
+]) {
+  test(`stops at the daily target for a repository entry ${label}`, async () => {
+    const { handler, created } = createHandler();
+    writeState(handler, { lastDailyReset: new Date().toISOString(), repositories: { 'me/demo': entry } });
+
+    for (let i = 0; i < 5; i++) {
+      await handler.processRepositories([repo()], {}, false, config);
+    }
+
+    assert.equal(created.length, 3);
+    assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 3);
+  });
+}
+
+test('keeps a valid count from an existing entry', async () => {
+  const { handler, created } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: { 'me/demo': { issuesCreatedToday: 2, todayTarget: 3 } }
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await handler.processRepositories([repo()], {}, false, config);
+  }
+
+  assert.equal(created.length, 1);
+});
+
 test('status reports today\'s progress when state is from the current day', async () => {
   const { handler } = createHandler();
   const next = Date.now() + 60 * 60 * 1000;
@@ -226,6 +283,66 @@ test('status does not report a previous day\'s progress as today', async () => {
   assert.equal(status.nextIssueTime, 'Any time');
   // Last issue time is still accurate history
   assert.equal(status.lastIssueTime, new Date(yesterday).toISOString());
+});
+
+test('the daily reset keeps a pending interval from the previous day', async () => {
+  const { handler, created } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  const next = Date.now() + 30 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: next }
+    }
+  });
+
+  const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 60, max: 60 } })], {}, false, config);
+
+  assert.equal(created.length, 0);
+  assert.match(result.reason, /Waiting for interval/);
+  const saved = readState(handler).repositories['me/demo'];
+  assert.equal(saved.issuesCreatedToday, 0);
+  assert.equal(saved.todayTarget, 3);
+  assert.equal(saved.lastIssueTime, yesterday);
+  assert.equal(saved.nextIssueTime, next);
+});
+
+test('the daily reset clears counts so a new day starts from zero', async () => {
+  const { handler, created } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, nextIssueTime: yesterday + 1000 },
+      'me/gone': 5
+    }
+  });
+
+  for (let i = 0; i < 5; i++) {
+    await handler.processRepositories([repo()], {}, false, config);
+  }
+
+  assert.equal(created.length, 3);
+  const { repositories } = readState(handler);
+  assert.equal(repositories['me/demo'].issuesCreatedToday, 3);
+  assert.deepEqual(repositories['me/gone'], { issuesCreatedToday: 0, lastIssueTime: null, todayTarget: null, nextIssueTime: null });
+});
+
+test('status reports a previous day\'s interval that has not elapsed yet', async () => {
+  const { handler } = createHandler();
+  const yesterday = Date.now() - 36 * 60 * 60 * 1000;
+  const next = Date.now() + 30 * 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date(yesterday).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 3, lastIssueTime: yesterday, todayTarget: 3, nextIssueTime: next }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+
+  assert.equal(status.issuesCreatedToday, 0);
+  assert.equal(status.nextIssueTime, new Date(next).toISOString());
 });
 
 test('status evaluates the day boundary in the configured timezone', async () => {
@@ -311,6 +428,24 @@ test('round-robin rotates through repositories across runs', async () => {
   assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c', 'a']);
 });
 
+test('a dry run does not advance the round-robin rotation', async () => {
+  const { handler, created } = createHandler();
+  const cursor = { index: 1 };
+  handler.cursorStore = {
+    getRoundRobinIndex: () => cursor.index,
+    setRoundRobinIndex: (index) => { cursor.index = index; }
+  };
+  const repos = ['a', 'b', 'c'].map(name => repo({ repo: name }));
+  const cfg = { ...config, repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+
+  await handler.processRepositories(repos, {}, true, cfg);
+  await handler.processRepositories(repos, {}, true, cfg);
+  assert.equal(cursor.index, 1);
+
+  await handler.processRepositories(repos, {}, false, cfg);
+  assert.deepEqual(created.map(c => c.repo), ['b']);
+});
+
 test('selection only spends slots on repositories that can take an issue now', async () => {
   const { handler, created } = createHandler();
   const repos = [
@@ -359,4 +494,28 @@ test('default issue title uses the configured timezone and falls back to UTC', (
 
   const utc = handler.generateIssueContent(repo(), {}, now);
   assert.equal(utc.title, 'Automated Issue - 2026-10-15 00:05:00');
+});
+
+test('inserts configured titles literally, without replacement patterns or nested placeholders', () => {
+  const { handler } = createHandler();
+  const bugTitle = "Totals show $$ instead of $& for ${date} in $' and $`";
+  const config = {
+    randomization: { bugTitles: [bugTitle] },
+    contentTemplates: [{ title: 'Bug: ${randomBugTitle}', body: '${randomBugTitle} in ${repo}' }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo({ repo: 'shop' }), config, new Date('2026-10-15T00:00:00Z'));
+
+  assert.equal(title, `Bug: ${bugTitle}`);
+  assert.equal(body, `${bugTitle} in shop`);
+});
+
+test('leaves unknown placeholders as written', () => {
+  const { handler } = createHandler();
+  const config = { contentTemplates: [{ title: '${unknown} ${repo}', body: '${constructor} ${toString}' }] };
+
+  const { title, body } = handler.generateIssueContent(repo({ repo: 'shop' }), config);
+
+  assert.equal(title, '${unknown} shop');
+  assert.equal(body, '${constructor} ${toString}');
 });

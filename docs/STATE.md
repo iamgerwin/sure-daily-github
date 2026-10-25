@@ -10,6 +10,7 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
   - weekly: ISO week key `YYYY-Www`
 - Totals
   - `totals.issues`, `totals.commits`
+- Entries are keyed by `owner/repo`. GitHub names are case-insensitive, so when the configured casing changes (for example `Me/Demo` to `me/demo`), the existing entry is moved to the new key and keeps its counters instead of starting from zero.
 - Backward compatibility
   - Legacy fields `lastCommitDate`, `commitsToday`, `totalCommits` are maintained. `lastCommitDate` is the timezone-local date of the most recent recorded commit (`null` until the first commit); it does not change when a new day's window opens.
 
@@ -25,11 +26,14 @@ Limits are evaluated before each action:
 - Otherwise, the repository `dailyTarget` (number or range) determines the daily cap.
 - A `dailyTarget` range (`{ min, max }`) in commit mode rolls one target per repository per day, stored as `dailyTarget: { day, min, max, value }` in that repository's state, so every run that day and `status` use the same value. A new day or a changed range rolls a new target.
 - In issue mode with range targets or `intervalMinutes` (the advanced issue handler, state in `data/issue-state.json`), each repository's entry stores `todayTarget` and the `targetRange: { min, max }` it was rolled from. Changing the configured range during the day rolls a new `todayTarget` on the next run; issues already created today still count toward it. Entries written before `targetRange` existed keep their target if it still lies within the configured range.
+- The advanced issue handler's daily reset clears each repository's `issuesCreatedToday`, `todayTarget`, and `targetRange`, but keeps `lastIssueTime` and `nextIssueTime`, so an issue created shortly before midnight still delays the next one by its `intervalMinutes`. `status` shows a previous day's `nextIssueTime` while it is still in the future.
 
 ## Graceful Fallbacks
 
 - If the state file is missing or corrupted, the system starts fresh and keeps a `.bak` backup (when possible).
+- A state file that is valid JSON but not an object (for example `[]`) is treated the same way: it is copied to `.bak` before starting fresh. A `repositories` section that is not an object is reset to empty after the same `.bak` backup, and the rest of the file (such as the round-robin cursor `roundRobin`) is kept.
 - A repository entry, counter window, or total with the wrong shape (for example a hand edit that drops `count`) is reset to its default on its own; the rest of the state is kept.
+- The same applies to `data/issue-state.json`: a file that is not a JSON object is backed up as `issue-state.json.corrupt-<time>` and started fresh, a `repositories` section that is not an object is replaced with an empty one, and a repository entry that is not an object or has a missing or invalid `issuesCreatedToday` starts from zero, so the daily target is still enforced.
 - The directory structure is created on demand; failures are logged without crashing the process.
 - Legacy methods `isCommitNeeded` and `recordCommit` are still supported and map to daily limits to preserve original behavior.
 
