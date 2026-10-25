@@ -187,3 +187,49 @@ test('acquireRunLock surfaces unexpected link errors', (t) => {
   assert.throws(() => acquireRunLock(), /disk gone/);
   assert.deepEqual(lockDirEntries(filePath), []);
 });
+
+test('acquireRunLock does not delete a fresh lock taken while reclaiming a stale one', (t) => {
+  const filePath = useTmpLockFile(t);
+  writeForeignLock(filePath, { pid: 2 ** 30 });
+
+  // Another caller reclaims the same stale lock and publishes its own first
+  const originalRename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (src, dest) => {
+    fs.rmSync(filePath);
+    writeForeignLock(filePath);
+    return originalRename(src, dest);
+  });
+
+  const result = acquireRunLock();
+  assert.equal(result.acquired, false);
+  assert.equal(result.holder.pid, process.ppid);
+  assert.equal(JSON.parse(fs.readFileSync(filePath, 'utf8')).pid, process.ppid, 'fresh lock is put back');
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
+});
+
+test('acquireRunLock takes the lock when a stale one was already reclaimed by someone else', (t) => {
+  const filePath = useTmpLockFile(t);
+  writeForeignLock(filePath, { pid: 2 ** 30 });
+
+  const originalRename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (src, dest) => {
+    fs.rmSync(filePath);
+    return originalRename(src, dest);
+  });
+
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  assert.equal(JSON.parse(fs.readFileSync(filePath, 'utf8')).pid, process.pid);
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
+  result.release();
+});
+
+test('acquireRunLock leaves no moved-aside file after reclaiming a stale lock', (t) => {
+  const filePath = useTmpLockFile(t);
+  writeForeignLock(filePath, { pid: 2 ** 30 });
+
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
+  result.release();
+});

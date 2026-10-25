@@ -124,7 +124,7 @@ sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [-
 sure-daily-github --help            # Show all commands
 ```
 
-Every command accepts `--config <path>` except `init`. The scheduler (`start`) is covered in
+Every command accepts `--config <path>`; without it they read `CONFIG_PATH` or `config/config.yaml` in the project root, which is also where `init` writes. The scheduler (`start`) is covered in
 [docs/SCHEDULER.md](./docs/SCHEDULER.md) and [docs/SCHEDULER_SETUP.md](./docs/SCHEDULER_SETUP.md).
 
 ### Babysit
@@ -259,7 +259,7 @@ repositorySelection:
 | `branch` | string | ❌ | Target branch (default: the repository's default branch) |
 | `dailyTarget` | number or range | ❌ | Override global target |
 | `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
-| `commitMessage` | string | ❌ | Commit message template |
+| `commitMessage` | string | ❌ | Commit message template (`${date}`, `${time}` in `general.timezone`, `${timestamp}` UTC ISO, `${repo}`) |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
 | `weight` | number | ❌ | Positive weight for weighted selection (default: 1) |
 | `testCommand` | string | ❌ | Test command for `fix-conflicts` (overrides detection) |

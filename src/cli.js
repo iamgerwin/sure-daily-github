@@ -8,7 +8,7 @@ import scheduler from './core/scheduler.js';
 import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
-import config, { PR_MAINT_MODES } from './config/loader.js';
+import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
 import { getTemplateDateParts } from './utils/template-date.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -239,12 +239,8 @@ program
       console.log(`Logs:      ./logs/\n`);
       console.log('Press Ctrl+C to stop\n');
 
-      // Keep process alive
-      process.on('SIGINT', () => {
-        console.log('\n\n👋 Stopping scheduler...');
-        scheduler.stop();
-        process.exit(0);
-      });
+      // Keep process alive; SIGINT and SIGTERM stop it
+      scheduler.installSignalHandlers();
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);
@@ -415,19 +411,20 @@ program
 program
   .command('init')
   .description('Create initial configuration file')
-  .action(async () => {
+  .option('--config <path>', 'Where to write the configuration file')
+  .action(async (options) => {
     try {
       const { existsSync, mkdirSync, writeFileSync } = await import('fs');
-      const configPath = 'config/config.yaml';
+      // The path every other command reads without --config, not one relative
+      // to the working directory, so a global `sure-daily-github init` is found
+      const configPath = options.config || defaultConfigPath();
 
       if (existsSync(configPath)) {
         console.log('⚠️  Configuration file already exists:', configPath);
         process.exit(1);
       }
 
-      if (!existsSync('config')) {
-        mkdirSync('config', { recursive: true });
-      }
+      mkdirSync(dirname(configPath), { recursive: true });
 
       const exampleConfig = `# Sure Daily GitHub - Configuration
 general:
@@ -445,17 +442,22 @@ repositories:
     repo: "your-repo"
     enabled: true
     branch: "main"
+    commitMessage: "docs: daily update \${date}"
 
 contentTemplate:
-  message: "Automated commit - \${timestamp}"
+  # Variables: \${date}, \${time} (in general.timezone), \${timestamp} (UTC ISO)
+  title: "Daily Update"
+  body: "Automated update for \${date} at \${timestamp}"
 `;
 
       writeFileSync(configPath, exampleConfig);
+      const configFlag = options.config ? ` --config ${options.config}` : '';
       console.log('✅ Configuration file created:', configPath);
       console.log('\nNext steps:');
-      console.log('1. Edit config/config.yaml with your settings');
+      console.log(`1. Edit ${configPath} with your settings`);
       console.log('2. Set GITHUB_TOKEN in .env file');
-      console.log('3. Run: npm start');
+      console.log(`3. Try it: node src/cli.js run --dry-run${configFlag}`);
+      console.log('4. To run on a schedule, set schedule.enabled: true, then: npm start');
     } catch (error) {
       console.error('❌ Error:', error.message);
       process.exit(1);

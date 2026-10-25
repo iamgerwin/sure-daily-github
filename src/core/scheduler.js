@@ -3,6 +3,8 @@ import logger from '../utils/logger.js';
 import executor from './executor.js';
 import babysitter from './babysitter.js';
 
+const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
+
 class Scheduler {
   constructor() {
     this.task = null;
@@ -107,6 +109,28 @@ class Scheduler {
 
   isRunning() {
     return this.running;
+  }
+
+  // Ctrl+C or a service stop (SIGTERM from systemd or pm2). A babysit scan in
+  // flight has its own handlers that kill its detached engine and test process
+  // groups, clean up and exit; exiting here first would orphan them.
+  handleShutdown(signal, { exit = (code) => process.exit(code) } = {}) {
+    if (this.running) {
+      logger.info('Stopping scheduler', { signal });
+      this.stop();
+    }
+    if (babysitter.isRunning()) {
+      logger.info('Waiting for the babysit scan to stop', { signal });
+      return false;
+    }
+    exit(0);
+    return true;
+  }
+
+  installSignalHandlers(options) {
+    const handlers = SHUTDOWN_SIGNALS.map(signal => [signal, () => this.handleShutdown(signal, options)]);
+    handlers.forEach(([signal, handler]) => process.on(signal, handler));
+    return () => handlers.forEach(([signal, handler]) => process.off(signal, handler));
   }
 }
 

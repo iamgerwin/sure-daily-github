@@ -602,3 +602,33 @@ test('validate still rejects a malformed GITHUB_TOKEN with requireToken: false',
     /GITHUB_TOKEN appears to be invalid format/
   );
 });
+
+test('validate rejects string on/off flags for randomization and schedule', () => {
+  for (const value of ['off', 'no', 'false', 0]) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], randomization: { enabled: value } }),
+      /randomization\.enabled must be true or false/
+    );
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, timeVariations: { enabled: value } } }),
+      /randomization\.timeVariations\.enabled must be true or false/
+    );
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], schedule: { enabled: value, cron: '0 9 * * *' } }),
+      /schedule\.enabled must be true or false/
+    );
+  }
+});
+
+test('validate keeps boolean and unset randomization and schedule flags', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    randomization: { enabled: true, issueCount: { min: 1, max: 3 }, timeVariations: { enabled: false } },
+    schedule: { enabled: false }
+  });
+  assert.equal(cfg.randomization.enabled, true);
+  assert.equal(cfg.randomization.timeVariations.enabled, false);
+  assert.equal(cfg.schedule.enabled, false);
+  assert.equal(config.validate({ repositories: [baseRepo], schedule: { enabled: null } }).schedule.enabled, null);
+  assert.equal(config.validate({ repositories: [baseRepo], schedule: { enabled: true, cron: '0 9 * * *' } }).schedule.enabled, true);
+});
