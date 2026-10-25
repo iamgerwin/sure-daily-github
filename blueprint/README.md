@@ -136,13 +136,17 @@ The routing follows from where open-ended reasoning is needed:
   repository access is enough to find correctness, edge-case, security, and
   missing-test issues.
 - **Large diffs go to a stronger metered model**, under a line cap and a
-  character cap. The cap bounds the worst-case cost of one review. At about
+  character cap. The caps bound the input of one review, not its total cost.
+  An illustrative estimate for one successful metered review: at about
   4 characters per token, 60,000 characters of diff plus a 3,000-character
-  description is roughly 16,000 input tokens, or about $0.03. Output is a
-  JSON findings list of a few thousand tokens, or a few cents. With the
-  10-review daily budget, metered review spending stays under about $1 a day
-  even in the worst case. These figures are estimates derived from the caps,
-  not measured bills.
+  description is roughly 16,000 input tokens, or about $0.03. A typical
+  output is a JSON findings list of a few thousand tokens, or a few cents.
+  Ten such reviews a day come to well under $1. This is an estimate, not a
+  measured bill, and not a bound: the daily and per-tick counters count only
+  successful reviews, a failed metered attempt is still billed, and nothing
+  caps the engine's output tokens. A hard daily bound would require counting
+  attempts rather than successes against the budget, and capping output
+  tokens or spend on the metered engine.
 - **Speed tiers are never used** (`-fast`, `-ultrafast`). They cost more per
   token, not less (see incident 5.5). Batch review has no latency requirement.
 - **A fallback must reset the model ID.** If the OpenCode run fails, the
@@ -328,7 +332,7 @@ a way to be stopped.
 | Line cap | Review | Diffs over 800 lines are skipped with a note. | The most expensive reviews go to the human. |
 | Model routing | Review | Haiku (subscription) for 400 lines or fewer. Standard Sol (metered) for larger diffs. Never a speed tier. | Most reviews have no per-token cost. |
 | One-review ledger | Review | `done-<pr>` is written after a review, a size skip, or an engine failure. Only a conflict repair deletes it. | A PR is reviewed once per code state, not once per tick. |
-| Daily and tick budgets | Review | 10 successful reviews per day, 2 per tick. | Caps daily spending and bursts. |
+| Daily and tick budgets | Review | 10 successful reviews per day, 2 per tick. | Limits successful reviews per day and per tick. Failed attempts are not counted (see known gaps). |
 | Kill switch | Review | `touch $H/.autopr-sdg/review-off` disables review. `rm` re-enables it. | Immediate stop without editing cron. |
 | Daily plan | Creation | 3 to 10 PRs per day, seeded by the date. Slots are drawn between 08:00 and 21:00. | Fixed upper bound on implementation runs. |
 | Cooldown and window | Creation | At least 40 minutes between PRs. Catch-up stops at 22:30. | No bursts after downtime. |
@@ -343,7 +347,10 @@ Known gaps:
 
 - The daily and per-tick review counters count only successful reviews. An
   engine failure is recorded in the ledger, so it never repeats, but one tick
-  can attempt more than two PRs if earlier attempts in that tick failed.
+  can attempt more than two PRs if earlier attempts in that tick failed, and
+  a failed metered attempt is billed without consuming the budget.
+- The metered review engine has no output-token or spend cap. Review cost
+  estimates (section 2) are illustrative, not bounds.
 - Creation and conflict repair have no marker-file kill switch. They are
   stopped by disabling their cron entries.
 
