@@ -148,6 +148,22 @@ test('runTestCommand keeps a multibyte character split across two writes intact'
   assert.equal(result.output, '✓\n');
 });
 
+test('runTestCommand returns when the command exits even if a background child holds its output open', async (t) => {
+  const started = Date.now();
+  const result = await runTestCommand('sleep 30 & echo done', { cwd: repoDir(t), env: process.env, timeoutMs: 20000 });
+  assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
+  assert.ok(Date.now() - started < 10000, 'resolved without waiting for the background child');
+});
+
+test('runTestCommand kills processes the command left running after it exits', async (t) => {
+  const dir = repoDir(t);
+  const marker = path.join(dir, 'leftover-ran');
+  const result = await runTestCommand(`(sleep 1; touch "${marker}") >/dev/null 2>&1 & echo done`, { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  assert.equal(fs.existsSync(marker), false);
+});
+
 test('tailLines keeps the last lines of output', () => {
   assert.equal(tailLines('a\nb\nc\n', 2), 'b\nc');
 });
