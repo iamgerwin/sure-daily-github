@@ -11,6 +11,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root (like StateManager) so it does not depend on cwd
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+
 class AdvancedIssueHandler {
   constructor(token) {
     this.token = token;
@@ -35,7 +38,10 @@ class AdvancedIssueHandler {
     try {
       const data = await fs.readFile(this.stateFile, 'utf-8');
       const parsed = JSON.parse(data);
-      if (!parsed.repositories) parsed.repositories = {};
+      if (!isPlainObject(parsed)) throw new Error('issue state is not a JSON object');
+      // An array would drop every repo entry on save (so the daily target is
+      // never reached) and a string or number would crash the run
+      if (!isPlainObject(parsed.repositories)) parsed.repositories = {};
       return parsed;
     } catch (error) {
       if (error.code !== 'ENOENT') {
@@ -217,8 +223,8 @@ class AdvancedIssueHandler {
         continue;
       }
       
-      // Initialize repo state if not exists
-      if (!this.getRepoState(state, repo)) {
+      // Initialize repo state if not exists, or replace an entry of the wrong shape
+      if (!isPlainObject(this.getRepoState(state, repo))) {
         state.repositories[this.getRepoKey(repo)] = {
           issuesCreatedToday: 0,
           lastIssueTime: null,
@@ -228,6 +234,9 @@ class AdvancedIssueHandler {
       }
 
       const repoState = this.getRepoState(state, repo);
+      // A missing or non-numeric count would never reach the target (NaN >= n
+      // is false), so issues would keep being created; start it over instead
+      if (!isCount(repoState.issuesCreatedToday)) repoState.issuesCreatedToday = 0;
 
       // Determine today's target if not set, or re-roll it when the configured range changed
       if (repo.dailyTarget && this.resolveTodayTarget(repoState, repo.dailyTarget)) {

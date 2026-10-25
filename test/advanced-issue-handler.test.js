@@ -191,6 +191,63 @@ function writeState(handler, state) {
   fs.writeFileSync(handler.stateFile, JSON.stringify(state));
 }
 
+test('backs up a state file that is valid JSON but not an object', async () => {
+  const { handler } = createHandler();
+  writeState(handler, null);
+
+  const state = await handler.loadState();
+
+  assert.deepEqual(state.repositories, {});
+  assert.ok(fs.readdirSync(path.dirname(handler.stateFile)).some(f => f.startsWith('issue-state.json.corrupt-')));
+});
+
+for (const [label, repositories] of [['an array', []], ['a string', 'oops'], ['a number', 7]]) {
+  test(`stops at the daily target when the repositories section is ${label}`, async () => {
+    const { handler, created } = createHandler();
+    writeState(handler, { lastDailyReset: new Date().toISOString(), repositories });
+
+    for (let i = 0; i < 5; i++) {
+      await handler.processRepositories([repo()], {}, false, config);
+    }
+
+    assert.equal(created.length, 3);
+    assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 3);
+  });
+}
+
+for (const [label, entry] of [
+  ['missing its count', { todayTarget: 3 }],
+  ['with a non-numeric count', { issuesCreatedToday: 'two', todayTarget: 3 }],
+  ['with a negative count', { issuesCreatedToday: -4, todayTarget: 3 }],
+  ['that is not an object', 5]
+]) {
+  test(`stops at the daily target for a repository entry ${label}`, async () => {
+    const { handler, created } = createHandler();
+    writeState(handler, { lastDailyReset: new Date().toISOString(), repositories: { 'me/demo': entry } });
+
+    for (let i = 0; i < 5; i++) {
+      await handler.processRepositories([repo()], {}, false, config);
+    }
+
+    assert.equal(created.length, 3);
+    assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 3);
+  });
+}
+
+test('keeps a valid count from an existing entry', async () => {
+  const { handler, created } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: { 'me/demo': { issuesCreatedToday: 2, todayTarget: 3 } }
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await handler.processRepositories([repo()], {}, false, config);
+  }
+
+  assert.equal(created.length, 1);
+});
+
 test('status reports today\'s progress when state is from the current day', async () => {
   const { handler } = createHandler();
   const next = Date.now() + 60 * 60 * 1000;
