@@ -232,7 +232,7 @@ be merged.
 | `status/ai-reviewed` | Human | The review posted its scorecard. | Human merges, which ends the lifecycle. Human asks for fixes, which leads to `status/fix-round`. Phase 0 sees `CONFLICTING` and adds `status/conflict`. | Human merge gate. No automated exit to merged. |
 | `status/conflict` | Bot (conflict repair) | Phase 0: the PR is open, assigned to the owner, `mergeable` is `CONFLICTING`, and it has neither `status/conflict` nor `status/conflict-resolved`. | Becomes `status/conflict-resolved` once a repair passes verification, or once the PR is found to be no longer `CONFLICTING`. Stays when verification fails, until the next tick. Stays when the attempt cap is reached, until the next day or a human acts. | 2 attempts per PR per day (clean merges count as attempts), `UNKNOWN` deferred, repo lock, verification: push landed, no attribution in the last commit, no conflict markers, GitHub reports neither `CONFLICTING` nor `UNKNOWN`. |
 | `status/conflict-resolved` | Bot (conflict repair) | Phase 1 succeeded: the branch was merged with its base and passed the mechanical checks listed above. The label does not mean the tests passed. | Phase 2 replaces it with `status/awaiting-ai-review` and deletes `autoreview/done-<pr>`, so the merged result gets reviewed again. | Phase 0 skips PRs with this label, so they cannot be relabeled in a loop. |
-| `status/fix-round` | Bot (manually started fix session) | A human asks for the review findings to be addressed. No cron job sets this label. | Fixes are pushed (one commit per finding), then reviewed again, which leads back to `status/ai-reviewed`. | At most 3 review-and-fix rounds. At the cap the session stops and offers three options: run one more targeted round, merge with a tracking issue for what remains, or hold. |
+| `status/fix-round` | Bot (manually started fix session) | A human asks for the review findings to be addressed. No cron job sets this label. | Fixes are pushed (one commit per finding). The same manually started session then re-reviews the PR (a session-scoped review, not the cron reviewer) and posts each verdict and the score progression to the PR. The PR then returns to the human merge decision. No cron job reads or clears this label, and fix rounds leave the cron review ledger `done-<pr>` untouched, so the cron reviewer does not review the fixed code. | At most 3 review-and-fix rounds. At the cap the session stops and offers three options: run one more targeted round, merge with a tracking issue for what remains, or hold. |
 | Merged or closed | Human | Explicit human action | None (end of lifecycle) | Merge commits only (`gh pr merge --merge`). Merges happen only on explicit request. |
 
 **Coexistence and precedence.** Labels are added and removed, not replaced
@@ -277,7 +277,8 @@ stateDiagram-v2
     manual --> merged : human owner reviews by hand and merges, label unchanged
     reviewed --> merged : human merges
     reviewed --> fixround : human requests fixes
-    fixround --> reviewed : fixes pushed and re-reviewed, max 3 rounds
+    fixround --> fixround : same session pushes fixes and re-reviews, posts verdict and score progression, max 3 rounds
+    fixround --> merged : human merges after the session reports
     awaiting --> conflict : phase 0 detects CONFLICTING
     reviewed --> conflict : phase 0 detects CONFLICTING
     conflict --> conflict : verification failed, retry next tick, max 2 per day
@@ -315,8 +316,10 @@ flowchart TD
 
     G --> H{"Human decision"}
     H -->|merge| M["Merged"]
-    H -->|request fixes| FR["status/fix-round session, max 3 rounds"]
-    FR --> R
+    H -->|request fixes| FR["status/fix-round: manually started session pushes one commit per finding"]
+    FR --> FR2["Same session re-reviews, posts verdict and score progression to the PR, max 3 rounds. Cron reviewer not involved, ledger untouched."]
+    FR2 -->|another round| FR
+    FR2 -->|session reports final state| H
 
     G -.->|base branch moves| P["sdg-conflict-patrol.sh tick at :05 and :35"]
     F -.->|base branch moves| P
@@ -349,7 +352,7 @@ a way to be stopped.
 | Input cap | Review | Diff truncated to 60,000 characters. Null bytes stripped. | Bounds the input of a single review. |
 | Line cap | Review | Diffs over 800 lines are skipped with a note. | The most expensive reviews go to the human. |
 | Model routing | Review | Haiku (subscription) for 400 lines or fewer. Standard Sol (metered) for larger diffs. Never a speed tier. | Most reviews have no per-token cost. |
-| One-review ledger | Review | `done-<pr>` is written after a review, a size skip, or an engine failure. Only a conflict repair deletes it. | A PR is reviewed once per code state, not once per tick. |
+| One-review ledger | Review | `done-<pr>` is written after a review, a size skip, or an engine failure. Only a conflict repair deletes it. | The cron reviewer reviews a PR once, and again only after a conflict repair, not once per tick. Fix-round commits change the code without clearing the entry. Their re-review happens inside the fix session, not in cron. |
 | Daily and tick budgets | Review | 10 successful reviews per day, 2 per tick. | Limits successful reviews per day and per tick. Failed attempts are not counted (see known gaps). |
 | Kill switch | Review | `touch $H/.autopr-sdg/review-off` disables review. `rm` re-enables it. | Immediate stop without editing cron. |
 | Daily plan | Creation | 3 to 10 PRs per day, seeded by the date. Slots are drawn between 08:00 and 21:00. | Fixed upper bound on implementation runs. |
