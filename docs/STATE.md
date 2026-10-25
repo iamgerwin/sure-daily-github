@@ -25,6 +25,7 @@ Limits are evaluated before each action:
 - Otherwise, the repository `dailyTarget` (number or range) determines the daily cap.
 - A `dailyTarget` range (`{ min, max }`) in commit mode rolls one target per repository per day, stored as `dailyTarget: { day, min, max, value }` in that repository's state, so every run that day and `status` use the same value. A new day or a changed range rolls a new target.
 - In issue mode with range targets or `intervalMinutes` (the advanced issue handler, state in `data/issue-state.json`), each repository's entry stores `todayTarget` and the `targetRange: { min, max }` it was rolled from. Changing the configured range during the day rolls a new `todayTarget` on the next run; issues already created today still count toward it. Entries written before `targetRange` existed keep their target if it still lies within the configured range.
+- The advanced issue handler's daily reset clears each repository's `issuesCreatedToday`, `todayTarget`, and `targetRange`, but keeps `lastIssueTime` and `nextIssueTime`, so an issue created shortly before midnight still delays the next one by its `intervalMinutes`. `status` shows a previous day's `nextIssueTime` while it is still in the future.
 
 ## Graceful Fallbacks
 
