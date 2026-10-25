@@ -40,6 +40,19 @@ with the self-healing conflict loop:
 | `priority/medium` | `FBCA04` | Normal queue |
 | `priority/low` | `C2E0C6` | Nice to have |
 
+## quality/* — how much firepower the work deserves (human/orchestrator-assigned)
+
+Distinct from priority (urgency): quality sets the ENGINE AND EFFORT CONTRACT —
+which models run the work, how hard they think, and how many review rounds are
+expected. `quality/low` is stamped automatically on every daily-stream PR;
+humans or the orchestrator upgrade it when the work is architectural.
+
+| Label | Color | Contract |
+|---|---|---|
+| `quality/low` | `C2E0C6` | Routine automated change. Default for the daily PR stream. Single-pass diff-scoped review (Haiku small / Sol standard), standard score gate, no owner turnaround expected. |
+| `quality/mid` | `FBBC04` | Meaningful change worth closer attention. Full-strength review model regardless of diff size; owner glance before merge. |
+| `quality/high` | `5319E7` | Architectural, process, or high-stakes. Orchestrator assigns top models at max effort (Opus `ultrathink` implements, Sol `#xhigh` reviews), multi-round score-gated fix loop, explicit owner collaboration and back-and-forth expected — the label exists to aid the owner's decision-making. |
+
 ## Unnamespaced (GitHub-standard triage, kept as-is)
 
 `duplicate`, `question`, `invalid`, `help wanted`, `good first issue`, `wontfix` —
@@ -67,7 +80,10 @@ for l in \
   "priority/urgent:B60205:Drop everything — blocks release or a client." \
   "priority/high:D93F0B:Important — should make the next release." \
   "priority/medium:FBCA04:Normal queue." \
-  "priority/low:C2E0C6:Nice to have — pick up when free."; do
+  "priority/low:C2E0C6:Nice to have — pick up when free." \
+  "quality/low:C2E0C6:Routine automated change; single-pass review, standard score gate. Default for daily PR stream." \
+  "quality/mid:FBBC04:Meaningful change; full-strength review model regardless of diff size." \
+  "quality/high:5319E7:Architectural or high-stakes; top model + max effort, multi-round score-gated loop."; do
   IFS=: read -r n c d <<<"$l"; gh label create "$n" -R $R --color "$c" --description "$d" --force
 done
 ```
