@@ -55,7 +55,7 @@ for l in \
   "status/awaiting-ai-review:FBCA04:Bot-owned: PR created, queued for automated diff review (scorecard). Next: status/ai-reviewed." \
   "status/ai-reviewed:1D76DB:Bot-owned: AI scorecard posted (verdict, mergeability, findings). Awaiting human merge decision." \
   "status/conflict:D73A4A:Bot-owned: merge conflict detected; automated resolution in progress (max 2 attempts/day)." \
-  "status/conflict-resolved:0E8A16:Bot-owned: conflict auto-resolved, full test suite green; re-queuing for AI review." \
+  "status/conflict-resolved:0E8A16:Bot-owned: conflict auto-resolved, branch merged with base; re-queuing for AI review." \
   "status/fix-round:A62D03:Bot-owned: automation is working through AI review findings on this PR; one commit per finding." \
   "type/bug:D73A4A:Fixes incorrect behavior — something isn't working." \
   "type/feature:A2EEEF:New feature or capability." \
