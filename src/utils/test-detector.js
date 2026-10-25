@@ -29,11 +29,14 @@ function hasMakeTestTarget(dir) {
 // in a repo that ships several. `npm ci` installs from either npm lockfile; a
 // repo may ship only the shrinkwrap. Without an install, a pnpm or yarn repo
 // runs its tests against a fresh clone with no node_modules and always fails.
+// Bun writes a text bun.lock (1.2+) or a binary bun.lockb (older releases).
 const LOCKFILE_INSTALLS = [
   ['package-lock.json', 'npm ci'],
   ['npm-shrinkwrap.json', 'npm ci'],
   ['pnpm-lock.yaml', 'pnpm install --frozen-lockfile'],
-  ['yarn.lock', 'yarn install --frozen-lockfile']
+  ['yarn.lock', 'yarn install --frozen-lockfile'],
+  ['bun.lock', 'bun install --frozen-lockfile'],
+  ['bun.lockb', 'bun install --frozen-lockfile']
 ];
 
 function lockfileInstall(dir) {
