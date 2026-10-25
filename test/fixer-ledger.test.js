@@ -95,3 +95,11 @@ test('a corrupted ledger is treated as empty', (t) => {
   fs.writeFileSync(ledger.filePath, '{"me/demo#7": ');
   assert.deepEqual(ledger.load(), {});
 });
+
+test('a failed save removes its temp file and rethrows', (t) => {
+  const { ledger } = tmpLedger(t);
+  // A directory at the ledger path makes the rename fail after the temp file is written
+  fs.mkdirSync(ledger.filePath, { recursive: true });
+  assert.throws(() => ledger.start(KEY, 'sha1', 1000));
+  assert.deepEqual(fs.readdirSync(path.dirname(ledger.filePath)), ['state.json']);
+});

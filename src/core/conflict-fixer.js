@@ -46,16 +46,19 @@ export function isConflicted(pr) {
 }
 
 // Unknown --repo values are rejected rather than ignored so a typo cannot
-// silently process nothing
+// silently process nothing. A repository named more than once (in any case)
+// is selected once, so it is not scanned, fixed, or ticked twice in one run.
 export function selectRepositories(repositories = [], filters = []) {
   const enabled = repositories.filter(r => r.enabled !== false);
   if (filters.length === 0) return enabled;
 
-  return filters.map(filter => {
+  const selected = [];
+  for (const filter of filters) {
     const match = enabled.find(r => `${r.owner}/${r.repo}`.toLowerCase() === String(filter).toLowerCase());
     if (!match) throw new Error(`Repository not configured or disabled: ${filter}`);
-    return match;
-  });
+    if (!selected.includes(match)) selected.push(match);
+  }
+  return selected;
 }
 
 // Opt-in gate: returns the skip reason for a repository, or null if allowed.
@@ -340,10 +343,11 @@ class ConflictFixer {
       return done('skipped', { reason: 'head and base are the same branch' });
     }
 
-    const root = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
-    this.activeDir = root;
-    const dir = path.join(root, 'repo');
-    fs.mkdirSync(dir);
+    // Created inside the try below: a work root that cannot be written (full or
+    // missing temp dir) must fail only this PR and still finish its ledger entry,
+    // not abort the run and leave the entry in-progress until the attempt TTL
+    let root = null;
+    let dir = null;
     // Hooks are switched off on the command line, which beats anything the
     // tested code writes to .git/hooks or core.hooksPath in .git/config
     const git = (args, options = {}) => this.git(['-c', `core.hooksPath=${os.devNull}`, ...args], {
@@ -363,6 +367,11 @@ class ConflictFixer {
     };
 
     try {
+      root = fs.mkdtempSync(path.join(this.workRoot, 'sdg-fix-'));
+      this.activeDir = root;
+      dir = path.join(root, 'repo');
+      fs.mkdirSync(dir);
+
       await must(['init', '-q']);
       // Merge needs an identity even with --no-commit
       await must(['config', 'user.name', identity.name]);
@@ -457,7 +466,7 @@ class ConflictFixer {
       return done('error', { error: `#${pr.number}: ${error.message}`, reason: error.message });
     } finally {
       this.activeDir = null;
-      fs.rmSync(root, { recursive: true, force: true });
+      if (root) fs.rmSync(root, { recursive: true, force: true });
       if (this.activePushDir) {
         fs.rmSync(this.activePushDir, { recursive: true, force: true });
         this.activePushDir = null;
