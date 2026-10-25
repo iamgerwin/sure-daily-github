@@ -460,6 +460,15 @@ test('runProcess does not kill a command when the timeout exceeds the timer limi
   assert.equal(result.stdout.trim(), 'done');
 });
 
+test('runProcess keeps a multibyte character split across two writes intact', async () => {
+  // "✓" is e2 9c 93; the pause makes the two halves arrive as separate chunks
+  const split = (stream) => `process.${stream}.write(Buffer.from([0xe2, 0x9c])); setTimeout(() => process.${stream}.write(Buffer.from([0x93, 0x0a])), 100);`;
+  const result = await runProcess(process.execPath, ['-e', split('stdout') + split('stderr')]);
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, '✓\n');
+  assert.equal(result.stderr, '✓\n');
+});
+
 test('runProcess resolves with an error for a missing binary', async () => {
   const result = await runProcess('sdg-definitely-not-a-binary', []);
   assert.equal(result.code, null);
