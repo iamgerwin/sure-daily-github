@@ -219,7 +219,9 @@ class IssueHandler {
         const multiResults = await this.createMultipleIssues(repo, contentTemplate, issueCount, dryRun, config);
 
         // Aggregate results; `skipped` stays a boolean so the executor summary
-        // does not count a limit-reached repo as both skipped and failed
+        // does not count a limit-reached repo as both skipped and failed.
+        // Any failed issue fails the repo, even after earlier ones succeeded,
+        // so the run summary and exit code do not hide it.
         const successful = multiResults.filter(r => r.success && !r.skipped).length;
         const skippedCount = multiResults.filter(r => r.skipped).length;
         const failed = multiResults.filter(r => !r.success).length;
@@ -227,7 +229,7 @@ class IssueHandler {
         results.push({
           owner: repo.owner,
           repo: repo.repo,
-          success: successful > 0 || failed === 0,
+          success: failed === 0,
           skipped: successful === 0 && failed === 0 && skippedCount > 0,
           count: issueCount,
           successful,
