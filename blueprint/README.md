@@ -581,13 +581,22 @@ yet be reviewed or repaired.
    before review is enabled.
 5. **Watchdog.** Enable it first and confirm that a run on a healthy host
    prints nothing.
-6. **Review.** Create the kill-switch file in the new state root, enable the cron entry, open one
-   PR by hand with `status/awaiting-ai-review`, remove the kill switch, and
-   confirm that exactly one scorecard and one notification appear.
-7. **Conflict repair.** Enable it. Create a deliberate conflict on a test PR
-   and follow it through `status/conflict`, `status/conflict-resolved`, and
-   `status/awaiting-ai-review`. Confirm that the review ledger was cleared and
-   a second scorecard was posted.
+6. **Review.** Create the kill-switch file in the new state root and enable
+   the cron entry. Open one test PR by hand that the pipeline would accept
+   as its own: head branch under the configured prefix (`auto-pr/...`), base
+   branch equal to the configured base branch, initial label
+   `status/awaiting-ai-review`, assigned to the configured owner, and a diff
+   of at most 800 lines. The reviewer ignores PRs on other head branches,
+   and Phase 0 of conflict repair ignores PRs not assigned to the owner.
+   Remove the kill switch and confirm that exactly one scorecard and one
+   notification appear. Keep the PR open for the next step.
+7. **Conflict repair.** Enable it. Reuse the PR from step 6, which already
+   meets both the review and the conflict-repair conditions. Push a commit
+   to the base branch that edits the same lines as the PR, so that the PR
+   becomes `CONFLICTING`. Follow it through `status/conflict`,
+   `status/conflict-resolved`, and `status/awaiting-ai-review`. Confirm that
+   the review ledger entry from step 6 was cleared and a second scorecard
+   was posted.
 8. **Creation.** Enable it last, with a small plan and a low backlog gate.
    Confirm the daily summary at the end of the first day.
 
