@@ -52,6 +52,16 @@ export function isIdempotentRequest(request) {
   return url === '/graphql' && typeof query === 'string' && !/\b(mutation|subscription)\b/.test(query);
 }
 
+// Retry-After is either a number of seconds or an HTTP-date (RFC 9110). A date
+// would otherwise read as NaN and fall back to a backoff of a second or two,
+// retrying long before the server allows it. Unparseable values return NaN.
+export function parseRetryAfterMs(value, now = Date.now()) {
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const date = Date.parse(text);
+  return /[a-z]/i.test(text) && Number.isFinite(date) ? date - now : NaN;
+}
+
 // Rate-limited requests were rejected before being processed, so any method is
 // safe to retry. 5xx and network/timeout failures may have been applied server
 // side, so only idempotent reads are retried to avoid duplicate issues/commits.
@@ -64,7 +74,7 @@ export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_R
     const fallback = isSecondaryRateLimit(error) ? Math.max(backoff, SECONDARY_RATE_LIMIT_DELAY_MS) : backoff;
     let delay = fallback;
     if (headers['retry-after'] !== undefined) {
-      delay = Number(headers['retry-after']) * 1000;
+      delay = parseRetryAfterMs(headers['retry-after']);
     } else if (headers['x-ratelimit-remaining'] === '0' && headers['x-ratelimit-reset'] !== undefined) {
       // Every response carries x-ratelimit-reset; it only applies once the
       // primary limit is spent, not to a secondary limit with quota left
