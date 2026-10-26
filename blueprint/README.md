@@ -344,12 +344,18 @@ oversize hand-off removes `status/awaiting-ai-review` and
 `status/fix-round`, a fix outcome
 removes `status/awaiting-ai-review` and `status/ai-reviewed`, push detection
 removes `status/ai-reviewed`, and a fix round removes `status/fix-round`.
+After one of these transitions a PR carries exactly one `status/*` label,
+unless conflict repair has added `status/conflict` or
+`status/conflict-resolved` alongside: none of these transitions removes
+the conflict labels.
 Each transition is idempotent, so re-applying it after a lost tick is safe.
 Conflict repair is the exception: Phase 0 adds `status/conflict` next to the
 existing lifecycle label, and Phase 2 adds `status/awaiting-ai-review`
 without removing it. A PR can therefore carry two `status/*` labels during
 and just after a conflict repair, for example `status/ai-reviewed` and
-`status/conflict`. Read the current state with this precedence, which matches
+`status/conflict`. Because the reviewer does not exclude PRs that carry
+`status/conflict`, a review can also leave `status/conflict` next to
+`status/ai-reviewed` or `status/fix-round`. Read the current state with this precedence, which matches
 the exclusion filters the jobs apply:
 
 ```

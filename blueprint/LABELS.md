@@ -196,7 +196,8 @@ an alert on every patrol tick and change nothing.
 
 The review, push-detection, and fix-round transitions remove every lifecycle
 label their target state excludes, so after them a PR carries exactly one
-`status/*` label:
+`status/*` label, unless conflict repair has added `status/conflict` or
+`status/conflict-resolved` alongside (see below):
 
 | Transition | Removes | Adds |
 |---|---|---|
