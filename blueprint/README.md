@@ -840,9 +840,14 @@ yet be reviewed or repaired.
    PR's head SHA, and that `rounds-<pr>` has one line. Keep the PR open for
    the next steps.
 7. **Fix rounds.** If the step 6 review passed the gate, force one fix
-   outcome: move the PR back to `status/awaiting-ai-review`, delete its
-   `done-<pr>`, and run one review tick by hand with
-   `SDG_REVIEW_PASS_SCORE=11`, which no score can reach. This is a
+   outcome. First disable the review cron entry (or set
+   `SDG_REVIEW_PASS_SCORE=11` on it) so that a scheduled review tick cannot
+   review the PR at the normal gate between the relabel and the manual run;
+   `review-off` would not help, because it also blocks the manual run. Then
+   move the PR back to `status/awaiting-ai-review`, delete its
+   `done-<pr>`, and immediately run one review tick by hand with
+   `SDG_REVIEW_PASS_SCORE=11`, which no score can reach. Restore the review
+   cron entry once the PR is at `status/fix-round`. This is a
    bring-up-only exception to the rule that people do not set `status/*`
    labels, and it consumes one round of the PR's budget. Remove `fixround-off` and confirm, in order:
    the PR moves to `status/fix-round` with `findings-<pr>.json` written; one
