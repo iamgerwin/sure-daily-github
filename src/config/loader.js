@@ -84,6 +84,25 @@ function validateRepoPath(repoPath, label, errors) {
   }
 }
 
+// Template text is run through String#replace at commit/issue time, so a YAML
+// number, list or mapping would pass `validate` and then fail every run
+function validateTemplateText(value, label, errors) {
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    errors.push(`${label} must be a string`);
+  }
+}
+
+// title/body of a content template; the template itself must be a mapping
+function validateContentTemplate(template, label, errors) {
+  if (template === undefined || template === null) return;
+  if (typeof template !== 'object' || Array.isArray(template)) {
+    errors.push(`${label} must be a mapping`);
+    return;
+  }
+  validateTemplateText(template.title, `${label}.title`, errors);
+  validateTemplateText(template.body, `${label}.body`, errors);
+}
+
 // Where commands without --config read the configuration (and `init` writes it)
 export function defaultConfigPath() {
   return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
@@ -292,6 +311,14 @@ class ConfigLoader {
         }
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
         validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
+        validateTemplateText(repo.commitMessage, `Repository ${idx}: commitMessage`, errors);
+        // A YAML-unquoted branch such as `2024` reads as a number and is
+        // stringified below; anything else is not a branch name
+        if (repo.branch !== undefined && repo.branch !== null
+          && !(typeof repo.branch === 'number' && Number.isFinite(repo.branch))
+          && (typeof repo.branch !== 'string' || !repo.branch.trim())) {
+          errors.push(`Repository ${idx}: branch must be a non-empty branch name`);
+        }
         if (repo.testCommand !== undefined && repo.testCommand !== null
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
@@ -347,11 +374,17 @@ class ConfigLoader {
       errors.push('contentTemplates must be an array');
     } else if (config.contentTemplates) {
       config.contentTemplates.forEach((template, idx) => {
+        // A bare "-" list item parses to null and would crash issue generation
+        if (template === null || template === undefined) {
+          errors.push(`contentTemplates[${idx}] must be a mapping`);
+        }
+        validateContentTemplate(template, `contentTemplates[${idx}]`, errors);
         if (template && typeof template === 'object') {
           validateLabels(template.labels, `contentTemplates[${idx}].labels`, errors);
         }
       });
     }
+    validateContentTemplate(config.contentTemplate, 'contentTemplate', errors);
 
     // Validate general settings
     const general = config.general || {};
@@ -387,7 +420,7 @@ class ConfigLoader {
     // otherwise throw from randomInt partway through an issue-mode run
     if (config.randomization?.enabled === true) {
       const rand = config.randomization;
-      if (rand.issueCount) {
+      if (rand.issueCount !== undefined && rand.issueCount !== null) {
         validateCountRange(rand.issueCount, 'randomization.issueCount', errors);
       }
       const timeVar = rand.timeVariations;
@@ -448,7 +481,12 @@ class ConfigLoader {
         mode: general.mode || 'commit',
         dryRun: general.dryRun || false
       },
-      randomization: config.randomization || {
+      // Without its own issueCount, randomization would otherwise create one
+      // issue a day per repo instead of following general.dailyTarget
+      randomization: config.randomization ? {
+        ...config.randomization,
+        issueCount: config.randomization.issueCount ?? normalizedGeneralTarget
+      } : {
         enabled: false,
         issueCount: normalizedGeneralTarget,
         timeVariations: {
@@ -471,7 +509,7 @@ class ConfigLoader {
           repo: repo.repo,
           enabled: repo.enabled !== false,
           // Unset means the repository's default branch, resolved by GitHub
-          branch: repo.branch || null,
+          branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch),
           dailyTarget: normalizeDailyTarget(repoTarget),
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',
