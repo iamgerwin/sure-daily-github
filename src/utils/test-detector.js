@@ -104,6 +104,11 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
       killGroup(child);
     }, clampTimerMs(timeoutMs));
 
+    // Once the command itself exits, anything it left running in its group
+    // (a backgrounded server or watcher) is an orphan: kill it so it cannot
+    // keep stdout open and stall 'close' until the timeout, or touch the work
+    // tree after the gate has passed
+    child.on('exit', () => killGroup(child));
     child.on('error', (error) => {
       clearTimeout(timer);
       activeChildren.delete(child);
