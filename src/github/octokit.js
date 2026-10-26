@@ -37,6 +37,7 @@ function isSecondaryRateLimit(error) {
 
 function isRateLimited(error) {
   const headers = error.response?.headers || {};
+  if (error.graphqlRateLimited) return true;
   if (error.status === 429) return true;
   if (isSecondaryRateLimit(error)) return true;
   return error.status === 403
@@ -50,6 +51,16 @@ export function isIdempotentRequest(request) {
   const { method, url, query } = typeof request === 'string' ? { method: request } : request || {};
   if (IDEMPOTENT_METHODS.has(String(method).toUpperCase())) return true;
   return url === '/graphql' && typeof query === 'string' && !/\b(mutation|subscription)\b/.test(query);
+}
+
+// GraphQL reports a spent rate limit as a 200 whose body carries a RATE_LIMITED
+// error. The graphql layer only throws it after the request hook returns, so the
+// hook has to recognize it itself. Returns an error to retry on, or null.
+export function graphqlRateLimitError(response) {
+  const errors = response?.data?.errors;
+  if (!Array.isArray(errors) || !errors.some(e => e?.type === 'RATE_LIMITED')) return null;
+  const error = new Error(errors.find(e => e?.type === 'RATE_LIMITED').message || 'GraphQL rate limit exceeded');
+  return Object.assign(error, { status: response.status, response, graphqlRateLimited: true });
 }
 
 // Rate-limited requests were rejected before being processed, so any method is
@@ -101,23 +112,33 @@ export function createOctokit(options = {}) {
     for (let attempt = 0; ; attempt++) {
       requestOptions.request.signal = callerSignal || AbortSignal.timeout(timeoutMs);
 
+      let response;
+      let failure;
       try {
-        return await request(requestOptions);
+        response = await request(requestOptions);
+        failure = graphqlRateLimitError(response);
+        if (!failure) return response;
       } catch (error) {
-        const delay = attempt < retries
-          ? getRetryDelayMs(error, requestOptions, attempt, baseDelayMs)
-          : null;
-        if (delay === null) throw error;
-
-        logger.warn('GitHub request failed, retrying', {
-          method: requestOptions.method,
-          url: requestOptions.url,
-          status: error.status,
-          attempt: attempt + 1,
-          delayMs: delay
-        });
-        await new Promise(resolve => setTimeout(resolve, delay));
+        failure = error;
       }
+
+      const delay = attempt < retries
+        ? getRetryDelayMs(failure, requestOptions, attempt, baseDelayMs)
+        : null;
+      if (delay === null) {
+        // A GraphQL response goes back as is, so the caller gets GitHub's own error
+        if (response) return response;
+        throw failure;
+      }
+
+      logger.warn('GitHub request failed, retrying', {
+        method: requestOptions.method,
+        url: requestOptions.url,
+        status: failure.status,
+        attempt: attempt + 1,
+        delayMs: delay
+      });
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   });
 
