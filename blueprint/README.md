@@ -500,9 +500,11 @@ flowchart TD
     GT -->|below 8, round below 10| FR["status/fix-round, findings saved to findings-pr.json"]
 
     FR --> X["sdg-fixround.sh tick at :10 and :40"]
-    X --> X1{"Findings recorded for the current head SHA?"}
+    X --> XK{"Kill switch off and repo lock free?"}
+    XK -->|no| X0
+    XK -->|yes| X1{"Findings recorded for the current head SHA?"}
     X1 -->|no, branch moved| XQ["Re-queue without an engine run, review ledger cleared"]
-    X1 -->|yes| X2{"Kill switch off, 4 per day and 2 per PR per day left, first PR this tick, mergeable, not in the conflict loop?"}
+    X1 -->|yes| X2{"4 per day and 2 per PR per day left, first PR this tick, mergeable, not in the conflict loop?"}
     X2 -->|no| X0["Wait for a later tick or day"]
     X2 -->|yes| X3["Claude Code Opus fixes every finding in a worktree, one commit per finding, cannot push"]
     X3 --> X4{"Orchestrator checks pass? History intact, clean tree, no attribution, own npm test passes, PR still open in fix-round"}
