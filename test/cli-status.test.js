@@ -58,3 +58,46 @@ test('advanced issue-mode status shows times in general.timezone, not the host c
   assert.doesNotMatch(row, new RegExp(`${hhmm('UTC', next)} │$`));
   assert.match(output, /Last daily reset: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(Asia\/Manila\)/);
 });
+
+test('advanced issue-mode status dates a next issue that falls on a later day', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  const issueStateFile = path.join(dir, 'issue-state.json');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  timezone: "UTC"',
+    '  mode: "issue"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    '    dailyTarget: { min: 1, max: 3 }',
+    ''
+  ].join('\n'));
+
+  // Two days ahead is on another day whatever the current time of day
+  const now = Date.now();
+  const next = new Date(now + 48 * 60 * 60 * 1000);
+  fs.writeFileSync(issueStateFile, JSON.stringify({
+    lastDailyReset: new Date(now).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: now, todayTarget: 3, nextIssueTime: next.getTime() }
+    }
+  }));
+
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_ISSUE_STATE_FILE: issueStateFile,
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  const row = output.split('\n').find(line => line.includes('me/demo'));
+  assert.ok(row, output);
+  const date = next.toISOString().slice(0, 10);
+  assert.match(row, new RegExp(`${date} ${hhmm('UTC', next)} │$`));
+});
