@@ -175,7 +175,7 @@ sure-daily-github fix-conflicts [options]
 | `--dry-run` | Resolve and test locally, but never push or write the ledger |
 | `--scan-only` | Only list conflicted PRs and gated-out repos; nothing is cloned |
 | `--repo <owner/repo>` | Only process this configured repository (repeatable; a repository named twice is processed once); filter only, never bypasses the gate |
-| `--pr <number>` | Only process this PR (a positive integer; requires exactly one `--repo`) |
+| `--pr <number>` | Only process this PR (a positive integer written as plain digits, e.g. `42`; requires exactly one `--repo`) |
 | `--scan-timeout <seconds>` | Gather-phase budget for this run (overrides `scanTimeoutSeconds`) |
 | `--config <path>` | Path to the configuration file |
 

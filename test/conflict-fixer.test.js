@@ -313,10 +313,20 @@ test('invalid --pr values are rejected instead of matching nothing', async (t) =
   const fx = await fixture(t);
   const { fixer } = makeFixer(fx, [fx.pr]);
 
-  for (const pr of ['abc', '-1', '0', '1.5', '']) {
+  for (const pr of ['abc', '-1', '0', '1.5', '', '1e2', '0x10', '0b11', '7.0', ' 7', '+7']) {
     const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr });
     assert.equal(result.success, false, `pr=${pr}`);
     assert.equal(result.error, '--pr must be a positive integer');
+  }
+});
+
+test('--pr accepts a plain digit string or an integer', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr, { ...fx.pr, number: 16 }]);
+
+  for (const pr of ['16', 16]) {
+    const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr });
+    assert.deepEqual(result.results.map(r => r.pr), [16], `pr=${JSON.stringify(pr)}`);
   }
 });
 
