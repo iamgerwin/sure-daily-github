@@ -381,12 +381,13 @@ program
       console.log('✅ Configuration is valid');
       console.log(`   Repositories: ${cfg.repositories.length}`);
 
-      // Display dailyTarget nicely
+      // The loader normalizes every dailyTarget to { min, max }, so a fixed
+      // target arrives as min === max and is shown as the single number
       if (cfg.general.dailyTarget) {
         const target = cfg.general.dailyTarget;
-        const targetStr = typeof target === 'object' 
-          ? `${target.min}-${target.max}` 
-          : target.toString();
+        const targetStr = typeof target === 'object' && target.min !== target.max
+          ? `${target.min}-${target.max}`
+          : String(target.min ?? target);
         console.log(`   Daily target: ${targetStr}`);
       }
 
