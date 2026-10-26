@@ -15,7 +15,8 @@ Related sources:
 | `blueprint/LABELS.md` | Label states and workflow: owner of every label in all four families, which routine sets and removes each `status/*` label, the full transition table with triggers and guards, and the `quality/*` contract. |
 | `.claude/skills/create-pr/SKILL.md` | Branch name, PR title and PR description template. |
 
-`$H` is the Hermes home on the host (`/home/gerwin/.local/share/hermes-vps`).
+`$H` is the Hermes home on the host (`<hermes-home>`). Concrete host paths
+are kept in the private runbook, not in this document.
 All times are Asia/Manila (PHT).
 
 ---
@@ -752,7 +753,7 @@ invariants in section 6.
 
 | Parameter | Current value | Where it is set today |
 |---|---|---|
-| Hermes home | `/home/gerwin/.local/share/hermes-vps` | `H=` in all five scripts and in the headroom launcher |
+| Hermes home | `<hermes-home>` (concrete path in the private runbook) | `H=` in all five scripts and in the headroom launcher |
 | State root (mandatory, one per project) | `$H/.autopr-sdg`, with `autoreview/`, `autoreview/fixround/`, and `conflict-patrol/` below it | `STATE=` in `sdg-autopr.sh`, `sdg-plan.sh`, `sdg-autoreview.sh`, `sdg-fixround.sh`, and `sdg-conflict-patrol.sh`, plus the lock and kill-switch paths derived from `$H/.autopr-sdg` |
 | Repository | `iamgerwin/sure-daily-github` | `R=` in all four `sdg-*` pipeline scripts |
 | Local clone and job worktrees | `$H/Developer/_personal/sure-daily-github`, `.../wt-conflict`, `.../wt-fixround` | `REPO=`, `WT=` in conflict repair and fix rounds |
