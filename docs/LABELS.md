@@ -12,7 +12,7 @@ everything else is human-assigned.
 | `status/awaiting-ai-review` | `FBCA04` | PR created, queued for automated diff review | → `status/ai-reviewed` |
 | `status/ai-reviewed` | `1D76DB` | AI scorecard posted (verdict, findings); human merge decision needed | human merges / requests fixes |
 | `status/conflict` | `D73A4A` | Merge conflict with base branch detected; auto-resolution in progress (max 2 attempts/day) | → `status/conflict-resolved` |
-| `status/conflict-resolved` | `0E8A16` | Conflict auto-resolved, test suite green | → `status/awaiting-ai-review` (re-review) |
+| `status/conflict-resolved` | `0E8A16` | Conflict auto-resolved: branch merged with base; mechanical checks only, tests not run | → `status/awaiting-ai-review` (re-review) |
 | `status/fix-round` | `A62D03` | Automation is working through AI review findings; one commit per finding | re-review → `status/ai-reviewed` |
 
 Lifecycle: **created → `awaiting-ai-review` → `ai-reviewed` → (human merges)**
@@ -52,7 +52,7 @@ R=<owner>/<repo>
 gh label edit ready-for-review -R $R --name status/awaiting-ai-review --color FBCA04 --description "Bot-owned: PR created, queued for automated diff review (scorecard). Next: status/ai-reviewed."
 gh label edit ai-reviewed -R $R --name status/ai-reviewed --color 1D76DB --description "Bot-owned: AI scorecard posted (verdict, mergeability, findings). Awaiting human merge decision."
 gh label edit fix-conflict -R $R --name status/conflict --color D73A4A --description "Bot-owned: merge conflict detected; automated resolution in progress (max 2 attempts/day)."
-gh label edit fixed-conflict -R $R --name status/conflict-resolved --color 0E8A16 --description "Bot-owned: conflict auto-resolved, full test suite green; re-queuing for AI review."
+gh label edit fixed-conflict -R $R --name status/conflict-resolved --color 0E8A16 --description "Bot-owned: conflict auto-resolved, branch merged with base; re-queuing for AI review."
 gh label edit babysit -R $R --name status/fix-round --color A62D03 --description "Bot-owned: automation is working through AI review findings on this PR; one commit per finding."
 gh label edit bug -R $R --name type/bug --color D73A4A --description "Fixes incorrect behavior — something isn't working."
 gh label edit enhancement -R $R --name type/feature --color A2EEEF --description "New feature or capability."
