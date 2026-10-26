@@ -146,6 +146,25 @@ test('createDailyIssue passes the configured timezone to issue templates', async
   assert.equal(calls[0].title, localDate);
 });
 
+test('createDailyIssue counts an issue in the day it is dated, not the day the API call returns', async () => {
+  const { handler, calls } = createHandler();
+  const lastSecond = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila
+  const nextDay = new Date('2026-10-14T16:00:01Z'); // 00:00:01 the next day
+  const target = { ...repoConfig('midnight'), dailyTarget: { min: 1, max: 1 } };
+  const config = { general: { timezone: 'Asia/Manila' } };
+
+  await handler.createDailyIssue(target, { title: '${date}' }, false, null, config, lastSecond);
+  assert.equal(calls[0].title, '2026-10-14');
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', lastSecond).daily, 1);
+
+  // The next day's limit is still open
+  const next = await handler.createDailyIssue(target, { title: '${date}' }, false, null, config, nextDay);
+  assert.equal(next.skipped, undefined);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].title, '2026-10-15');
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', nextDay).daily, 1);
+});
+
 test('rate-limit delays only separate real API calls, never trail the last repo', async () => {
   const { handler, calls } = createHandler();
   const delays = [];
