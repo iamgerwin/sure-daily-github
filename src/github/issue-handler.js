@@ -78,9 +78,15 @@ class IssueHandler {
   checkLimits(repoConfig, config = {}, targetCount = null) {
     const { owner, repo, dailyTarget } = repoConfig;
     const timezone = config?.general?.timezone || 'UTC';
-    const timeVar = config?.randomization?.timeVariations;
+    const randomization = config?.randomization;
+    const timeVar = randomization?.timeVariations;
 
-    const actualTarget = targetCount || dailyTarget;
+    // Randomization replaces the repository dailyTarget as the daily cap, so a
+    // rolled issueCount above it is not cut off after the first issue
+    const randomTarget = randomization?.enabled
+      ? (timeVar?.enabled ? timeVar.daily : null) ?? randomization.issueCount
+      : null;
+    const actualTarget = targetCount || randomTarget || dailyTarget;
     const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
     const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
     const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;

@@ -163,6 +163,50 @@ test('migrates legacy repo-name keys without losing progress', async () => {
   assert.equal(repositories['me/demo'].issuesCreatedToday, 3);
 });
 
+test('keeps today\'s progress when the configured repository name changes case', async () => {
+  const { handler, created } = createHandler();
+  fs.mkdirSync(path.dirname(handler.stateFile), { recursive: true });
+  const next = Date.now() + 30 * 60 * 1000;
+  fs.writeFileSync(handler.stateFile, JSON.stringify({
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'Me/Demo': { issuesCreatedToday: 3, lastIssueTime: null, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: next }
+    }
+  }));
+
+  // status (read-only) already sees the entry under its old casing
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+  assert.equal(status.issuesCreatedToday, 3);
+  assert.equal(status.nextIssueTime, new Date(next).toISOString());
+
+  await handler.processRepositories([repo()], {}, false, config);
+
+  const { repositories } = readState(handler);
+  assert.equal(created.length, 0);
+  assert.equal(repositories['Me/Demo'], undefined);
+  assert.equal(repositories['me/demo'].issuesCreatedToday, 3);
+  assert.equal(repositories['me/demo'].nextIssueTime, next);
+});
+
+test('an exact-case entry wins over a differently cased one', async () => {
+  const { handler, created } = createHandler();
+  fs.mkdirSync(path.dirname(handler.stateFile), { recursive: true });
+  fs.writeFileSync(handler.stateFile, JSON.stringify({
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'Me/Demo': { issuesCreatedToday: 3, lastIssueTime: null, todayTarget: 3, nextIssueTime: null },
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: null, todayTarget: 3, nextIssueTime: null }
+    }
+  }));
+
+  await handler.processRepositories([repo()], {}, false, config);
+
+  const { repositories } = readState(handler);
+  assert.equal(created.length, 1);
+  assert.equal(repositories['me/demo'].issuesCreatedToday, 2);
+  assert.equal(repositories['Me/Demo'].issuesCreatedToday, 3);
+});
+
 test('aborts the run when state cannot be persisted after creating an issue', async () => {
   const { handler, created } = createHandler();
   handler.saveState = async () => { throw new Error('disk full'); };
@@ -264,6 +308,24 @@ test('status reports today\'s progress when state is from the current day', asyn
   assert.equal(status.issuesCreatedToday, 2);
   assert.equal(status.todayTarget, 3);
   assert.equal(status.nextIssueTime, new Date(next).toISOString());
+});
+
+test('status reports an elapsed issue interval as Any time, matching what the next run does', async () => {
+  const { handler, created } = createHandler();
+  const elapsed = Date.now() - 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: elapsed - 60 * 60 * 1000, todayTarget: 3, nextIssueTime: elapsed }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+  assert.equal(status.nextIssueTime, 'Any time');
+
+  // The next run does not wait for it either
+  await handler.processRepositories([repo()], {}, false, config);
+  assert.equal(created.length, 1);
 });
 
 test('status does not report a previous day\'s progress as today', async () => {

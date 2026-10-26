@@ -116,3 +116,37 @@ test('well-formed counters are left untouched', () => {
   assert.deepEqual(sm.getCounts('me', 'demo', 'UTC', NOW), { hourly: 1, daily: 3, weekly: 7 });
   assert.deepEqual(sm.getRepoState('me', 'demo').totals, { issues: 4, commits: 9 });
 });
+
+test('malformed legacy commit fields are reset instead of concatenating or reading undefined', () => {
+  const { sm, filePath } = managerWith({
+    repositories: {
+      'me/demo': { totalCommits: '5', commitsToday: -1, lastCommitDate: 42 },
+      'me/bare': { counters: { daily: { key: DAY, count: 0 } } }
+    }
+  });
+
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC', now: NOW });
+  const saved = JSON.parse(fs.readFileSync(filePath, 'utf8')).repositories['me/demo'];
+  assert.equal(saved.totalCommits, 1);
+  assert.equal(saved.commitsToday, 1);
+  assert.equal(saved.lastCommitDate, DAY);
+
+  sm.getCounts('me', 'bare', 'UTC', NOW);
+  const bare = sm.getRepoState('me', 'bare');
+  assert.equal(bare.totalCommits, 0);
+  assert.equal(bare.commitsToday, 0);
+  assert.equal(bare.lastCommitDate, null);
+});
+
+test('well-formed legacy commit fields are kept', () => {
+  const { sm } = managerWith({
+    repositories: { 'me/demo': { totalCommits: 12, commitsToday: 2, lastCommitDate: '2025-01-05' } }
+  });
+
+  sm.getCounts('me', 'demo', 'UTC', NOW);
+  const repo = sm.getRepoState('me', 'demo');
+  // A new day resets commitsToday; the total and last commit date survive
+  assert.equal(repo.totalCommits, 12);
+  assert.equal(repo.commitsToday, 0);
+  assert.equal(repo.lastCommitDate, '2025-01-05');
+});

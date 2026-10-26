@@ -68,6 +68,17 @@ export class StateManager {
 
   getRepoState(owner, repo) {
     const key = `${owner}/${repo}`;
+    // GitHub names are case-insensitive: an entry recorded under other casing is
+    // the same repository, so re-casing the config must not reset its counters
+    if (!isPlainObject(this.state.repositories[key])) {
+      const lower = key.toLowerCase();
+      const existing = Object.keys(this.state.repositories)
+        .find(k => k.toLowerCase() === lower && isPlainObject(this.state.repositories[k]));
+      if (existing) {
+        this.state.repositories[key] = this.state.repositories[existing];
+        delete this.state.repositories[existing];
+      }
+    }
     if (!isPlainObject(this.state.repositories[key])) {
       this.state.repositories[key] = {
         // Legacy fields (kept for backward compatibility)
@@ -146,6 +157,13 @@ export class StateManager {
       if (!isCount(repoState.totals[total])) repoState.totals[total] = 0;
     }
 
+    // Legacy fields feed `status`; a string count would otherwise concatenate
+    // ("5" + 1 = "51") and a missing one would show as undefined
+    for (const legacy of ['commitsToday', 'totalCommits']) {
+      if (!isCount(repoState[legacy])) repoState[legacy] = 0;
+    }
+    if (typeof repoState.lastCommitDate !== 'string') repoState.lastCommitDate = null;
+
     return counters;
   }
 
@@ -177,13 +195,12 @@ export class StateManager {
     counters.daily.count += 1;
     counters.weekly.count += 1;
 
-    if (!repoState.totals) repoState.totals = { issues: 0, commits: 0 };
     if (type === 'commit') {
       repoState.totals.commits += 1;
       // Maintain legacy fields for backward compatibility
       repoState.lastCommitDate = counters.daily.key;
-      repoState.commitsToday = (repoState.commitsToday || 0) + 1;
-      repoState.totalCommits = (repoState.totalCommits || 0) + 1;
+      repoState.commitsToday += 1;
+      repoState.totalCommits += 1;
     } else {
       repoState.totals.issues += 1;
     }

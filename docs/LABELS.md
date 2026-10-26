@@ -40,6 +40,19 @@ with the self-healing conflict loop:
 | `priority/medium` | `FBCA04` | Normal queue |
 | `priority/low` | `C2E0C6` | Nice to have |
 
+## quality/* — how much firepower the work deserves (human/orchestrator-assigned)
+
+Distinct from priority (urgency): quality sets the ENGINE AND EFFORT CONTRACT —
+which models run the work, how hard they think, and how many review rounds are
+expected. `quality/low` is stamped automatically on every daily-stream PR;
+humans or the orchestrator upgrade it when the work is architectural.
+
+| Label | Color | Contract |
+|---|---|---|
+| `quality/low` | `C2E0C6` | Routine automated change. Default for the daily PR stream. Single-pass diff-scoped review (Haiku small / Sol standard), standard score gate, no owner turnaround expected. |
+| `quality/mid` | `FBBC04` | Meaningful change worth closer attention. Full-strength review model regardless of diff size; owner glance before merge. |
+| `quality/high` | `5319E7` | Architectural, process, or high-stakes. Orchestrator assigns top models at max effort (Opus `ultrathink` implements, Sol `#xhigh` reviews), multi-round score-gated fix loop, explicit owner collaboration and back-and-forth expected — the label exists to aid the owner's decision-making. |
+
 ## Unnamespaced (GitHub-standard triage, kept as-is)
 
 `duplicate`, `question`, `invalid`, `help wanted`, `good first issue`, `wontfix` —
@@ -47,20 +60,38 @@ universally recognized; renaming them adds no value.
 
 ## Reusing this blueprint in a new project
 
+For a NEW repo (creates or updates every label in place — nothing to rename):
+
 ```bash
 R=<owner>/<repo>
-gh label edit ready-for-review -R $R --name status/awaiting-ai-review --color FBCA04 --description "Bot-owned: PR created, queued for automated diff review (scorecard). Next: status/ai-reviewed."
-gh label edit ai-reviewed -R $R --name status/ai-reviewed --color 1D76DB --description "Bot-owned: AI scorecard posted (verdict, mergeability, findings). Awaiting human merge decision."
-gh label edit fix-conflict -R $R --name status/conflict --color D73A4A --description "Bot-owned: merge conflict detected; automated resolution in progress (max 2 attempts/day)."
-gh label edit fixed-conflict -R $R --name status/conflict-resolved --color 0E8A16 --description "Bot-owned: conflict auto-resolved, branch merged with base; re-queuing for AI review."
-gh label edit babysit -R $R --name status/fix-round --color A62D03 --description "Bot-owned: automation is working through AI review findings on this PR; one commit per finding."
-gh label edit bug -R $R --name type/bug --color D73A4A --description "Fixes incorrect behavior — something isn't working."
-gh label edit enhancement -R $R --name type/feature --color A2EEEF --description "New feature or capability."
-gh label edit documentation -R $R --name type/docs --color 0075CA --description "Documentation improvements or additions."
-for l in "type/tests:5319E7:Test additions or improvements." "type/refactor:FEF2C0:Code restructuring with no behavior change." "type/chore:EDEDED:Maintenance — deps, tooling, config, CI." "type/security:B60205:Security-related fix or hardening." "priority/urgent:B60205:Drop everything — blocks release or a client." "priority/high:D93F0B:Important — should make the next release." "priority/medium:FBCA04:Normal queue." "priority/low:C2E0C6:Nice to have — pick up when free."; do
+for l in \
+  "status/awaiting-ai-review:FBCA04:Bot-owned: PR created, queued for automated diff review (scorecard). Next: status/ai-reviewed." \
+  "status/ai-reviewed:1D76DB:Bot-owned: AI scorecard posted (verdict, mergeability, findings). Awaiting human merge decision." \
+  "status/conflict:D73A4A:Bot-owned: merge conflict detected; automated resolution in progress (max 2 attempts/day)." \
+  "status/conflict-resolved:0E8A16:Bot-owned: conflict auto-resolved, branch merged with base; re-queuing for AI review." \
+  "status/fix-round:A62D03:Bot-owned: automation is working through AI review findings on this PR; one commit per finding." \
+  "type/bug:D73A4A:Fixes incorrect behavior — something isn't working." \
+  "type/feature:A2EEEF:New feature or capability." \
+  "type/docs:0075CA:Documentation improvements or additions." \
+  "type/tests:5319E7:Test additions or improvements." \
+  "type/refactor:FEF2C0:Code restructuring with no behavior change." \
+  "type/chore:EDEDED:Maintenance — deps, tooling, config, CI." \
+  "type/security:B60205:Security-related fix or hardening." \
+  "priority/urgent:B60205:Drop everything — blocks release or a client." \
+  "priority/high:D93F0B:Important — should make the next release." \
+  "priority/medium:FBCA04:Normal queue." \
+  "priority/low:C2E0C6:Nice to have — pick up when free." \
+  "quality/low:C2E0C6:Routine automated change; single-pass review, standard score gate. Default for daily PR stream." \
+  "quality/mid:FBBC04:Meaningful change; full-strength review model regardless of diff size." \
+  "quality/high:5319E7:Architectural or high-stakes; top model + max effort, multi-round score-gated loop."; do
   IFS=: read -r n c d <<<"$l"; gh label create "$n" -R $R --color "$c" --description "$d" --force
 done
 ```
+
+History: this repo itself was migrated from flat names (ready-for-review,
+ai-reviewed, fix-conflict, fixed-conflict, babysit) via `gh label edit --name`
+renames on 2026-10-25, which preserve existing PR associations — renames are
+the right tool only when migrating a repo that already carries the old labels.
 
 ## Change policy
 
