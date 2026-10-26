@@ -78,12 +78,26 @@ class AdvancedIssueHandler {
     return `${repo.owner}/${repo.repo}`;
   }
 
-  // Older state files keyed repositories by name only; adopt that entry if present
+  // Key of the stored entry for a repository. GitHub names are case-insensitive,
+  // so an entry recorded under other casing is the same repository and re-casing
+  // the config must not reset today's count; older state files keyed by name only
+  findRepoKey(state, repo) {
+    const key = this.getRepoKey(repo);
+    if (isPlainObject(state.repositories[key])) return key;
+    const lower = key.toLowerCase();
+    const existing = Object.keys(state.repositories)
+      .find(k => k.toLowerCase() === lower && isPlainObject(state.repositories[k]));
+    if (existing) return existing;
+    return state.repositories[repo.repo] ? repo.repo : key;
+  }
+
+  // Moves a differently keyed entry (other casing, or legacy name-only) to the configured key
   getRepoState(state, repo) {
     const key = this.getRepoKey(repo);
-    if (!state.repositories[key] && state.repositories[repo.repo]) {
-      state.repositories[key] = state.repositories[repo.repo];
-      delete state.repositories[repo.repo];
+    const existing = this.findRepoKey(state, repo);
+    if (existing !== key) {
+      state.repositories[key] = state.repositories[existing];
+      delete state.repositories[existing];
     }
     return state.repositories[key];
   }
@@ -417,7 +431,7 @@ class AdvancedIssueHandler {
     const now = Date.now();
 
     for (const repo of repositories) {
-      const repoState = state.repositories[this.getRepoKey(repo)] || state.repositories[repo.repo] || {};
+      const repoState = state.repositories[this.findRepoKey(state, repo)] || {};
       const todayState = stale ? {} : repoState;
       // The next run's reset keeps a pending interval, so it still applies
       const nextIssueTime = stale && repoState.nextIssueTime > now
