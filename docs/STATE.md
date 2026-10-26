@@ -10,7 +10,7 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
   - weekly: ISO week key `YYYY-Www`
 - Totals
   - `totals.issues`, `totals.commits`
-- Entries are keyed by `owner/repo`. GitHub names are case-insensitive, so when the configured casing changes (for example `Me/Demo` to `me/demo`), the existing entry is moved to the new key and keeps its counters instead of starting from zero.
+- Entries are keyed by `owner/repo`. GitHub names are case-insensitive, so when the configured casing changes (for example `Me/Demo` to `me/demo`), the existing entry is moved to the new key and keeps its counters instead of starting from zero. The advanced issue handler's `data/issue-state.json` does the same, so a re-cased repository keeps today's issue count, target and pending interval.
 - Backward compatibility
   - Legacy fields `lastCommitDate`, `commitsToday`, `totalCommits` are maintained. `lastCommitDate` is the timezone-local date of the most recent recorded commit (`null` until the first commit); it does not change when a new day's window opens.
 
