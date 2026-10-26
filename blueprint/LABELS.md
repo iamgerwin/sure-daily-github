@@ -227,7 +227,7 @@ reviewed once on its pre-merge code and again after Phase 2.
 
 | Loop | Budget | Reset |
 |---|---|---|
-| Review and fix (T3, T7, back to T2 to T4) | `rounds-<pr>`: every scored review is one round. Below the gate at round 10 or later, the PR goes to the human (T4) instead of another fix round. At most 9 fix rounds per PR, ever. | Never by automation: not by a fix push, a conflict repair, or push detection. A human grants a fresh budget by deleting `rounds-<pr>`. |
+| Review and fix (T3, T7, back to T2 to T4) | `rounds-<pr>`: every scored review is one round. Below the gate at round 10 or later, the PR goes to the human (T4) instead of another fix round. At most 9 review-triggered fix rounds per PR, ever. Failed fix-run attempts (T9) consume no round; they are bounded only per day (next row). | Never by automation: not by a fix push, a conflict repair, or push detection. A human grants a fresh budget by deleting `rounds-<pr>`. |
 | Fix-round attempts (T9) | 2 per PR per day, 4 engine runs per day, 1 per tick | Daily. A round that never verifies is retried every day until a human acts; this is bounded per day, not per lifetime. |
 | Conflict repair (T12, T14) | 2 attempts per PR per day | Daily |
 | Reviews (T2 to T6) | 10 per day, 2 per tick. An oversize hand-off (T5a) is not counted. | Daily |
