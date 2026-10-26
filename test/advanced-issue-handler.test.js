@@ -266,6 +266,24 @@ test('status reports today\'s progress when state is from the current day', asyn
   assert.equal(status.nextIssueTime, new Date(next).toISOString());
 });
 
+test('status reports an elapsed issue interval as Any time, matching what the next run does', async () => {
+  const { handler, created } = createHandler();
+  const elapsed = Date.now() - 60 * 1000;
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: elapsed - 60 * 60 * 1000, todayTarget: 3, nextIssueTime: elapsed }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+  assert.equal(status.nextIssueTime, 'Any time');
+
+  // The next run does not wait for it either
+  await handler.processRepositories([repo()], {}, false, config);
+  assert.equal(created.length, 1);
+});
+
 test('status does not report a previous day\'s progress as today', async () => {
   const { handler } = createHandler();
   const yesterday = Date.now() - 36 * 60 * 60 * 1000;
