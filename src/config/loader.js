@@ -291,8 +291,10 @@ class ConfigLoader {
         }
         if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
           const { min, max } = repo.intervalMinutes;
-          if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max < 1) {
-            errors.push(`Repository ${idx}: intervalMinutes must have positive numeric min and max`);
+          // The interval is rolled in whole steps from min, so fractional bounds
+          // could land past max (1.5-2 rolls 1.5 or 2.5)
+          if (!isPositiveInt(min) || !isPositiveInt(max)) {
+            errors.push(`Repository ${idx}: intervalMinutes must have positive whole-number min and max`);
           } else if (min > max) {
             errors.push(`Repository ${idx}: intervalMinutes min cannot be greater than max`);
           }
