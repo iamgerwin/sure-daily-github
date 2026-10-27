@@ -141,18 +141,25 @@ class Executor {
       
       const mode = cfg.general.mode || 'commit';
 
+      // `run` never processes a disabled repository, so listing it with a
+      // pending target would report work that will not happen; it is named
+      // separately instead. The handler is still chosen from every repository,
+      // the same way `run` chooses it.
+      const enabled = cfg.repositories.filter(repo => repo.enabled);
+      const disabled = cfg.repositories.filter(repo => !repo.enabled).map(repo => `${repo.owner}/${repo.repo}`);
+
       // Commit mode tracks progress in StateManager, not the issue state file
       if (mode !== 'issue') {
-        const status = await new CommitHandler(token).getStatus(cfg.repositories, cfg.general.timezone);
-        return { success: true, status };
+        const status = await new CommitHandler(token).getStatus(enabled, cfg.general.timezone);
+        return { success: true, status, disabled };
       }
 
       const handler = usesAdvancedIssueHandler(cfg.repositories)
         ? new AdvancedIssueHandler(token)
         : new CommitHandler(token);
 
-      const status = await handler.getStatus(cfg.repositories, cfg.general.timezone);
-      return { success: true, status };
+      const status = await handler.getStatus(enabled, cfg.general.timezone);
+      return { success: true, status, disabled };
     } catch (error) {
       logger.error('Failed to get status', { error: error.message });
       return { success: false, error: error.message };

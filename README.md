@@ -95,7 +95,8 @@ node src/cli.js run --dry-run
 # Run unit tests
 npm test
 
-# Check repository status (times shown in general.timezone)
+# Check repository status (times shown in general.timezone;
+# disabled repositories are named below the table, not listed as pending)
 node src/cli.js status
 ```
 

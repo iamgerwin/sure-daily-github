@@ -58,3 +58,33 @@ test('advanced issue-mode status shows times in general.timezone, not the host c
   assert.doesNotMatch(row, new RegExp(`${hhmm('UTC', next)} │$`));
   assert.match(output, /Last daily reset: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(Asia\/Manila\)/);
 });
+
+test('commit-mode status lists a disabled repository below the table instead of as pending', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  mode: "commit"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "active"',
+    '  - owner: "me"',
+    '    repo: "paused"',
+    '    enabled: false',
+    ''
+  ].join('\n'));
+
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  assert.ok(output.split('\n').some(line => line.startsWith('│ me/active ')), output);
+  assert.ok(!output.split('\n').some(line => line.startsWith('│ me/paused ')), output);
+  assert.match(output, /Disabled \(skipped by run\): me\/paused/);
+});
