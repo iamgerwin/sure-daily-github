@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import dotenv from 'dotenv';
+import './env.js';
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
@@ -9,9 +9,6 @@ import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
 import { MODES, DEFAULT_CAPS } from '../core/policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load environment variables
-dotenv.config();
 
 function isValidTimezone(timezone) {
   if (typeof timezone !== 'string') return false;
