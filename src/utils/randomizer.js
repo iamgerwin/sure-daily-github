@@ -58,7 +58,9 @@ class Randomizer {
         break;
       case 'daily':
       default:
-        targetRange = timeVariations.daily;
+        // Without its own daily range, fall back to issueCount like the daily
+        // cap in issue-handler checkLimits, instead of one issue per run
+        targetRange = timeVariations.daily ?? randomizationConfig.issueCount;
         break;
     }
 

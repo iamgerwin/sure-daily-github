@@ -37,8 +37,23 @@ test('validate rejects invalid intervalMinutes', () => {
   );
   assert.throws(
     () => config.validate({ repositories: [{ ...baseRepo, intervalMinutes: { min: 0, max: 30 } }] }),
-    /intervalMinutes must have positive numeric min and max/
+    /intervalMinutes must have positive whole-number min and max/
   );
+});
+
+test('validate rejects fractional or non-numeric intervalMinutes', () => {
+  for (const intervalMinutes of [{ min: 1.5, max: 2 }, { min: 30, max: 45.5 }, { min: '30', max: 60 }, 60]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, intervalMinutes }] }),
+      /intervalMinutes must have positive whole-number min and max/,
+      JSON.stringify(intervalMinutes)
+    );
+  }
+});
+
+test('validate accepts a fixed whole-number intervalMinutes', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, intervalMinutes: { min: 1, max: 1 } }] });
+  assert.deepEqual(cfg.repositories[0].intervalMinutes, { min: 1, max: 1 });
 });
 
 test('validate rejects non-array contentTemplates', () => {
@@ -607,6 +622,27 @@ test('validate keeps boolean and unset on/off flags', () => {
   assert.equal(cfg.repositories[1].enabled, true);
   assert.equal(cfg.general.dryRun, true);
   assert.equal(config.validate({ repositories: [baseRepo] }).general.dryRun, false);
+});
+
+test('validate requires GITHUB_TOKEN unless the caller opts out with requireToken: false', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  delete process.env.GITHUB_TOKEN;
+
+  assert.throws(() => config.validate({ repositories: [baseRepo] }), /GITHUB_TOKEN environment variable is required/);
+  const cfg = config.validate({ repositories: [baseRepo] }, { requireToken: false });
+  assert.equal(cfg.repositories[0].repo, 'demo');
+});
+
+test('validate still rejects a malformed GITHUB_TOKEN with requireToken: false', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  process.env.GITHUB_TOKEN = 'not-a-token';
+
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo] }, { requireToken: false }),
+    /GITHUB_TOKEN appears to be invalid format/
+  );
 });
 
 test('validate rejects a repository commitMessage that is not a string instead of failing every commit', () => {

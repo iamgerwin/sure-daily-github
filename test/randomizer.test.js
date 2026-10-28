@@ -71,6 +71,29 @@ test('getRandomCountWithTimeVariation honors hourly/daily/weekly ranges', () => 
   }
 });
 
+test('getRandomCountWithTimeVariation falls back to issueCount when daily range is missing', () => {
+  const original = randomizer.randomInt.bind(randomizer);
+  try {
+    randomizer.randomInt = (min, max) => max;
+    const cfg = {
+      enabled: true,
+      issueCount: { min: 6, max: 9 },
+      timeVariations: {
+        enabled: true,
+        hourly: { min: 1, max: 4 },
+        weekly: { min: 3, max: 40 }
+      }
+    };
+    assert.equal(randomizer.getRandomCountWithTimeVariation(cfg, 'daily'), 9);
+    assert.equal(randomizer.getRandomCountWithTimeVariation(cfg), 9);
+    // A configured daily range still wins over issueCount
+    cfg.timeVariations.daily = { min: 2, max: 5 };
+    assert.equal(randomizer.getRandomCountWithTimeVariation(cfg, 'daily'), 5);
+  } finally {
+    randomizer.randomInt = original;
+  }
+});
+
 test('selectRepositories sequential respects maxPerExecution and order', () => {
   const repos = [
     { id: 'a', enabled: true },

@@ -46,6 +46,8 @@ Set `SDG_STATE_FILE` to change where state is stored (useful for testing or cust
 export SDG_STATE_FILE=/var/lib/sure-daily-github/state.json
 ```
 
+It can also be set in `.env` (read from the working directory); a variable already set in the environment takes precedence.
+
 The advanced issue handler keeps its own file, `data/issue-state.json`; set `SDG_ISSUE_STATE_FILE` to move it:
 
 ```bash
