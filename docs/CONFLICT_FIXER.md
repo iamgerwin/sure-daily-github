@@ -124,7 +124,7 @@ Four layers stop overlapping or repeated work:
 
 1. **Run lock**: shared with `run` and the scheduler (`data/run.lock`). A second invocation exits at once with a lock-held error and does no work.
 2. **Head SHA pinning**: work is tied to the head SHA captured during the scan, and the push is fast-forward only. If someone else fixed the PR first, the push is rejected (`head-moved`) and not retried.
-3. **Attempt ledger**: `data/conflict-fixer-state.json`, overridable with `SDG_CONFLICT_FIXER_STATE_FILE`. It stores one entry per `owner/repo#number` with `headSha`, `status`, `startedAt` and `finishedAt`, written atomically before and after each attempt. Before cloning, a PR is skipped when:
+3. **Attempt ledger**: `data/conflict-fixer-state.json`, overridable with `SDG_CONFLICT_FIXER_STATE_FILE`. It stores one entry per lowercased `owner/repo#number` (so a change in the configured name's case keeps the PR's history) with `headSha`, `status`, `startedAt` and `finishedAt`, written atomically before and after each attempt. Before cloning, a PR is skipped when:
    - its entry is `in-progress` on the same SHA and younger than `attemptTtlMinutes` (default 60): reason `already-in-progress`;
    - its entry is finished (`fixed`, `needs-manual-review` or `failed`) on the same SHA and within `retryCooldownMinutes` (default 240): reason `already-attempted`.
 
