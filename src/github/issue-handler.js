@@ -79,7 +79,7 @@ class IssueHandler {
   }
 
   // Hourly/daily/weekly limits for a repo, shared by selection and creation
-  checkLimits(repoConfig, config = {}, targetCount = null) {
+  checkLimits(repoConfig, config = {}, targetCount = null, now = new Date()) {
     const { owner, repo, dailyTarget } = repoConfig;
     const timezone = config?.general?.timezone || 'UTC';
     const randomization = config?.randomization;
@@ -95,15 +95,17 @@ class IssueHandler {
     const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
     const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
 
-    return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone);
+    return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone, now);
   }
 
-  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}) {
+  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}, now = new Date()) {
     const { owner, repo } = repoConfig;
 
     try {
+      // Check, date and count the issue from the same clock reading: counting it
+      // after the API call could land a 23:59:59 issue in the next day's window
       const timezone = config?.general?.timezone || 'UTC';
-      const check = this.checkLimits(repoConfig, config, targetCount);
+      const check = this.checkLimits(repoConfig, config, targetCount, now);
       if (!check.allowed) {
         logger.info('Limit reached, skipping issue creation', { owner, repo, check });
         return { success: true, skipped: true, reason: 'limit_reached' };
@@ -115,14 +117,14 @@ class IssueHandler {
       }
 
       // Generate issue content
-      const { title, body } = this.generateIssueContent(contentTemplate, timezone);
+      const { title, body } = this.generateIssueContent(contentTemplate, timezone, now);
       const labels = repoConfig.labels || ['automated'];
 
       // Create issue
       const result = await this.createIssue(owner, repo, title, body, labels);
 
       if (result.success) {
-        state.recordAction(owner, repo, { type: 'issue', timezone });
+        state.recordAction(owner, repo, { type: 'issue', timezone, now });
         logger.info('Daily issue created', {
           owner,
           repo,
