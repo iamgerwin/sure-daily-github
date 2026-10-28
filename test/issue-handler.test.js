@@ -146,6 +146,23 @@ test('createDailyIssue passes the configured timezone to issue templates', async
   assert.equal(calls[0].title, localDate);
 });
 
+test('createDailyIssue fills ${repo} in the issue title and body', async () => {
+  const { handler, calls } = createHandler();
+
+  await handler.createDailyIssue(repoConfig('shop'), { title: 'Update for ${repo}', body: 'Repo: ${repo}, ${repo}' }, false, null, {});
+
+  assert.equal(calls[0].title, 'Update for shop');
+  assert.equal(calls[0].body, 'Repo: shop, shop');
+});
+
+test('generateIssueContent leaves ${repo} as written when no repository is given', () => {
+  const { handler } = createHandler();
+
+  const content = handler.generateIssueContent({ title: '${repo}', body: 'x' }, 'UTC', new Date());
+
+  assert.equal(content.title, '${repo}');
+});
+
 test('createDailyIssue counts an issue in the day it is dated, not the day the API call returns', async () => {
   const { handler, calls } = createHandler();
   const lastSecond = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila

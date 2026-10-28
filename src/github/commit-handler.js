@@ -25,15 +25,17 @@ class CommitHandler {
     return result;
   }
 
-  generateContent(template, timezone = 'UTC', now = new Date()) {
+  // ${repo} is filled when the repository name is given, as in commit messages
+  generateContent(template, timezone = 'UTC', now = new Date(), repo = null) {
     const { date, time, timestamp } = getTemplateDateParts(timezone, now);
 
     const content = template.body || `# Daily Update\n\nProgress update for ${date}`;
 
-    return content
+    const rendered = content
       .replace(/\$\{date\}/g, date)
       .replace(/\$\{time\}/g, time)
       .replace(/\$\{timestamp\}/g, timestamp);
+    return repo ? rendered.replace(/\$\{repo\}/g, repo) : rendered;
   }
 
   // Supports the same ${date}, ${time} and ${timestamp} placeholders as the
@@ -83,7 +85,7 @@ class CommitHandler {
         return { success: true, dryRun: true };
       }
 
-      const content = this.generateContent(contentTemplate, timezone, now);
+      const content = this.generateContent(contentTemplate, timezone, now, repo);
       const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
       const filePath = this.generateFilePath(basePath, repo, timezone, now);
 

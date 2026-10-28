@@ -25,22 +25,22 @@ class IssueHandler {
     return result;
   }
 
-  generateIssueContent(template, timezone = 'UTC', now = new Date()) {
+  // ${repo} is filled when the repository name is given, as in advanced issue mode
+  generateIssueContent(template, timezone = 'UTC', now = new Date(), repo = null) {
     const { date, time, timestamp } = getTemplateDateParts(timezone, now);
 
     const title = template.title || `Daily Update - ${date}`;
     const body = template.body || `# Daily Update\n\nAutomated update for ${date}`;
 
-    return {
-      title: title
+    const fill = text => {
+      const rendered = text
         .replace(/\$\{date\}/g, date)
         .replace(/\$\{time\}/g, time)
-        .replace(/\$\{timestamp\}/g, timestamp),
-      body: body
-        .replace(/\$\{date\}/g, date)
-        .replace(/\$\{time\}/g, time)
-        .replace(/\$\{timestamp\}/g, timestamp)
+        .replace(/\$\{timestamp\}/g, timestamp);
+      return repo ? rendered.replace(/\$\{repo\}/g, repo) : rendered;
     };
+
+    return { title: fill(title), body: fill(body) };
   }
 
   async createIssue(owner, repo, title, body, labels = []) {
@@ -117,7 +117,7 @@ class IssueHandler {
       }
 
       // Generate issue content
-      const { title, body } = this.generateIssueContent(contentTemplate, timezone, now);
+      const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
       const labels = repoConfig.labels || ['automated'];
 
       // Create issue
