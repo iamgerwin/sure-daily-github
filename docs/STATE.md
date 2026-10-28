@@ -48,6 +48,14 @@ export SDG_STATE_FILE=/var/lib/sure-daily-github/state.json
 
 It can also be set in `.env` (read from the working directory); a variable already set in the environment takes precedence.
 
+The advanced issue handler keeps its own file, `data/issue-state.json`; set `SDG_ISSUE_STATE_FILE` to move it:
+
+```bash
+export SDG_ISSUE_STATE_FILE=/var/lib/sure-daily-github/issue-state.json
+```
+
+The other commands' state files have their own overrides, documented with each command: `SDG_BABYSITTER_STATE_FILE` ([BABYSIT.md](BABYSIT.md)), `SDG_CONFLICT_FIXER_STATE_FILE` ([CONFLICT_FIXER.md](CONFLICT_FIXER.md)), and `SDG_PR_MAINT_STATE_FILE`, `SDG_PR_MAINT_LOCK_FILE` and `SDG_PR_MAINT_DECISIONS_FILE` ([PR_MAINTENANCE.md](PR_MAINTENANCE.md)).
+
 ## Concurrent Runs
 
 Every execution holds an exclusive lock file (`data/run.lock`) for its whole duration, so the scheduler service and a manual `node src/cli.js run` cannot update the state files at the same time. If another live process holds the lock, the run is skipped: `run` exits with an error that shows the holder's PID, and the scheduler logs a warning and waits for the next tick.
