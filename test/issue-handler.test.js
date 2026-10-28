@@ -220,6 +220,23 @@ test('timeVariations.daily max is the daily cap when time variations are enabled
   assert.equal(handler.checkLimits(fixedRepo('rand-daily'), config).limits.dailyMax, 2);
 });
 
+test('time variations without a daily range create issueCount issues, matching the daily cap', async () => {
+  const { handler, calls } = createHandler();
+  const config = {
+    randomization: {
+      enabled: true,
+      issueCount: { min: 3, max: 3 },
+      timeVariations: { enabled: true, weekly: { min: 10, max: 10 } }
+    }
+  };
+
+  const results = await handler.processRepositories([fixedRepo('rand-no-daily')], {}, false, config);
+
+  assert.equal(calls.length, 3);
+  assert.equal(results[0].successful, 3);
+  assert.equal(handler.checkLimits(fixedRepo('rand-no-daily'), config).limits.dailyMax, 3);
+});
+
 test('disabled randomization keeps the repository dailyTarget as the daily cap', () => {
   const { handler } = createHandler();
   const config = { randomization: { enabled: false, issueCount: { min: 5, max: 5 } } };
