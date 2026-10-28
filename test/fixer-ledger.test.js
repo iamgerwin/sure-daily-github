@@ -19,6 +19,35 @@ test('ledgerKey formats owner/repo#number', () => {
   assert.equal(KEY, 'me/demo#7');
 });
 
+test('ledgerKey ignores the case of the configured owner and repo', () => {
+  assert.equal(ledgerKey('Me', 'Demo', 7), KEY);
+});
+
+test('a finished attempt is still skipped after the configured name changes case', (t) => {
+  const { ledger } = tmpLedger(t);
+  ledger.start(ledgerKey('Me', 'Demo', 7), 'sha1', 0);
+  ledger.finish(ledgerKey('Me', 'Demo', 7), 'needs-manual-review', 0);
+
+  assert.equal(ledger.skipReason(ledgerKey('me', 'demo', 7), 'sha1', { now: MINUTE, ...windows }), 'already-attempted');
+});
+
+test('entries saved under a mixed-case key are read under the lowercase key', (t) => {
+  const { ledger } = tmpLedger(t);
+  ledger.save({
+    'Me/Demo#7': { headSha: 'sha1', status: 'failed', startedAt: 0, finishedAt: 0 },
+    'Me/Demo#9': { headSha: 'old', status: 'failed', startedAt: 0, finishedAt: 0 },
+    'me/demo#9': { headSha: 'new', status: 'fixed', startedAt: 5, finishedAt: 6 }
+  });
+
+  const entries = ledger.load();
+  assert.deepEqual(Object.keys(entries).sort(), [KEY, 'me/demo#9']);
+  assert.equal(entries['me/demo#9'].headSha, 'new', 'the latest attempt wins when two spellings collide');
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now: MINUTE, ...windows }), 'already-attempted');
+
+  ledger.finish(KEY, 'error', 2);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(ledger.filePath, 'utf8'))).sort(), [KEY, 'me/demo#9']);
+});
+
 test('FixerLedger reads its path from SDG_CONFLICT_FIXER_STATE_FILE', (t) => {
   process.env.SDG_CONFLICT_FIXER_STATE_FILE = '/tmp/custom-ledger.json';
   t.after(() => delete process.env.SDG_CONFLICT_FIXER_STATE_FILE);
@@ -94,4 +123,12 @@ test('a corrupted ledger is treated as empty', (t) => {
   fs.mkdirSync(path.dirname(ledger.filePath), { recursive: true });
   fs.writeFileSync(ledger.filePath, '{"me/demo#7": ');
   assert.deepEqual(ledger.load(), {});
+});
+
+test('a failed save removes its temp file and rethrows', (t) => {
+  const { ledger } = tmpLedger(t);
+  // A directory at the ledger path makes the rename fail after the temp file is written
+  fs.mkdirSync(ledger.filePath, { recursive: true });
+  assert.throws(() => ledger.start(KEY, 'sha1', 1000));
+  assert.deepEqual(fs.readdirSync(path.dirname(ledger.filePath)), ['state.json']);
 });

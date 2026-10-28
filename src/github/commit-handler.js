@@ -5,8 +5,9 @@ import randomizer from '../utils/randomizer.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
 
 class CommitHandler {
+  // Without a token only the local-state methods (getStatus) are usable
   constructor(token) {
-    this.client = new GitHubClient(token);
+    this.client = token ? new GitHubClient(token) : null;
   }
 
   delay(ms) {
@@ -14,6 +15,9 @@ class CommitHandler {
   }
 
   async init() {
+    if (!this.client) {
+      throw new Error('GitHub token is required');
+    }
     const result = await this.client.validate();
     if (!result.success) {
       throw new Error('GitHub authentication failed');
@@ -21,23 +25,29 @@ class CommitHandler {
     return result;
   }
 
-  generateContent(template, timezone = 'UTC', now = new Date()) {
+  // ${repo} is filled when the repository name is given, as in commit messages
+  generateContent(template, timezone = 'UTC', now = new Date(), repo = null) {
     const { date, time, timestamp } = getTemplateDateParts(timezone, now);
 
     const content = template.body || `# Daily Update\n\nProgress update for ${date}`;
 
-    return content
+    const rendered = content
       .replace(/\$\{date\}/g, date)
       .replace(/\$\{time\}/g, time)
       .replace(/\$\{timestamp\}/g, timestamp);
+    return repo ? rendered.replace(/\$\{repo\}/g, repo) : rendered;
   }
 
+  // Supports the same ${date}, ${time} and ${timestamp} placeholders as the
+  // content template, plus ${repo}
   generateCommitMessage(template, repo, timezone = 'UTC', now = new Date()) {
-    const { date } = getTemplateDateParts(timezone, now);
+    const { date, time, timestamp } = getTemplateDateParts(timezone, now);
     const message = template || `docs: daily update ${date}`;
 
     return message
       .replace(/\$\{date\}/g, date)
+      .replace(/\$\{time\}/g, time)
+      .replace(/\$\{timestamp\}/g, timestamp)
       .replace(/\$\{repo\}/g, repo);
   }
 
@@ -58,13 +68,14 @@ class CommitHandler {
     return dailyTarget || 1;
   }
 
-  async createDailyCommit(repoConfig, contentTemplate, dryRun = false, timezone = 'UTC') {
+  async createDailyCommit(repoConfig, contentTemplate, dryRun = false, timezone = 'UTC', now = new Date()) {
     const { owner, repo, branch, path: basePath, commitMessage } = repoConfig;
 
     try {
-      // Check if commit is needed
-      const target = this.resolveDailyTarget(repoConfig, timezone);
-      if (!state.isCommitNeeded(owner, repo, target, timezone)) {
+      // Check, date and count the commit from the same clock reading: counting it
+      // after the API call could land a 23:59:59 commit in the next day's window
+      const target = this.resolveDailyTarget(repoConfig, timezone, now);
+      if (!state.isCommitNeeded(owner, repo, target, timezone, now)) {
         logger.info('Daily target already met', { owner, repo, target });
         return { success: true, skipped: true, reason: 'target_met' };
       }
@@ -74,10 +85,9 @@ class CommitHandler {
         return { success: true, dryRun: true };
       }
 
-      // Generate content and commit details
-      const content = this.generateContent(contentTemplate, timezone);
-      const message = this.generateCommitMessage(commitMessage, repo, timezone);
-      const filePath = this.generateFilePath(basePath, repo, timezone);
+      const content = this.generateContent(contentTemplate, timezone, now, repo);
+      const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
+      const filePath = this.generateFilePath(basePath, repo, timezone, now);
 
       // Create commit
       const result = await this.client.createOrUpdateFile(
@@ -90,7 +100,7 @@ class CommitHandler {
       );
 
       if (result.success) {
-        state.recordCommit(owner, repo, timezone);
+        state.recordCommit(owner, repo, timezone, now);
         logger.info('Daily commit created', {
           owner,
           repo,
@@ -128,7 +138,7 @@ class CommitHandler {
       }
     }
 
-    const selected = randomizer.selectRepositories(ready, config?.repositorySelection);
+    const selected = randomizer.selectRepositories(ready, config?.repositorySelection, state, { dryRun });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });
@@ -142,7 +152,7 @@ class CommitHandler {
       strategy: config?.repositorySelection?.strategy || 'sequential'
     });
 
-    for (const repo of selected) {
+    for (const [index, repo] of selected.entries()) {
       const result = await this.createDailyCommit(repo, contentTemplate, dryRun, timezone);
       results.push({
         owner: repo.owner,
@@ -150,8 +160,11 @@ class CommitHandler {
         ...result
       });
 
-      // Small delay to avoid rate limiting
-      await this.delay(1000);
+      // Small delay to avoid rate limiting, only after a repo that called the
+      // API (not a dry run or skip) and only when another repo follows
+      if (!dryRun && !result.skipped && index < selected.length - 1) {
+        await this.delay(1000);
+      }
     }
 
     return results;

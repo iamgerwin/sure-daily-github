@@ -99,6 +99,14 @@ are found by marker (and must be authored by the token's user), then edited only
 `data/pr-maint-state.json`, the next tick costs extra reads but makes no duplicate writes. The one exception is escalation
 records, which live only in the state file in this release.
 
+**File locations.** Each pr-maint file has its own environment override:
+
+| File | Variable |
+|---|---|
+| `data/pr-maint-state.json` (ledger) | `SDG_PR_MAINT_STATE_FILE` |
+| `data/pr-maint.lock` (tick lock) | `SDG_PR_MAINT_LOCK_FILE` |
+| `data/pr-maint-decisions.jsonl` (decisions log) | `SDG_PR_MAINT_DECISIONS_FILE` |
+
 ### Label state machine
 
 Labels are created (or repaired, for the AI-owned ones) on the first `act` tick. Each of those writes is admitted like an

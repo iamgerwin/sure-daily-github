@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+// The default instance below reads SDG_STATE_FILE on import, before the config loader runs
+import '../config/env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/state.json');
@@ -20,9 +22,16 @@ export class StateManager {
       if (fs.existsSync(this.filePath)) {
         const data = fs.readFileSync(this.filePath, 'utf8');
         const parsed = JSON.parse(data);
-        // Ensure base structure
-        if (!isPlainObject(parsed) || !isPlainObject(parsed.repositories)) {
+        // Valid JSON of the wrong shape is replaced on the next save, so it is
+        // backed up like unparseable state. Only a malformed repositories
+        // section is reset; the rest (e.g. the round-robin cursor) is kept.
+        if (!isPlainObject(parsed)) {
+          this.backup('Error loading state, starting fresh: state is not a JSON object');
           return { repositories: {}, meta: { version: 2 } };
+        }
+        if (!isPlainObject(parsed.repositories)) {
+          this.backup('Error loading state, resetting repositories: section is not an object');
+          parsed.repositories = {};
         }
         // Attach meta version if missing
         if (!parsed.meta) parsed.meta = { version: 2 };
@@ -30,13 +39,16 @@ export class StateManager {
       }
     } catch (error) {
       // Graceful fallback: back up corrupted state and reinit
-      try {
-        const backup = `${this.filePath}.bak`;
-        fs.copyFileSync(this.filePath, backup);
-      } catch (_) {}
-      console.error('Error loading state, starting fresh:', error.message);
+      this.backup(`Error loading state, starting fresh: ${error.message}`);
     }
     return { repositories: {}, meta: { version: 2 } };
+  }
+
+  backup(message) {
+    try {
+      fs.copyFileSync(this.filePath, `${this.filePath}.bak`);
+    } catch (_) {}
+    console.error(message);
   }
 
   save() {
@@ -58,6 +70,17 @@ export class StateManager {
 
   getRepoState(owner, repo) {
     const key = `${owner}/${repo}`;
+    // GitHub names are case-insensitive: an entry recorded under other casing is
+    // the same repository, so re-casing the config must not reset its counters
+    if (!isPlainObject(this.state.repositories[key])) {
+      const lower = key.toLowerCase();
+      const existing = Object.keys(this.state.repositories)
+        .find(k => k.toLowerCase() === lower && isPlainObject(this.state.repositories[k]));
+      if (existing) {
+        this.state.repositories[key] = this.state.repositories[existing];
+        delete this.state.repositories[existing];
+      }
+    }
     if (!isPlainObject(this.state.repositories[key])) {
       this.state.repositories[key] = {
         // Legacy fields (kept for backward compatibility)
@@ -136,6 +159,13 @@ export class StateManager {
       if (!isCount(repoState.totals[total])) repoState.totals[total] = 0;
     }
 
+    // Legacy fields feed `status`; a string count would otherwise concatenate
+    // ("5" + 1 = "51") and a missing one would show as undefined
+    for (const legacy of ['commitsToday', 'totalCommits']) {
+      if (!isCount(repoState[legacy])) repoState[legacy] = 0;
+    }
+    if (typeof repoState.lastCommitDate !== 'string') repoState.lastCommitDate = null;
+
     return counters;
   }
 
@@ -167,13 +197,12 @@ export class StateManager {
     counters.daily.count += 1;
     counters.weekly.count += 1;
 
-    if (!repoState.totals) repoState.totals = { issues: 0, commits: 0 };
     if (type === 'commit') {
       repoState.totals.commits += 1;
       // Maintain legacy fields for backward compatibility
       repoState.lastCommitDate = counters.daily.key;
-      repoState.commitsToday = (repoState.commitsToday || 0) + 1;
-      repoState.totalCommits = (repoState.totalCommits || 0) + 1;
+      repoState.commitsToday += 1;
+      repoState.totalCommits += 1;
     } else {
       repoState.totals.issues += 1;
     }

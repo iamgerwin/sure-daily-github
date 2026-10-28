@@ -73,7 +73,7 @@ randomization:
     max: 50
 ```
 
-When randomization is enabled, it overrides individual repository `dailyTarget` ranges and uses the global `issueCount` range instead.
+When randomization is enabled, it overrides individual repository `dailyTarget` ranges and uses the global `issueCount` range instead. If `issueCount` is omitted, it defaults to `general.dailyTarget` (or 1 when that is unset).
 
 ### Time-Based Variations
 
@@ -106,6 +106,8 @@ The system automatically selects the appropriate time period based on your sched
 
 > When randomization is enabled, `issueCount` and each configured `timeVariations` period (when `timeVariations.enabled` is true) must have whole-number `min` and `max` values of at least 1, with `min` not greater than `max`. Invalid ranges are rejected when the configuration loads instead of failing partway through a run.
 
+> If `timeVariations.enabled` is true but no `daily` range is set, the per-run issue count and the daily cap both fall back to `issueCount`.
+
 ## Repository Selection Strategies
 
 Control which repositories are processed during each execution.
@@ -114,7 +116,7 @@ Control which repositories are processed during each execution.
 
 > In commit mode, selection is applied only to repositories that still need a commit today. Repositories that have reached their `dailyTarget` are reported as skipped with reason `target_met`, and ready repositories left out by the strategy are reported as skipped with reason `not_selected`.
 
-> In issue mode with range targets or `intervalMinutes` (the advanced issue handler), selection is applied only to repositories that can take an issue right now. Repositories that have reached today's target or are still waiting for their interval are skipped first, so `maxPerExecution` slots are never spent on them. Ready repositories left out by the strategy are reported as skipped with reason `Not selected this run`.
+> In issue mode with range targets or `intervalMinutes` (the advanced issue handler, chosen when at least one enabled repository has either; disabled repositories do not count), selection is applied only to repositories that can take an issue right now. Repositories that have reached today's target or are still waiting for their interval are skipped first, so `maxPerExecution` slots are never spent on them. Ready repositories left out by the strategy are reported as skipped with reason `Not selected this run`.
 
 > In issue mode with fixed targets (the simple issue handler), selection is applied only to repositories still within their hourly, daily, and weekly limits. Repositories at a limit are reported as skipped with reason `limit_reached`, and ready repositories left out by the strategy are reported as skipped with reason `not_selected`.
 
@@ -173,7 +175,7 @@ repositorySelection:
   maxPerExecution: 1  # Process one repo at a time
 ```
 
-The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories.
+The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories. A dry run (`general.dryRun` or `--dry-run`) shows which repositories would be picked but leaves the stored position alone, so the next real run picks the same ones.
 
 ## Configuration Examples
 

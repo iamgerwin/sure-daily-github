@@ -297,6 +297,12 @@ export class Babysitter {
     (this.options.exit || ((code) => process.exit(code)))(signal === 'SIGINT' ? 130 : 143);
   }
 
+  // True while a scan holds the lock, which is also while its signal handlers
+  // are installed
+  isRunning() {
+    return Boolean(this.lock);
+  }
+
   installSignalHandlers() {
     const handlers = SIGNALS.map(signal => [signal, () => { this.interrupt(signal); }]);
     handlers.forEach(([signal, handler]) => process.on(signal, handler));
@@ -822,7 +828,9 @@ export class Babysitter {
       }
     }
 
-    const changedFiles = (await git(['diff', '--name-only', headSha, finalHead])).trim().split('\n').filter(Boolean);
+    // -z lists paths verbatim; without it git C-quotes non-ASCII and special
+    // characters ("d\303\251j\303\240.md"), and those quoted names end up in replies
+    const changedFiles = (await git(['diff', '--name-only', '-z', headSha, finalHead])).split('\0').filter(Boolean);
     this.checkInterrupted();
     const fix = { ok: true, commitSha: finalHead, changedFiles };
     beforePush?.(fix);

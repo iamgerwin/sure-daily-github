@@ -58,7 +58,9 @@ class Randomizer {
         break;
       case 'daily':
       default:
-        targetRange = timeVariations.daily;
+        // Without its own daily range, fall back to issueCount like the daily
+        // cap in issue-handler checkLimits, instead of one issue per run
+        targetRange = timeVariations.daily ?? randomizationConfig.issueCount;
         break;
     }
 
@@ -85,9 +87,10 @@ class Randomizer {
   }
 
   /**
-   * Select repositories based on strategy
+   * Select repositories based on strategy. A dry run previews the round-robin
+   * pick without moving the persisted cursor, so the next real run is unchanged.
    */
-  selectRepositories(repositories, selectionConfig, cursorStore = state) {
+  selectRepositories(repositories, selectionConfig, cursorStore = state, { dryRun = false } = {}) {
     if (!repositories || repositories.length === 0) {
       return [];
     }
@@ -115,7 +118,9 @@ class Randomizer {
       case 'round-robin': {
         const startIndex = cursorStore.getRoundRobinIndex() % enabledRepos.length;
         selectedRepos = this.selectRoundRobinRepositories(enabledRepos, maxPerExecution, startIndex);
-        cursorStore.setRoundRobinIndex((startIndex + selectedRepos.length) % enabledRepos.length);
+        if (!dryRun) {
+          cursorStore.setRoundRobinIndex((startIndex + selectedRepos.length) % enabledRepos.length);
+        }
         break;
       }
 

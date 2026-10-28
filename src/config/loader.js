@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import dotenv from 'dotenv';
+import './env.js';
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
@@ -9,9 +9,6 @@ import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
 import { MODES, DEFAULT_CAPS } from '../core/policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load environment variables
-dotenv.config();
 
 function isValidTimezone(timezone) {
   if (typeof timezone !== 'string') return false;
@@ -86,6 +83,30 @@ function validateRepoPath(repoPath, label, errors) {
   } else if (String(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
     errors.push(`${label} must not contain "." or ".." segments`);
   }
+}
+
+// Template text is run through String#replace at commit/issue time, so a YAML
+// number, list or mapping would pass `validate` and then fail every run
+function validateTemplateText(value, label, errors) {
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    errors.push(`${label} must be a string`);
+  }
+}
+
+// title/body of a content template; the template itself must be a mapping
+function validateContentTemplate(template, label, errors) {
+  if (template === undefined || template === null) return;
+  if (typeof template !== 'object' || Array.isArray(template)) {
+    errors.push(`${label} must be a mapping`);
+    return;
+  }
+  validateTemplateText(template.title, `${label}.title`, errors);
+  validateTemplateText(template.body, `${label}.body`, errors);
+}
+
+// Where commands without --config read the configuration (and `init` writes it)
+export function defaultConfigPath() {
+  return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
 }
 
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
@@ -193,11 +214,10 @@ class ConfigLoader {
     this.config = null;
   }
 
-  load(configPath = null) {
+  // requireToken: false is for commands that only read local state (`status`)
+  load(configPath = null, { requireToken = true } = {}) {
     // Determine config file path
-    const filePath = configPath
-      || process.env.CONFIG_PATH
-      || path.join(__dirname, '../../config/config.yaml');
+    const filePath = configPath || defaultConfigPath();
 
     try {
       if (!fs.existsSync(filePath)) {
@@ -208,7 +228,7 @@ class ConfigLoader {
       const rawConfig = yaml.load(fileContent);
 
       // Validate and process configuration
-      this.config = this.validate(rawConfig);
+      this.config = this.validate(rawConfig, { requireToken });
 
       logger.info('Configuration loaded successfully', {
         repos: this.config.repositories.length,
@@ -222,7 +242,7 @@ class ConfigLoader {
     }
   }
 
-  validate(config) {
+  validate(config, { requireToken = true } = {}) {
     // An empty file parses to undefined and a top-level list or scalar has no
     // keys, so fail with a readable message instead of a TypeError below
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -231,10 +251,11 @@ class ConfigLoader {
 
     const errors = [];
 
-    // Validate GitHub token
+    // Validate GitHub token; a token that is set must be well-formed even when
+    // the command does not need one
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
-      errors.push('GITHUB_TOKEN environment variable is required');
+      if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
     } else if (!GITHUB_TOKEN_PREFIXES.some(prefix => token.startsWith(prefix))) {
       errors.push(`GITHUB_TOKEN appears to be invalid format (must start with ${GITHUB_TOKEN_PREFIXES.join(', ')})`);
     }
@@ -273,8 +294,10 @@ class ConfigLoader {
         }
         if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
           const { min, max } = repo.intervalMinutes;
-          if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max < 1) {
-            errors.push(`Repository ${idx}: intervalMinutes must have positive numeric min and max`);
+          // The interval is rolled in whole steps from min, so fractional bounds
+          // could land past max (1.5-2 rolls 1.5 or 2.5)
+          if (!isPositiveInt(min) || !isPositiveInt(max)) {
+            errors.push(`Repository ${idx}: intervalMinutes must have positive whole-number min and max`);
           } else if (min > max) {
             errors.push(`Repository ${idx}: intervalMinutes min cannot be greater than max`);
           }
@@ -291,6 +314,14 @@ class ConfigLoader {
         }
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
         validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
+        validateTemplateText(repo.commitMessage, `Repository ${idx}: commitMessage`, errors);
+        // A YAML-unquoted branch such as `2024` reads as a number and is
+        // stringified below; anything else is not a branch name
+        if (repo.branch !== undefined && repo.branch !== null
+          && !(typeof repo.branch === 'number' && Number.isFinite(repo.branch))
+          && (typeof repo.branch !== 'string' || !repo.branch.trim())) {
+          errors.push(`Repository ${idx}: branch must be a non-empty branch name`);
+        }
         if (repo.testCommand !== undefined && repo.testCommand !== null
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
@@ -346,11 +377,17 @@ class ConfigLoader {
       errors.push('contentTemplates must be an array');
     } else if (config.contentTemplates) {
       config.contentTemplates.forEach((template, idx) => {
+        // A bare "-" list item parses to null and would crash issue generation
+        if (template === null || template === undefined) {
+          errors.push(`contentTemplates[${idx}] must be a mapping`);
+        }
+        validateContentTemplate(template, `contentTemplates[${idx}]`, errors);
         if (template && typeof template === 'object') {
           validateLabels(template.labels, `contentTemplates[${idx}].labels`, errors);
         }
       });
     }
+    validateContentTemplate(config.contentTemplate, 'contentTemplate', errors);
 
     // Validate general settings
     const general = config.general || {};
@@ -376,15 +413,21 @@ class ConfigLoader {
       validateDailyTarget(general.dailyTarget, 'dailyTarget', errors);
     }
 
+    // Checked before the enabled branches below: a string such as "off" is
+    // truthy, so it would switch randomization or the scheduler on
+    validateBooleanFlag(config.randomization?.enabled, 'randomization.enabled', errors);
+    validateBooleanFlag(config.randomization?.timeVariations?.enabled, 'randomization.timeVariations.enabled', errors);
+    validateBooleanFlag(config.schedule?.enabled, 'schedule.enabled', errors);
+
     // Validate randomization settings; a fractional or inverted range would
     // otherwise throw from randomInt partway through an issue-mode run
-    if (config.randomization?.enabled) {
+    if (config.randomization?.enabled === true) {
       const rand = config.randomization;
-      if (rand.issueCount) {
+      if (rand.issueCount !== undefined && rand.issueCount !== null) {
         validateCountRange(rand.issueCount, 'randomization.issueCount', errors);
       }
       const timeVar = rand.timeVariations;
-      if (timeVar?.enabled) {
+      if (timeVar?.enabled === true) {
         for (const period of ['hourly', 'daily', 'weekly']) {
           if (timeVar[period] !== undefined && timeVar[period] !== null) {
             validateCountRange(timeVar[period], `randomization.timeVariations.${period}`, errors);
@@ -409,9 +452,9 @@ class ConfigLoader {
     }
 
     // Validate schedule
-    if (config.schedule?.enabled && !config.schedule.cron) {
+    if (config.schedule?.enabled === true && !config.schedule.cron) {
       errors.push('Cron expression is required when schedule is enabled');
-    } else if (config.schedule?.enabled && !cron.validate(config.schedule.cron)) {
+    } else if (config.schedule?.enabled === true && !cron.validate(config.schedule.cron)) {
       // Otherwise `validate` passes and the scheduler only throws once `start` runs
       errors.push(`schedule.cron is not a valid cron expression: ${config.schedule.cron}`);
     }
@@ -441,7 +484,12 @@ class ConfigLoader {
         mode: general.mode || 'commit',
         dryRun: general.dryRun || false
       },
-      randomization: config.randomization || {
+      // Without its own issueCount, randomization would otherwise create one
+      // issue a day per repo instead of following general.dailyTarget
+      randomization: config.randomization ? {
+        ...config.randomization,
+        issueCount: config.randomization.issueCount ?? normalizedGeneralTarget
+      } : {
         enabled: false,
         issueCount: normalizedGeneralTarget,
         timeVariations: {
@@ -464,7 +512,7 @@ class ConfigLoader {
           repo: repo.repo,
           enabled: repo.enabled !== false,
           // Unset means the repository's default branch, resolved by GitHub
-          branch: repo.branch || null,
+          branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch),
           dailyTarget: normalizeDailyTarget(repoTarget),
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',

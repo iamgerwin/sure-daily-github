@@ -71,6 +71,29 @@ test('getRandomCountWithTimeVariation honors hourly/daily/weekly ranges', () => 
   }
 });
 
+test('getRandomCountWithTimeVariation falls back to issueCount when daily range is missing', () => {
+  const original = randomizer.randomInt.bind(randomizer);
+  try {
+    randomizer.randomInt = (min, max) => max;
+    const cfg = {
+      enabled: true,
+      issueCount: { min: 6, max: 9 },
+      timeVariations: {
+        enabled: true,
+        hourly: { min: 1, max: 4 },
+        weekly: { min: 3, max: 40 }
+      }
+    };
+    assert.equal(randomizer.getRandomCountWithTimeVariation(cfg, 'daily'), 9);
+    assert.equal(randomizer.getRandomCountWithTimeVariation(cfg), 9);
+    // A configured daily range still wins over issueCount
+    cfg.timeVariations.daily = { min: 2, max: 5 };
+    assert.equal(randomizer.getRandomCountWithTimeVariation(cfg, 'daily'), 5);
+  } finally {
+    randomizer.randomInt = original;
+  }
+});
+
 test('selectRepositories sequential respects maxPerExecution and order', () => {
   const repos = [
     { id: 'a', enabled: true },
@@ -162,6 +185,18 @@ test('selectRepositories round-robin advances the cursor across runs', () => {
   assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['c', 'a']);
   assert.equal(store.index, 1);
   assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['b', 'c']);
+});
+
+test('selectRepositories round-robin dry run previews the pick without moving the cursor', () => {
+  const repos = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const store = memoryCursorStore(1);
+  const cfg = { strategy: 'round-robin', maxPerExecution: 1 };
+
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store, { dryRun: true }).map(r => r.id), ['b']);
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store, { dryRun: true }).map(r => r.id), ['b']);
+  assert.equal(store.index, 1);
+  assert.deepEqual(randomizer.selectRepositories(repos, cfg, store).map(r => r.id), ['b']);
+  assert.equal(store.index, 2);
 });
 
 test('selectRepositories round-robin wraps a stale cursor and skips disabled repos', () => {

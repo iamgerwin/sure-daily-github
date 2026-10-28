@@ -1,23 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest } from '../src/github/octokit.js';
+import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, graphqlRateLimitError } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
 
 // Serves the queued responses in order, recording each request method
-async function startServer(responses) {
+async function startServer(responses, retry = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
     requests.push(req.method);
-    const { status, headers = {} } = responses[Math.min(requests.length - 1, responses.length - 1)];
+    const { status, headers = {}, message = 'error', body } = responses[Math.min(requests.length - 1, responses.length - 1)];
     res.writeHead(status, { 'content-type': 'application/json', ...headers });
-    res.end(JSON.stringify(status < 400 ? { login: 'me' } : { message: 'error' }));
+    res.end(JSON.stringify(body ?? (status < 400 ? { login: 'me' } : { message })));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return {
     requests,
-    octokit: createOctokit({ baseUrl: `http://127.0.0.1:${port}`, retry: { baseDelayMs: 5 } }),
+    octokit: createOctokit({ baseUrl: `http://127.0.0.1:${port}`, retry: { baseDelayMs: 5, ...retry } }),
     close: () => { server.closeAllConnections(); server.close(); }
   };
 }
@@ -71,6 +71,77 @@ test('GraphQL mutations are not retried after a 5xx to avoid duplicate writes', 
   } finally {
     srv.close();
   }
+});
+
+const GRAPHQL_QUERY = 'query ($owner: String!) { repository(owner: $owner, name: "r") { id } }';
+const RATE_LIMITED = { status: 200, body: { data: null, errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] } };
+const GRAPHQL_OK = { status: 200, body: { data: { repository: { id: 'R_1' } } } };
+
+test('GraphQL queries are retried after a RATE_LIMITED response', async () => {
+  const srv = await startServer([RATE_LIMITED, GRAPHQL_OK]);
+  try {
+    const data = await srv.octokit.graphql(GRAPHQL_QUERY, { owner: 'me' });
+    assert.deepEqual(data, { repository: { id: 'R_1' } });
+    assert.deepEqual(srv.requests, ['POST', 'POST']);
+  } finally {
+    srv.close();
+  }
+});
+
+test('GraphQL mutations are retried after a RATE_LIMITED response since none ran', async () => {
+  const srv = await startServer([RATE_LIMITED, { status: 200, body: { data: { pinIssue: null } } }]);
+  try {
+    await srv.octokit.graphql('mutation ($id: ID!) { pinIssue(input: { issueId: $id }) { clientMutationId } }', { id: 'x' });
+    assert.equal(srv.requests.length, 2);
+  } finally {
+    srv.close();
+  }
+});
+
+test('GraphQL RATE_LIMITED responses reject with the GraphQL error once retries run out', async () => {
+  const srv = await startServer([RATE_LIMITED]);
+  try {
+    await assert.rejects(srv.octokit.graphql(GRAPHQL_QUERY, { owner: 'me' }), /API rate limit exceeded/);
+    assert.equal(srv.requests.length, 3); // 1 attempt + 2 default retries
+  } finally {
+    srv.close();
+  }
+});
+
+test('GraphQL RATE_LIMITED responses are not retried for a distant rate limit reset', async () => {
+  const reset = String(Math.floor(Date.now() / 1000) + 3600);
+  const srv = await startServer([
+    { ...RATE_LIMITED, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset } },
+    GRAPHQL_OK
+  ]);
+  try {
+    await assert.rejects(srv.octokit.graphql(GRAPHQL_QUERY, { owner: 'me' }), /API rate limit exceeded/);
+    assert.equal(srv.requests.length, 1);
+  } finally {
+    srv.close();
+  }
+});
+
+test('other GraphQL errors are not retried', async () => {
+  const srv = await startServer([
+    { status: 200, body: { data: null, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }] } },
+    GRAPHQL_OK
+  ]);
+  try {
+    await assert.rejects(srv.octokit.graphql(GRAPHQL_QUERY, { owner: 'me' }), /Could not resolve/);
+    assert.equal(srv.requests.length, 1);
+  } finally {
+    srv.close();
+  }
+});
+
+test('graphqlRateLimitError only flags RATE_LIMITED GraphQL responses', () => {
+  assert.equal(graphqlRateLimitError({ status: 200, data: { login: 'me' } }), null);
+  assert.equal(graphqlRateLimitError({ status: 200, data: { errors: [{ type: 'NOT_FOUND' }] } }), null);
+  assert.equal(graphqlRateLimitError(undefined), null);
+  const error = graphqlRateLimitError({ status: 200, headers: {}, data: { errors: [{ type: 'RATE_LIMITED', message: 'slow down' }] } });
+  assert.equal(error.message, 'slow down');
+  assert.equal(getRetryDelayMs(error, { method: 'POST', url: '/graphql', query: 'mutation { a }' }, 0, 10), 10);
 });
 
 test('isIdempotentRequest only treats reads as idempotent', () => {
@@ -140,6 +211,54 @@ test('getRetryDelayMs refuses to wait for a distant rate limit reset', () => {
 
 test('getRetryDelayMs treats a plain 403 as a permanent failure', () => {
   assert.equal(getRetryDelayMs({ status: 403, response: { headers: {} } }, 'GET', 0), null);
+});
+
+const SECONDARY_MESSAGE = 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.';
+
+test('getRetryDelayMs waits a minute after a secondary rate limit 403 without headers', async () => {
+  // Capture the error octokit really raises, so the message format is covered
+  const srv = await startServer([{ status: 403, message: SECONDARY_MESSAGE }], { retries: 0 });
+  try {
+    const error = await srv.octokit.request('POST /repos/{owner}/{repo}/issues', { owner: 'me', repo: 'r', title: 't' })
+      .then(() => assert.fail('expected a 403'), err => err);
+    assert.equal(error.status, 403);
+    assert.equal(getRetryDelayMs(error, 'POST', 0), SECONDARY_RATE_LIMIT_DELAY_MS);
+    assert.ok(SECONDARY_RATE_LIMIT_DELAY_MS <= MAX_RETRY_DELAY_MS);
+  } finally {
+    srv.close();
+  }
+});
+
+test('getRetryDelayMs waits a minute after a secondary rate limit 429 without headers', () => {
+  const error = { status: 429, message: SECONDARY_MESSAGE, response: { headers: {} } };
+  assert.equal(getRetryDelayMs(error, 'GET', 0), SECONDARY_RATE_LIMIT_DELAY_MS);
+  assert.equal(getRetryDelayMs({ ...error, message: 'You have triggered an abuse detection mechanism.' }, 'GET', 0), SECONDARY_RATE_LIMIT_DELAY_MS);
+});
+
+test('getRetryDelayMs prefers retry-after over the secondary rate limit default', () => {
+  const error = { status: 403, message: SECONDARY_MESSAGE, response: { headers: { 'retry-after': '3' } } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), 3000);
+});
+
+test('getRetryDelayMs ignores a distant x-ratelimit-reset on a secondary rate limit with quota left', () => {
+  const reset = String(Math.floor(Date.now() / 1000) + 3600);
+  const error = { status: 403, message: SECONDARY_MESSAGE, response: { headers: { 'x-ratelimit-remaining': '4990', 'x-ratelimit-reset': reset } } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), SECONDARY_RATE_LIMIT_DELAY_MS);
+});
+
+test('POST requests are retried after a secondary rate limit with retry-after', async () => {
+  const srv = await startServer([{ status: 403, message: SECONDARY_MESSAGE, headers: { 'retry-after': '0' } }, { status: 201 }]);
+  try {
+    await srv.octokit.request('POST /repos/{owner}/{repo}/issues', { owner: 'me', repo: 'r', title: 't' });
+    assert.deepEqual(srv.requests, ['POST', 'POST']);
+  } finally {
+    srv.close();
+  }
+});
+
+test('getRetryDelayMs still treats a 403 permission error as permanent', () => {
+  const error = { status: 403, message: 'Resource not accessible by integration', response: { headers: {} } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), null);
 });
 
 test('getRequestRetries reads GITHUB_REQUEST_RETRIES and falls back on invalid values', () => {

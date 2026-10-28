@@ -353,6 +353,27 @@ test('engine edits left uncommitted are committed by the orchestrator before the
   assert.equal(remote.remote('rev-parse', `${pr.commitSha}~1`), remote.headSha);
 });
 
+test('a fix reply without reported locations lists non-ASCII and spaced changed paths verbatim', async (t) => {
+  useTmpState(t);
+  const remote = setupRemote();
+  const { client, calls } = stubClient({ pulls: { 7: pull(remote.headSha) }, reviewComments: [inlineAlice] });
+  const { engine } = stubEngine({
+    actions: { 'review_comment:11': 'fix' },
+    implement: ({ cwd, items }) => {
+      commitFile(cwd, 'déjà vu.md', 'docs: add notes');
+      commitFile(cwd, 'tab\there.txt', 'fix: add tab file');
+      return { ok: true, report: implemented(items) };
+    }
+  });
+
+  const result = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(result.results[0].counts.addressed, 1);
+  const [reply] = calls.replies.map(r => r.body);
+  assert.ok(reply.includes('`déjà vu.md`'), reply);
+  assert.ok(reply.includes('`tab\there.txt`'), reply);
+  assert.doesNotMatch(reply, /\\303|"tab\\there/);
+});
+
 test('defer, wontfix, and note get precise replies, bots are tagged, and nothing is reprocessed', async (t) => {
   const state = useTmpState(t);
   const remote = setupRemote();

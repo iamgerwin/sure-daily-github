@@ -105,7 +105,7 @@ schedule:
 #   denylist:                  # Always skipped, in every mode
 #     - "yourusername/legacy-repo"
 #   testTimeoutMinutes: 15     # Per install/test command
-#   installDeps: true          # Run "npm ci" first when package-lock.json exists
+#   installDeps: true          # Install from the npm, pnpm, yarn or bun lockfile first
 #   scanTimeoutSeconds: 120    # Budget for listing PRs across all repos
 #                              # (incl. UNKNOWN re-polls); override per run
 #                              # with --scan-timeout <seconds>. Unscanned
@@ -144,7 +144,7 @@ repositories:
     branch: "main"
     dailyTarget: 1
     path: "daily-updates"  # For commit mode
-    commitMessage: "docs: daily update ${date}"
+    commitMessage: "docs: daily update ${date}"  # Also ${time}, ${timestamp}, ${repo}
     labels: ["automated"]  # For issue mode
     weight: 1              # For weighted selection
     # testCommand: "npm run test:unit"  # fix-conflicts and babysit test gate: overrides test detection
@@ -174,7 +174,7 @@ repositories:
 # Content Template
 # ========================================
 contentTemplate:
-  # Variables: ${date}, ${time} (in general.timezone), ${timestamp} (UTC ISO)
+  # Variables: ${date}, ${time} (in general.timezone), ${timestamp} (UTC ISO), ${repo}
   title: "Daily Update"
   body: |
     # Daily Progress - ${date}

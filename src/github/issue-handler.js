@@ -5,8 +5,9 @@ import randomizer from '../utils/randomizer.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
 
 class IssueHandler {
+  // Without a token only the local-state methods (getStatus) are usable
   constructor(token) {
-    this.client = new GitHubClient(token);
+    this.client = token ? new GitHubClient(token) : null;
   }
 
   delay(ms) {
@@ -14,6 +15,9 @@ class IssueHandler {
   }
 
   async init() {
+    if (!this.client) {
+      throw new Error('GitHub token is required');
+    }
     const result = await this.client.validate();
     if (!result.success) {
       throw new Error('GitHub authentication failed');
@@ -21,22 +25,22 @@ class IssueHandler {
     return result;
   }
 
-  generateIssueContent(template, timezone = 'UTC', now = new Date()) {
+  // ${repo} is filled when the repository name is given, as in advanced issue mode
+  generateIssueContent(template, timezone = 'UTC', now = new Date(), repo = null) {
     const { date, time, timestamp } = getTemplateDateParts(timezone, now);
 
     const title = template.title || `Daily Update - ${date}`;
     const body = template.body || `# Daily Update\n\nAutomated update for ${date}`;
 
-    return {
-      title: title
+    const fill = text => {
+      const rendered = text
         .replace(/\$\{date\}/g, date)
         .replace(/\$\{time\}/g, time)
-        .replace(/\$\{timestamp\}/g, timestamp),
-      body: body
-        .replace(/\$\{date\}/g, date)
-        .replace(/\$\{time\}/g, time)
-        .replace(/\$\{timestamp\}/g, timestamp)
+        .replace(/\$\{timestamp\}/g, timestamp);
+      return repo ? rendered.replace(/\$\{repo\}/g, repo) : rendered;
     };
+
+    return { title: fill(title), body: fill(body) };
   }
 
   async createIssue(owner, repo, title, body, labels = []) {
@@ -75,25 +79,33 @@ class IssueHandler {
   }
 
   // Hourly/daily/weekly limits for a repo, shared by selection and creation
-  checkLimits(repoConfig, config = {}, targetCount = null) {
+  checkLimits(repoConfig, config = {}, targetCount = null, now = new Date()) {
     const { owner, repo, dailyTarget } = repoConfig;
     const timezone = config?.general?.timezone || 'UTC';
-    const timeVar = config?.randomization?.timeVariations;
+    const randomization = config?.randomization;
+    const timeVar = randomization?.timeVariations;
 
-    const actualTarget = targetCount || dailyTarget;
+    // Randomization replaces the repository dailyTarget as the daily cap, so a
+    // rolled issueCount above it is not cut off after the first issue
+    const randomTarget = randomization?.enabled
+      ? (timeVar?.enabled ? timeVar.daily : null) ?? randomization.issueCount
+      : null;
+    const actualTarget = targetCount || randomTarget || dailyTarget;
     const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
     const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
     const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
 
-    return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone);
+    return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone, now);
   }
 
-  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}) {
+  async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}, now = new Date()) {
     const { owner, repo } = repoConfig;
 
     try {
+      // Check, date and count the issue from the same clock reading: counting it
+      // after the API call could land a 23:59:59 issue in the next day's window
       const timezone = config?.general?.timezone || 'UTC';
-      const check = this.checkLimits(repoConfig, config, targetCount);
+      const check = this.checkLimits(repoConfig, config, targetCount, now);
       if (!check.allowed) {
         logger.info('Limit reached, skipping issue creation', { owner, repo, check });
         return { success: true, skipped: true, reason: 'limit_reached' };
@@ -105,14 +117,14 @@ class IssueHandler {
       }
 
       // Generate issue content
-      const { title, body } = this.generateIssueContent(contentTemplate, timezone);
+      const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
       const labels = repoConfig.labels || ['automated'];
 
       // Create issue
       const result = await this.createIssue(owner, repo, title, body, labels);
 
       if (result.success) {
-        state.recordAction(owner, repo, { type: 'issue', timezone });
+        state.recordAction(owner, repo, { type: 'issue', timezone, now });
         logger.info('Daily issue created', {
           owner,
           repo,
@@ -147,8 +159,8 @@ class IssueHandler {
         break; // Stop if we hit target or encounter error
       }
 
-      // Small delay between issues to avoid rate limiting
-      if (i < count - 1) {
+      // Small delay between issues to avoid rate limiting; a dry run makes no API call
+      if (!dryRun && i < count - 1) {
         await this.delay(2000);
       }
     }
@@ -175,7 +187,7 @@ class IssueHandler {
       }
     }
 
-    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig);
+    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun });
     for (const repo of ready) {
       if (!selectedRepos.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });
@@ -189,7 +201,7 @@ class IssueHandler {
       strategy: selectionConfig.strategy
     });
 
-    for (const repo of selectedRepos) {
+    for (const [index, repo] of selectedRepos.entries()) {
       if (!repo.enabled) {
         logger.debug('Repository disabled, skipping', {
           owner: repo.owner,
@@ -219,7 +231,9 @@ class IssueHandler {
         const multiResults = await this.createMultipleIssues(repo, contentTemplate, issueCount, dryRun, config);
 
         // Aggregate results; `skipped` stays a boolean so the executor summary
-        // does not count a limit-reached repo as both skipped and failed
+        // does not count a limit-reached repo as both skipped and failed.
+        // Any failed issue fails the repo, even after earlier ones succeeded,
+        // so the run summary and exit code do not hide it.
         const successful = multiResults.filter(r => r.success && !r.skipped).length;
         const skippedCount = multiResults.filter(r => r.skipped).length;
         const failed = multiResults.filter(r => !r.success).length;
@@ -227,7 +241,7 @@ class IssueHandler {
         results.push({
           owner: repo.owner,
           repo: repo.repo,
-          success: successful > 0 || failed === 0,
+          success: failed === 0,
           skipped: successful === 0 && failed === 0 && skippedCount > 0,
           count: issueCount,
           successful,
@@ -245,8 +259,11 @@ class IssueHandler {
         });
       }
 
-      // Delay between repositories to avoid rate limiting
-      await this.delay(1000);
+      // Delay between repositories to avoid rate limiting, only after a repo
+      // that called the API and only when another repo follows
+      if (!dryRun && !results[results.length - 1].skipped && index < selectedRepos.length - 1) {
+        await this.delay(1000);
+      }
     }
 
     return results;

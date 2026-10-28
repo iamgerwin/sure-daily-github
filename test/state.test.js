@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { StateManager } from '../src/utils/state.js';
 
 function tmpStateFile(name = 'state-test.json') {
@@ -189,4 +190,51 @@ test('getDailyTarget ignores a malformed saved target', () => {
 
   const target = sm.getDailyTarget('me', 'demo', { min: 2, max: 3 }, 'UTC', now);
   assert.ok(target === 2 || target === 3);
+});
+
+test('a repository re-cased in the config keeps its counters', () => {
+  const filePath = tmpStateFile();
+  const now = new Date(Date.UTC(2025, 0, 6, 10, 0, 0));
+  const sm = new StateManager({ filePath });
+  sm.recordCommit('IamGerwin', 'Demo', 'UTC', now);
+
+  const sm2 = new StateManager({ filePath });
+  assert.equal(sm2.isCommitNeeded('iamgerwin', 'demo', 1, 'UTC', now), false);
+  assert.equal(sm2.getRepoState('iamgerwin', 'demo').totalCommits, 1);
+
+  // The entry moves to the new casing instead of being duplicated
+  sm2.recordCommit('iamgerwin', 'demo', 'UTC', now);
+  const saved = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.deepEqual(Object.keys(saved.repositories), ['iamgerwin/demo']);
+  assert.equal(saved.repositories['iamgerwin/demo'].counters.daily.count, 2);
+});
+
+test('an exact-case entry wins over a differently cased one', () => {
+  const filePath = tmpStateFile();
+  const now = new Date(Date.UTC(2025, 0, 6, 10, 0, 0));
+  const sm = new StateManager({ filePath });
+  sm.recordCommit('me', 'demo', 'UTC', now);
+  sm.state.repositories['Me/Demo'] = { counters: {}, totals: { issues: 0, commits: 0 } };
+
+  assert.equal(sm.getRepoState('me', 'demo').totalCommits, 1);
+  assert.ok(sm.state.repositories['Me/Demo']);
+});
+
+test('the default state instance honors SDG_STATE_FILE from .env, imported the way the CLI imports it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-state-env-'));
+  const stateFile = path.join(dir, 'custom-state.json');
+  fs.writeFileSync(path.join(dir, '.env'), `SDG_STATE_FILE=${stateFile}\n`);
+
+  // The CLI imports the executor (and with it the state singleton) before the config loader
+  const executorUrl = new URL('../src/core/executor.js', import.meta.url).href;
+  const stateUrl = new URL('../src/utils/state.js', import.meta.url).href;
+  const script = `await import(${JSON.stringify(executorUrl)});
+    const { default: state } = await import(${JSON.stringify(stateUrl)});
+    process.stdout.write(state.filePath);`;
+
+  const env = { ...process.env };
+  delete env.SDG_STATE_FILE;
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, env, encoding: 'utf8' });
+
+  assert.equal(output, stateFile);
 });
