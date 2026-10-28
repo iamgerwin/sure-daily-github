@@ -116,7 +116,7 @@ Control which repositories are processed during each execution.
 
 > In commit mode, selection is applied only to repositories that still need a commit today. Repositories that have reached their `dailyTarget` are reported as skipped with reason `target_met`, and ready repositories left out by the strategy are reported as skipped with reason `not_selected`.
 
-> In issue mode with range targets or `intervalMinutes` (the advanced issue handler), selection is applied only to repositories that can take an issue right now. Repositories that have reached today's target or are still waiting for their interval are skipped first, so `maxPerExecution` slots are never spent on them. Ready repositories left out by the strategy are reported as skipped with reason `Not selected this run`.
+> In issue mode with range targets or `intervalMinutes` (the advanced issue handler, chosen when at least one enabled repository has either; disabled repositories do not count), selection is applied only to repositories that can take an issue right now. Repositories that have reached today's target or are still waiting for their interval are skipped first, so `maxPerExecution` slots are never spent on them. Ready repositories left out by the strategy are reported as skipped with reason `Not selected this run`.
 
 > In issue mode with fixed targets (the simple issue handler), selection is applied only to repositories still within their hourly, daily, and weekly limits. Repositories at a limit are reported as skipped with reason `limit_reached`, and ready repositories left out by the strategy are reported as skipped with reason `not_selected`.
 

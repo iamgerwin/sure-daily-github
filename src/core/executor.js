@@ -18,10 +18,13 @@ const HOUR_MS = 60 * 60 * 1000;
 // The config loader normalizes every dailyTarget to { min, max }, so a plain
 // object check would route all issue-mode configs to the advanced handler.
 // Only per-repo intervals or a real range need its once-a-day target roll.
+// Disabled repositories are never processed, so they must not move the enabled
+// ones onto the advanced handler (and its separate issue state file).
 export function usesAdvancedIssueHandler(repositories = []) {
   return repositories.some(r =>
-    r.intervalMinutes
-    || (r.dailyTarget && typeof r.dailyTarget === 'object' && r.dailyTarget.min !== r.dailyTarget.max)
+    r.enabled !== false
+    && (r.intervalMinutes
+      || (r.dailyTarget && typeof r.dailyTarget === 'object' && r.dailyTarget.min !== r.dailyTarget.max))
   );
 }
 
