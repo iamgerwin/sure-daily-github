@@ -76,6 +76,35 @@ test('detectTestCommand installs bun dependencies from a text or binary lockfile
   }
 });
 
+test('detectTestCommand runs npm install without writing a lockfile when dependencies are declared but none is committed', (t) => {
+  const install = 'npm install --no-package-lock --no-audit --no-fund';
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    const unlocked = repoDir(t, {
+      'package.json': JSON.stringify({ name: 'x', scripts: { test: 'mocha' }, [field]: { mocha: '^10.0.0' } })
+    });
+    assert.deepEqual(detectTestCommand(unlocked), { install, test: 'npm test' }, field);
+    assert.deepEqual(detectTestCommand(unlocked, {}, { installDeps: false }), { install: null, test: 'npm test' }, field);
+    assert.deepEqual(detectTestCommand(unlocked, { testCommand: 'npx mocha' }), { install, test: 'npx mocha' }, field);
+  }
+
+  const empty = repoDir(t, {
+    'package.json': JSON.stringify({ name: 'x', scripts: { test: 'node --test' }, dependencies: {}, devDependencies: {} })
+  });
+  assert.deepEqual(detectTestCommand(empty), { install: null, test: 'npm test' });
+
+  const locked = repoDir(t, {
+    'package.json': JSON.stringify({ name: 'x', scripts: { test: 'jest' }, devDependencies: { jest: '^29.0.0' } }),
+    'yarn.lock': ''
+  });
+  assert.deepEqual(detectTestCommand(locked), { install: 'yarn install --frozen-lockfile', test: 'npm test' });
+
+  const makeOnly = repoDir(t, {
+    'package.json': JSON.stringify({ name: 'x', devDependencies: { prettier: '^3.0.0' } }),
+    Makefile: 'test:\n\techo ok\n'
+  });
+  assert.deepEqual(detectTestCommand(makeOnly), { install: null, test: 'make test' });
+});
+
 test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) => {
   const mixed = repoDir(t, {
     'package.json': pkg({ test: 'node --test' }),

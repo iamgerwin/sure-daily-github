@@ -108,6 +108,22 @@ test('createDailyCommit renders templates in the configured timezone', async () 
   assert.ok(filePath.startsWith(`daily-updates/${localDate}-`));
 });
 
+test('createDailyCommit fills ${repo} in the file content like the commit message', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.client = {
+    createOrUpdateFile: async (...args) => {
+      calls.push(args);
+      return { success: true, data: { commit: { sha: 'sha' } } };
+    }
+  };
+
+  await handler.createDailyCommit({ ...repoConfig, repo: 'content-repo' }, { body: '# ${repo}\n${repo}' }, false);
+
+  const [, , , content] = calls[0];
+  assert.equal(content, '# content-repo\ncontent-repo');
+});
+
 test('commit message renders ${time} and ${timestamp} like the content template', () => {
   const handler = new CommitHandler('ghp_test');
   const now = new Date('2026-10-14T23:30:05Z');
@@ -270,6 +286,13 @@ test('getStatus reports the same rolled target the run uses', async () => {
 
   const [status] = await handler.getStatus([ranged]);
   assert.equal(status.target, target);
+});
+
+test('a CommitHandler built without a token reports status but refuses to authenticate', async () => {
+  const handler = new CommitHandler();
+  const [status] = await handler.getStatus([{ ...repoConfig, repo: 'tokenless' }]);
+  assert.equal(status.today, 0);
+  await assert.rejects(() => handler.init(), /GitHub token is required/);
 });
 
 test('processRepositories waits between commits but not after the last repo', async () => {

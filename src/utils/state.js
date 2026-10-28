@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+// The default instance below reads SDG_STATE_FILE on import, before the config loader runs
+import '../config/env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/state.json');
