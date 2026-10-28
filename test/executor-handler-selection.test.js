@@ -38,6 +38,22 @@ test('raw, un-normalized configs are still classified correctly', () => {
   assert.equal(usesAdvancedIssueHandler([]), false);
 });
 
+test('a disabled repository with a range or interval does not select the advanced handler', () => {
+  const cfg = config.validate({
+    general: { mode: 'issue', dailyTarget: 1 },
+    repositories: [
+      { owner: 'me', repo: 'live', dailyTarget: 2 },
+      { owner: 'me', repo: 'ranged', enabled: false, dailyTarget: { min: 1, max: 4 } },
+      { owner: 'me', repo: 'spaced', enabled: false, intervalMinutes: { min: 30, max: 60 } }
+    ]
+  });
+  assert.equal(usesAdvancedIssueHandler(cfg.repositories), false);
+
+  cfg.repositories[1].enabled = true;
+  assert.equal(usesAdvancedIssueHandler(cfg.repositories), true);
+  assert.equal(usesAdvancedIssueHandler([{ enabled: false, dailyTarget: { min: 1, max: 4 } }]), false);
+});
+
 test('execute routes a loaded fixed-target issue config to IssueHandler', async (t) => {
   const calls = [];
   const stub = (Handler) => {

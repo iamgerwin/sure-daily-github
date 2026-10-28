@@ -46,6 +46,8 @@ Set `SDG_STATE_FILE` to change where state is stored (useful for testing or cust
 export SDG_STATE_FILE=/var/lib/sure-daily-github/state.json
 ```
 
+It can also be set in `.env` (read from the working directory); a variable already set in the environment takes precedence.
+
 ## Concurrent Runs
 
 Every execution holds an exclusive lock file (`data/run.lock`) for its whole duration, so the scheduler service and a manual `node src/cli.js run` cannot update the state files at the same time. If another live process holds the lock, the run is skipped: `run` exits with an error that shows the holder's PID, and the scheduler logs a warning and waits for the next tick.

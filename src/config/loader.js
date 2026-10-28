@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import dotenv from 'dotenv';
+import './env.js';
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
@@ -9,9 +9,6 @@ import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
 import { MODES, DEFAULT_CAPS } from '../core/policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load environment variables
-dotenv.config();
 
 function isValidTimezone(timezone) {
   if (typeof timezone !== 'string') return false;
@@ -213,7 +210,8 @@ class ConfigLoader {
     this.config = null;
   }
 
-  load(configPath = null) {
+  // requireToken: false is for commands that only read local state (`status`)
+  load(configPath = null, { requireToken = true } = {}) {
     // Determine config file path
     const filePath = configPath || defaultConfigPath();
 
@@ -226,7 +224,7 @@ class ConfigLoader {
       const rawConfig = yaml.load(fileContent);
 
       // Validate and process configuration
-      this.config = this.validate(rawConfig);
+      this.config = this.validate(rawConfig, { requireToken });
 
       logger.info('Configuration loaded successfully', {
         repos: this.config.repositories.length,
@@ -240,7 +238,7 @@ class ConfigLoader {
     }
   }
 
-  validate(config) {
+  validate(config, { requireToken = true } = {}) {
     // An empty file parses to undefined and a top-level list or scalar has no
     // keys, so fail with a readable message instead of a TypeError below
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -249,10 +247,11 @@ class ConfigLoader {
 
     const errors = [];
 
-    // Validate GitHub token
+    // Validate GitHub token; a token that is set must be well-formed even when
+    // the command does not need one
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
-      errors.push('GITHUB_TOKEN environment variable is required');
+      if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
     } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
       errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
     }
@@ -291,8 +290,10 @@ class ConfigLoader {
         }
         if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
           const { min, max } = repo.intervalMinutes;
-          if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max < 1) {
-            errors.push(`Repository ${idx}: intervalMinutes must have positive numeric min and max`);
+          // The interval is rolled in whole steps from min, so fractional bounds
+          // could land past max (1.5-2 rolls 1.5 or 2.5)
+          if (!isPositiveInt(min) || !isPositiveInt(max)) {
+            errors.push(`Repository ${idx}: intervalMinutes must have positive whole-number min and max`);
           } else if (min > max) {
             errors.push(`Repository ${idx}: intervalMinutes min cannot be greater than max`);
           }

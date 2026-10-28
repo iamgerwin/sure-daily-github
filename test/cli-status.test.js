@@ -88,3 +88,25 @@ test('commit-mode status lists a disabled repository below the table instead of 
   assert.ok(!output.split('\n').some(line => line.startsWith('│ me/paused ')), output);
   assert.match(output, /Disabled \(skipped by run\): me\/paused/);
 });
+
+test('commit-mode status runs without GITHUB_TOKEN because it only reads local state', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  mode: "commit"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    ''
+  ].join('\n'));
+
+  const env = { ...process.env, SDG_STATE_FILE: path.join(dir, 'state.json'), LOG_LEVEL: 'error' };
+  delete env.GITHUB_TOKEN;
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], { env, encoding: 'utf8' });
+
+  const row = output.split('\n').find(line => line.includes('me/demo'));
+  assert.ok(row, output);
+  assert.match(row, /│ +1 │ +0 │ +✗ │$/);
+});
