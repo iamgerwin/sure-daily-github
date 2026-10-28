@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import logger, { Logger, resolveLogLevel } from '../src/utils/logger.js';
+import logger, { Logger, resolveLogLevel, shouldUseColor } from '../src/utils/logger.js';
 
 function withLogLevel(value, fn) {
   const original = process.env.LOG_LEVEL;
@@ -121,6 +121,57 @@ test('unserializable meta is logged without throwing', () => {
     assert.match(lines.log[0], /circular meta \[unserializable meta: /);
     assert.match(lines.log[1], /bigint meta \[unserializable meta: /);
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('shouldUseColor colors only a terminal without NO_COLOR', () => {
+  assert.equal(shouldUseColor({ isTTY: true }, {}), true);
+  assert.equal(shouldUseColor({ isTTY: false }, {}), false);
+  assert.equal(shouldUseColor({}, {}), false);
+  assert.equal(shouldUseColor(undefined, {}), false);
+  assert.equal(shouldUseColor({ isTTY: true }, { NO_COLOR: '1' }), false);
+  // An empty NO_COLOR does not count as set
+  assert.equal(shouldUseColor({ isTTY: true }, { NO_COLOR: '' }), true);
+});
+
+test('console output carries color escapes only when color is on', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const lines = captureConsole(() => {
+      new Logger({ logDir: dir, color: false }).error('plain line');
+      new Logger({ logDir: dir, color: true }).error('colored line');
+    });
+    assert.doesNotMatch(lines.log[0], /\x1b\[/);
+    assert.match(lines.log[0], /^\[.+\] \[ERROR\] plain line$/);
+    assert.match(lines.log[1], /^\x1b\[31m.*colored line\x1b\[0m$/);
+    const [file] = fs.readdirSync(dir);
+    assert.doesNotMatch(fs.readFileSync(path.join(dir, file), 'utf8'), /\x1b\[/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('color is detected per write so NO_COLOR set after construction applies', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  const originalTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+  const originalNoColor = process.env.NO_COLOR;
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+  try {
+    delete process.env.NO_COLOR;
+    const fileLogger = new Logger({ logDir: dir });
+    const lines = captureConsole(() => {
+      fileLogger.error('before');
+      process.env.NO_COLOR = '1';
+      fileLogger.error('after');
+    });
+    assert.match(lines.log[0], /\x1b\[31m/);
+    assert.doesNotMatch(lines.log[1], /\x1b\[/);
+  } finally {
+    if (originalTTY) Object.defineProperty(process.stdout, 'isTTY', originalTTY);
+    else delete process.stdout.isTTY;
+    if (originalNoColor === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = originalNoColor;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

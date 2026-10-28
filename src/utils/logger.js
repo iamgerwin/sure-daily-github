@@ -17,12 +17,21 @@ export function resolveLogLevel(value) {
   return Object.hasOwn(LOG_LEVELS, level) ? level : 'info';
 }
 
+// Color escapes only help a terminal: under systemd, pm2, cron or a pipe they
+// land in the captured output as literal "[36m" noise. A non-empty NO_COLOR
+// (https://no-color.org) turns them off on a terminal too.
+export function shouldUseColor(stream = process.stdout, env = process.env) {
+  return Boolean(stream?.isTTY) && !env.NO_COLOR;
+}
+
 // Logging is called from inside catch blocks, so it must never throw: an
 // unwritable log directory (read-only mount, permissions, full disk) or
 // unserializable meta falls back to console-only output instead of crashing
 export class Logger {
-  constructor({ logDir = path.join(__dirname, '../../logs') } = {}) {
+  // `color` forces colored console output on or off; unset detects it per write
+  constructor({ logDir = path.join(__dirname, '../../logs'), color } = {}) {
     this.logDir = logDir;
+    this.color = color;
     this.fileErrorReported = false;
     this.ensureLogDir();
   }
@@ -80,7 +89,9 @@ export class Logger {
       debug: '\x1b[90m'
     };
     const reset = '\x1b[0m';
-    console.log(`${colors[level]}${formatted}${reset}`);
+    // Detected on every call, like the level, so NO_COLOR from .env applies
+    const color = this.color ?? shouldUseColor();
+    console.log(color ? `${colors[level]}${formatted}${reset}` : formatted);
 
     // File output
     const logFile = path.join(this.logDir, `${new Date().toISOString().split('T')[0]}.log`);
