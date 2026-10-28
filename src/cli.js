@@ -307,6 +307,10 @@ program
 
           console.log('└─────────────────────────────────┴────────┴───────┴────────┘\n');
         }
+
+        if (result.disabled?.length) {
+          console.log(`Disabled (skipped by run): ${result.disabled.join(', ')}\n`);
+        }
       } else {
         console.error('❌ Failed to get status:', result.error);
         process.exit(1);
