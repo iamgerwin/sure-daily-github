@@ -5,8 +5,9 @@ import randomizer from '../utils/randomizer.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
 
 class IssueHandler {
+  // Without a token only the local-state methods (getStatus) are usable
   constructor(token) {
-    this.client = new GitHubClient(token);
+    this.client = token ? new GitHubClient(token) : null;
   }
 
   delay(ms) {
@@ -14,6 +15,9 @@ class IssueHandler {
   }
 
   async init() {
+    if (!this.client) {
+      throw new Error('GitHub token is required');
+    }
     const result = await this.client.validate();
     if (!result.success) {
       throw new Error('GitHub authentication failed');

@@ -213,7 +213,8 @@ class ConfigLoader {
     this.config = null;
   }
 
-  load(configPath = null) {
+  // requireToken: false is for commands that only read local state (`status`)
+  load(configPath = null, { requireToken = true } = {}) {
     // Determine config file path
     const filePath = configPath || defaultConfigPath();
 
@@ -226,7 +227,7 @@ class ConfigLoader {
       const rawConfig = yaml.load(fileContent);
 
       // Validate and process configuration
-      this.config = this.validate(rawConfig);
+      this.config = this.validate(rawConfig, { requireToken });
 
       logger.info('Configuration loaded successfully', {
         repos: this.config.repositories.length,
@@ -240,7 +241,7 @@ class ConfigLoader {
     }
   }
 
-  validate(config) {
+  validate(config, { requireToken = true } = {}) {
     // An empty file parses to undefined and a top-level list or scalar has no
     // keys, so fail with a readable message instead of a TypeError below
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -249,10 +250,11 @@ class ConfigLoader {
 
     const errors = [];
 
-    // Validate GitHub token
+    // Validate GitHub token; a token that is set must be well-formed even when
+    // the command does not need one
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
-      errors.push('GITHUB_TOKEN environment variable is required');
+      if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
     } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
       errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
     }

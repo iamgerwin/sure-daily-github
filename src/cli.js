@@ -254,7 +254,7 @@ program
   .option('--config <path>', 'Path to configuration file')
   .action(async (options) => {
     try {
-      config.load(options.config);
+      config.load(options.config, { requireToken: false });
       const result = await executor.getStatus();
 
       if (result.success) {
