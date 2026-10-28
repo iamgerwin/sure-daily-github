@@ -101,3 +101,25 @@ test('advanced issue-mode status dates a next issue that falls on a later day', 
   const date = next.toISOString().slice(0, 10);
   assert.match(row, new RegExp(`${date} ${hhmm('UTC', next)} │$`));
 });
+
+test('commit-mode status runs without GITHUB_TOKEN because it only reads local state', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  mode: "commit"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    ''
+  ].join('\n'));
+
+  const env = { ...process.env, SDG_STATE_FILE: path.join(dir, 'state.json'), LOG_LEVEL: 'error' };
+  delete env.GITHUB_TOKEN;
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], { env, encoding: 'utf8' });
+
+  const row = output.split('\n').find(line => line.includes('me/demo'));
+  assert.ok(row, output);
+  assert.match(row, /│ +1 │ +0 │ +✗ │$/);
+});

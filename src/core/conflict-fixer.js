@@ -204,8 +204,10 @@ class ConflictFixer {
       if (pr !== null && pr !== undefined && repos.length !== 1) {
         throw new Error('--pr requires exactly one --repo');
       }
+      // Only plain digits: Number() would read "1e2", "0x10" or "7.0" as some
+      // other pull request number and fix that one instead
       const prNumber = pr === null || pr === undefined ? null : Number(pr);
-      if (prNumber !== null && (!Number.isSafeInteger(prNumber) || prNumber <= 0)) {
+      if (prNumber !== null && (!/^\d+$/.test(String(pr)) || !Number.isSafeInteger(prNumber) || prNumber <= 0)) {
         throw new Error('--pr must be a positive integer');
       }
       dryRun = dryRun || cfg.general?.dryRun === true;

@@ -15,8 +15,24 @@ const LEDGER_STATUS = {
   error: 'failed'
 };
 
+// Lowercased like the babysit and pr-maint ledgers: GitHub names are
+// case-insensitive, so a config spelling change must not lose the cooldown
 export function ledgerKey(owner, repo, number) {
-  return `${owner}/${repo}#${number}`;
+  return `${owner}/${repo}#${number}`.toLowerCase();
+}
+
+// Folds entries written under a mixed-case key (before keys were lowercased)
+// into the lowercase key; when two spellings collide the latest attempt wins
+function normalizeKeys(entries) {
+  const normalized = {};
+  for (const [key, entry] of Object.entries(entries)) {
+    const lower = key.toLowerCase();
+    const existing = normalized[lower];
+    if (!existing || (entry?.startedAt ?? 0) > (existing?.startedAt ?? 0)) {
+      normalized[lower] = entry;
+    }
+  }
+  return normalized;
 }
 
 // Records per-PR fix attempts keyed by head SHA so overlapping or repeated
@@ -29,7 +45,7 @@ export class FixerLedger {
   load() {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? normalizeKeys(parsed) : {};
     } catch (_) {
       return {};
     }

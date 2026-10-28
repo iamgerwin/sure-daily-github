@@ -76,6 +76,35 @@ test('detectTestCommand installs bun dependencies from a text or binary lockfile
   }
 });
 
+test('detectTestCommand runs npm install without writing a lockfile when dependencies are declared but none is committed', (t) => {
+  const install = 'npm install --no-package-lock --no-audit --no-fund';
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    const unlocked = repoDir(t, {
+      'package.json': JSON.stringify({ name: 'x', scripts: { test: 'mocha' }, [field]: { mocha: '^10.0.0' } })
+    });
+    assert.deepEqual(detectTestCommand(unlocked), { install, test: 'npm test' }, field);
+    assert.deepEqual(detectTestCommand(unlocked, {}, { installDeps: false }), { install: null, test: 'npm test' }, field);
+    assert.deepEqual(detectTestCommand(unlocked, { testCommand: 'npx mocha' }), { install, test: 'npx mocha' }, field);
+  }
+
+  const empty = repoDir(t, {
+    'package.json': JSON.stringify({ name: 'x', scripts: { test: 'node --test' }, dependencies: {}, devDependencies: {} })
+  });
+  assert.deepEqual(detectTestCommand(empty), { install: null, test: 'npm test' });
+
+  const locked = repoDir(t, {
+    'package.json': JSON.stringify({ name: 'x', scripts: { test: 'jest' }, devDependencies: { jest: '^29.0.0' } }),
+    'yarn.lock': ''
+  });
+  assert.deepEqual(detectTestCommand(locked), { install: 'yarn install --frozen-lockfile', test: 'npm test' });
+
+  const makeOnly = repoDir(t, {
+    'package.json': JSON.stringify({ name: 'x', devDependencies: { prettier: '^3.0.0' } }),
+    Makefile: 'test:\n\techo ok\n'
+  });
+  assert.deepEqual(detectTestCommand(makeOnly), { install: null, test: 'make test' });
+});
+
 test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) => {
   const mixed = repoDir(t, {
     'package.json': pkg({ test: 'node --test' }),
@@ -162,6 +191,22 @@ test('runTestCommand keeps a multibyte character split across two writes intact'
   const result = await runTestCommand(`"${process.execPath}" -e "${script}"`, { cwd: repoDir(t), env: process.env, timeoutMs: 10000 });
   assert.equal(result.code, 0);
   assert.equal(result.output, '✓\n');
+});
+
+test('runTestCommand returns when the command exits even if a background child holds its output open', async (t) => {
+  const started = Date.now();
+  const result = await runTestCommand('sleep 30 & echo done', { cwd: repoDir(t), env: process.env, timeoutMs: 20000 });
+  assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
+  assert.ok(Date.now() - started < 10000, 'resolved without waiting for the background child');
+});
+
+test('runTestCommand kills processes the command left running after it exits', async (t) => {
+  const dir = repoDir(t);
+  const marker = path.join(dir, 'leftover-ran');
+  const result = await runTestCommand(`(sleep 1; touch "${marker}") >/dev/null 2>&1 & echo done`, { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test('tailLines keeps the last lines of output', () => {

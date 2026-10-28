@@ -39,8 +39,23 @@ const LOCKFILE_INSTALLS = [
   ['bun.lockb', 'bun install --frozen-lockfile']
 ];
 
+// Many libraries do not commit a lockfile; without an install their tests run
+// against a fresh clone with no node_modules and always fail. --no-package-lock
+// keeps the install from writing a lockfile into the work tree.
+const UNLOCKED_NPM_INSTALL = 'npm install --no-package-lock --no-audit --no-fund';
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
+
+function declaresDependencies(pkg) {
+  return DEPENDENCY_FIELDS.some(field => {
+    const deps = pkg?.[field];
+    return deps && typeof deps === 'object' && Object.keys(deps).length > 0;
+  });
+}
+
 function lockfileInstall(dir) {
-  return LOCKFILE_INSTALLS.find(([file]) => fs.existsSync(path.join(dir, file)))?.[1] ?? null;
+  const locked = LOCKFILE_INSTALLS.find(([file]) => fs.existsSync(path.join(dir, file)))?.[1];
+  if (locked) return locked;
+  return declaresDependencies(readPackageJson(dir)) ? UNLOCKED_NPM_INSTALL : null;
 }
 
 // Returns { install, test } shell commands, or null when the repository has no
@@ -104,6 +119,11 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
       killGroup(child);
     }, clampTimerMs(timeoutMs));
 
+    // Once the command itself exits, anything it left running in its group
+    // (a backgrounded server or watcher) is an orphan: kill it so it cannot
+    // keep stdout open and stall 'close' until the timeout, or touch the work
+    // tree after the gate has passed
+    child.on('exit', () => killGroup(child));
     child.on('error', (error) => {
       clearTimeout(timer);
       activeChildren.delete(child);

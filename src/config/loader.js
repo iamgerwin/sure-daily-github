@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import dotenv from 'dotenv';
+import './env.js';
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
@@ -9,9 +9,6 @@ import { SOURCE_HUNK_STRATEGIES } from '../core/conflict-resolver.js';
 import { MODES, DEFAULT_CAPS } from '../core/policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load environment variables
-dotenv.config();
 
 function isValidTimezone(timezone) {
   if (typeof timezone !== 'string') return false;
@@ -82,6 +79,25 @@ function validateRepoPath(repoPath, label, errors) {
   } else if (String(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
     errors.push(`${label} must not contain "." or ".." segments`);
   }
+}
+
+// Template text is run through String#replace at commit/issue time, so a YAML
+// number, list or mapping would pass `validate` and then fail every run
+function validateTemplateText(value, label, errors) {
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    errors.push(`${label} must be a string`);
+  }
+}
+
+// title/body of a content template; the template itself must be a mapping
+function validateContentTemplate(template, label, errors) {
+  if (template === undefined || template === null) return;
+  if (typeof template !== 'object' || Array.isArray(template)) {
+    errors.push(`${label} must be a mapping`);
+    return;
+  }
+  validateTemplateText(template.title, `${label}.title`, errors);
+  validateTemplateText(template.body, `${label}.body`, errors);
 }
 
 // Where commands without --config read the configuration (and `init` writes it)
@@ -194,7 +210,8 @@ class ConfigLoader {
     this.config = null;
   }
 
-  load(configPath = null) {
+  // requireToken: false is for commands that only read local state (`status`)
+  load(configPath = null, { requireToken = true } = {}) {
     // Determine config file path
     const filePath = configPath || defaultConfigPath();
 
@@ -207,7 +224,7 @@ class ConfigLoader {
       const rawConfig = yaml.load(fileContent);
 
       // Validate and process configuration
-      this.config = this.validate(rawConfig);
+      this.config = this.validate(rawConfig, { requireToken });
 
       logger.info('Configuration loaded successfully', {
         repos: this.config.repositories.length,
@@ -221,7 +238,7 @@ class ConfigLoader {
     }
   }
 
-  validate(config) {
+  validate(config, { requireToken = true } = {}) {
     // An empty file parses to undefined and a top-level list or scalar has no
     // keys, so fail with a readable message instead of a TypeError below
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -230,10 +247,11 @@ class ConfigLoader {
 
     const errors = [];
 
-    // Validate GitHub token
+    // Validate GitHub token; a token that is set must be well-formed even when
+    // the command does not need one
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
-      errors.push('GITHUB_TOKEN environment variable is required');
+      if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
     } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
       errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
     }
@@ -272,8 +290,10 @@ class ConfigLoader {
         }
         if (repo.intervalMinutes !== undefined && repo.intervalMinutes !== null) {
           const { min, max } = repo.intervalMinutes;
-          if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max < 1) {
-            errors.push(`Repository ${idx}: intervalMinutes must have positive numeric min and max`);
+          // The interval is rolled in whole steps from min, so fractional bounds
+          // could land past max (1.5-2 rolls 1.5 or 2.5)
+          if (!isPositiveInt(min) || !isPositiveInt(max)) {
+            errors.push(`Repository ${idx}: intervalMinutes must have positive whole-number min and max`);
           } else if (min > max) {
             errors.push(`Repository ${idx}: intervalMinutes min cannot be greater than max`);
           }
@@ -290,6 +310,14 @@ class ConfigLoader {
         }
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
         validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
+        validateTemplateText(repo.commitMessage, `Repository ${idx}: commitMessage`, errors);
+        // A YAML-unquoted branch such as `2024` reads as a number and is
+        // stringified below; anything else is not a branch name
+        if (repo.branch !== undefined && repo.branch !== null
+          && !(typeof repo.branch === 'number' && Number.isFinite(repo.branch))
+          && (typeof repo.branch !== 'string' || !repo.branch.trim())) {
+          errors.push(`Repository ${idx}: branch must be a non-empty branch name`);
+        }
         if (repo.testCommand !== undefined && repo.testCommand !== null
           && (typeof repo.testCommand !== 'string' || !repo.testCommand.trim())) {
           errors.push(`Repository ${idx}: testCommand must be a non-empty string`);
@@ -345,11 +373,17 @@ class ConfigLoader {
       errors.push('contentTemplates must be an array');
     } else if (config.contentTemplates) {
       config.contentTemplates.forEach((template, idx) => {
+        // A bare "-" list item parses to null and would crash issue generation
+        if (template === null || template === undefined) {
+          errors.push(`contentTemplates[${idx}] must be a mapping`);
+        }
+        validateContentTemplate(template, `contentTemplates[${idx}]`, errors);
         if (template && typeof template === 'object') {
           validateLabels(template.labels, `contentTemplates[${idx}].labels`, errors);
         }
       });
     }
+    validateContentTemplate(config.contentTemplate, 'contentTemplate', errors);
 
     // Validate general settings
     const general = config.general || {};
@@ -474,7 +508,7 @@ class ConfigLoader {
           repo: repo.repo,
           enabled: repo.enabled !== false,
           // Unset means the repository's default branch, resolved by GitHub
-          branch: repo.branch || null,
+          branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch),
           dailyTarget: normalizeDailyTarget(repoTarget),
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',

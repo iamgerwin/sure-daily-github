@@ -95,7 +95,7 @@ node src/cli.js run --dry-run
 # Run unit tests
 npm test
 
-# Check repository status (times shown in general.timezone)
+# Check repository status (times shown in general.timezone; reads local state, no GITHUB_TOKEN needed)
 node src/cli.js status
 ```
 
@@ -121,6 +121,8 @@ sure-daily-github babysit [--dry-run] [--repo owner/repo] [--pr N]
                                     # Address review comments on PRs labeled "babysit"
 sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [--pr N]
                                     # Resolve merge conflicts on open PRs (pushes only if tests pass)
+sure-daily-github pr-maint [--mode shadow|act|autonomous] [--dry-run] [--repo owner/repo] [--pr N]
+                                    # Label, track, and report open PRs through the policy engine (never merges)
 sure-daily-github --help            # Show all commands
 ```
 
@@ -150,6 +152,15 @@ file has fewer tests than either parent. Nothing runs until a repository is
 allowed in the `conflictFixer:` block (default: empty allowlist). Runs are
 idempotent via the run lock and a per-PR head-SHA ledger. See
 [docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md).
+
+### PR Maintenance
+
+`pr-maint` runs one tick of the pull request lifecycle orchestrator: it reads
+every open PR by the configured `prMaint.authors`, decides lifecycle labels, a
+sticky status comment and a dashboard issue, and sends every write through a
+policy check (rate caps, circuit breaker). It never merges. A disabled
+`prMaint` block only runs with `--dry-run`, and a tick takes its own lock
+(`data/pr-maint.lock`). See [docs/PR_MAINTENANCE.md](./docs/PR_MAINTENANCE.md).
 
 ## VPS Deployment
 
@@ -261,6 +272,7 @@ repositorySelection:
 | `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template (`${date}`, `${time}` in `general.timezone`, `${timestamp}` UTC ISO, `${repo}`) |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
+| `intervalMinutes` | range | ❌ | Issue mode: wait a random `{ min, max }` whole number of minutes between issues (default: no wait) |
 | `weight` | number | ❌ | Positive weight for weighted selection (default: 1) |
 | `testCommand` | string | ❌ | Test command for `fix-conflicts` (overrides detection) |
 | `conflictFixer` | boolean | ❌ | Per-repo `fix-conflicts` gate override |

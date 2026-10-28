@@ -37,8 +37,23 @@ test('validate rejects invalid intervalMinutes', () => {
   );
   assert.throws(
     () => config.validate({ repositories: [{ ...baseRepo, intervalMinutes: { min: 0, max: 30 } }] }),
-    /intervalMinutes must have positive numeric min and max/
+    /intervalMinutes must have positive whole-number min and max/
   );
+});
+
+test('validate rejects fractional or non-numeric intervalMinutes', () => {
+  for (const intervalMinutes of [{ min: 1.5, max: 2 }, { min: 30, max: 45.5 }, { min: '30', max: 60 }, 60]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, intervalMinutes }] }),
+      /intervalMinutes must have positive whole-number min and max/,
+      JSON.stringify(intervalMinutes)
+    );
+  }
+});
+
+test('validate accepts a fixed whole-number intervalMinutes', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, intervalMinutes: { min: 1, max: 1 } }] });
+  assert.deepEqual(cfg.repositories[0].intervalMinutes, { min: 1, max: 1 });
 });
 
 test('validate rejects non-array contentTemplates', () => {
@@ -609,6 +624,37 @@ test('validate keeps boolean and unset on/off flags', () => {
   assert.equal(config.validate({ repositories: [baseRepo] }).general.dryRun, false);
 });
 
+test('validate requires GITHUB_TOKEN unless the caller opts out with requireToken: false', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  delete process.env.GITHUB_TOKEN;
+
+  assert.throws(() => config.validate({ repositories: [baseRepo] }), /GITHUB_TOKEN environment variable is required/);
+  const cfg = config.validate({ repositories: [baseRepo] }, { requireToken: false });
+  assert.equal(cfg.repositories[0].repo, 'demo');
+});
+
+test('validate still rejects a malformed GITHUB_TOKEN with requireToken: false', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  process.env.GITHUB_TOKEN = 'not-a-token';
+
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo] }, { requireToken: false }),
+    /GITHUB_TOKEN appears to be invalid format/
+  );
+});
+
+test('validate rejects a repository commitMessage that is not a string instead of failing every commit', () => {
+  for (const commitMessage of [2024, ['docs: a'], { text: 'docs: a' }, true]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, commitMessage }] }),
+      /Repository 0: commitMessage must be a string/,
+      `commitMessage ${JSON.stringify(commitMessage)} should be rejected`
+    );
+  }
+});
+
 test('validate rejects string on/off flags for randomization and schedule', () => {
   for (const value of ['off', 'no', 'false', 0]) {
     assert.throws(
@@ -624,6 +670,62 @@ test('validate rejects string on/off flags for randomization and schedule', () =
       /schedule\.enabled must be true or false/
     );
   }
+});
+
+test('validate keeps a string commitMessage and defaults a missing one', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, commitMessage: 'chore: ${repo} ${date}' }, { owner: 'me', repo: 'other' }] });
+  assert.equal(cfg.repositories[0].commitMessage, 'chore: ${repo} ${date}');
+  assert.equal(cfg.repositories[1].commitMessage, 'docs: daily update ${date}');
+});
+
+test('validate rejects a repository branch that is not a branch name', () => {
+  for (const branch of ['', '  ', true, ['main'], { name: 'main' }, Infinity]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, branch }] }),
+      /Repository 0: branch must be a non-empty branch name/,
+      `branch ${String(branch)} should be rejected`
+    );
+  }
+});
+
+test('validate stringifies a branch that YAML read as a number', () => {
+  const cfg = config.validate(yaml.load('repositories:\n  - owner: me\n    repo: demo\n    branch: 2024\n'));
+  assert.equal(cfg.repositories[0].branch, '2024');
+});
+
+test('validate rejects contentTemplate title or body that is not a string', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplate: { title: 2024, body: 'b' } }),
+    /contentTemplate\.title must be a string/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplate: { body: ['line'] } }),
+    /contentTemplate\.body must be a string/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplate: 'Daily Update' }),
+    /contentTemplate must be a mapping/
+  );
+});
+
+test('validate rejects contentTemplates entries with non-string text or no mapping', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplates: [{ title: 'a' }, { title: 'b', body: { text: 'x' } }] }),
+    /contentTemplates\[1\]\.body must be a string/
+  );
+  assert.throws(
+    () => config.validate(yaml.load('repositories:\n  - owner: me\n    repo: demo\ncontentTemplates:\n  - title: a\n  -\n')),
+    /contentTemplates\[1\] must be a mapping/
+  );
+});
+
+test('validate accepts string templates and keeps the default contentTemplate', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    contentTemplates: [{ title: 'Bug ${date}', body: null }]
+  });
+  assert.deepEqual(cfg.contentTemplate, { title: 'Daily Update', body: 'Progress update for ${date}' });
+  assert.equal(cfg.contentTemplates[0].title, 'Bug ${date}');
 });
 
 test('validate keeps boolean and unset randomization and schedule flags', () => {

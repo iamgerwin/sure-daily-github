@@ -95,7 +95,7 @@ With no `conflictFixer` block at all, the mode is `allowlist` and the allowlist 
 3. Run `git merge --no-ff --no-commit` with `merge.conflictStyle=diff3`. A clean merge means GitHub's status was stale (`stale-status`).
 4. For each conflicting hunk in a source file, find its lines on both sides and take the newest `git blame` committer time for each. The newer side wins. If one side deleted the hunk, that side's newest commit to the file since the merge base is used instead. With `sourceHunks` set to anything but `push`, the PR is left for review instead. Test-file hunks are merged as described in [Test files](#test-files).
 5. Commit the merge: `Merge branch '<base>' into <head>`, and pin its SHA.
-6. Run the regression gate: the repo's `testCommand`, else `npm test`, else `make test`. When `installDeps` is on, dependencies are installed first, including before a `testCommand`: `npm ci` for `package-lock.json` or `npm-shrinkwrap.json`, else `pnpm install --frozen-lockfile` for `pnpm-lock.yaml`, else `yarn install --frozen-lockfile` for `yarn.lock`, else `bun install --frozen-lockfile` for `bun.lock` or `bun.lockb`. The matching package manager must be on `PATH`.
+6. Run the regression gate: the repo's `testCommand`, else `npm test`, else `make test`. When `installDeps` is on, dependencies are installed first, including before a `testCommand`: `npm ci` for `package-lock.json` or `npm-shrinkwrap.json`, else `pnpm install --frozen-lockfile` for `pnpm-lock.yaml`, else `yarn install --frozen-lockfile` for `yarn.lock`, else `bun install --frozen-lockfile` for `bun.lock` or `bun.lockb`. With no lockfile, a `package.json` that declares `dependencies`, `devDependencies` or `optionalDependencies` gets `npm install --no-package-lock --no-audit --no-fund`, which installs without writing a lockfile into the work tree. The matching package manager must be on `PATH`. Each command runs in its own process group; when it exits, anything it left running in that group (a backgrounded server or watcher) is killed, so it cannot hold the gate open until the timeout or change the work tree after the gate.
 7. Check that `HEAD` is still the pinned merge commit and that tracked files are unchanged.
 8. Push `<merge SHA>:refs/heads/<head>` without force.
 
@@ -124,7 +124,7 @@ Four layers stop overlapping or repeated work:
 
 1. **Run lock**: shared with `run` and the scheduler (`data/run.lock`). A second invocation exits at once with a lock-held error and does no work.
 2. **Head SHA pinning**: work is tied to the head SHA captured during the scan, and the push is fast-forward only. If someone else fixed the PR first, the push is rejected (`head-moved`) and not retried.
-3. **Attempt ledger**: `data/conflict-fixer-state.json`, overridable with `SDG_CONFLICT_FIXER_STATE_FILE`. It stores one entry per `owner/repo#number` with `headSha`, `status`, `startedAt` and `finishedAt`, written atomically before and after each attempt. Before cloning, a PR is skipped when:
+3. **Attempt ledger**: `data/conflict-fixer-state.json`, overridable with `SDG_CONFLICT_FIXER_STATE_FILE`. It stores one entry per lowercased `owner/repo#number` (so a change in the configured name's case keeps the PR's history) with `headSha`, `status`, `startedAt` and `finishedAt`, written atomically before and after each attempt. Before cloning, a PR is skipped when:
    - its entry is `in-progress` on the same SHA and younger than `attemptTtlMinutes` (default 60): reason `already-in-progress`;
    - its entry is finished (`fixed`, `needs-manual-review` or `failed`) on the same SHA and within `retryCooldownMinutes` (default 240): reason `already-attempted`.
 
@@ -149,7 +149,7 @@ conflictFixer:
   allowlist: ["yourusername/web"]
   denylist: []
   testTimeoutMinutes: 15     # per install/test command
-  installDeps: true          # install from the npm, pnpm, yarn or bun lockfile first
+  installDeps: true          # install from the npm, pnpm, yarn or bun lockfile (or plain npm install without one) first
   scanTimeoutSeconds: 120
   attemptTtlMinutes: 60
   retryCooldownMinutes: 240
@@ -175,7 +175,7 @@ sure-daily-github fix-conflicts [options]
 | `--dry-run` | Resolve and test locally, but never push or write the ledger |
 | `--scan-only` | Only list conflicted PRs and gated-out repos; nothing is cloned |
 | `--repo <owner/repo>` | Only process this configured repository (repeatable; a repository named twice is processed once); filter only, never bypasses the gate |
-| `--pr <number>` | Only process this PR (a positive integer; requires exactly one `--repo`) |
+| `--pr <number>` | Only process this PR (a positive integer written as plain digits, e.g. `42`; requires exactly one `--repo`) |
 | `--scan-timeout <seconds>` | Gather-phase budget for this run (overrides `scanTimeoutSeconds`) |
 | `--config <path>` | Path to the configuration file |
 

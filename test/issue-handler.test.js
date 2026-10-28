@@ -146,6 +146,42 @@ test('createDailyIssue passes the configured timezone to issue templates', async
   assert.equal(calls[0].title, localDate);
 });
 
+test('createDailyIssue fills ${repo} in the issue title and body', async () => {
+  const { handler, calls } = createHandler();
+
+  await handler.createDailyIssue(repoConfig('shop'), { title: 'Update for ${repo}', body: 'Repo: ${repo}, ${repo}' }, false, null, {});
+
+  assert.equal(calls[0].title, 'Update for shop');
+  assert.equal(calls[0].body, 'Repo: shop, shop');
+});
+
+test('generateIssueContent leaves ${repo} as written when no repository is given', () => {
+  const { handler } = createHandler();
+
+  const content = handler.generateIssueContent({ title: '${repo}', body: 'x' }, 'UTC', new Date());
+
+  assert.equal(content.title, '${repo}');
+});
+
+test('createDailyIssue counts an issue in the day it is dated, not the day the API call returns', async () => {
+  const { handler, calls } = createHandler();
+  const lastSecond = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila
+  const nextDay = new Date('2026-10-14T16:00:01Z'); // 00:00:01 the next day
+  const target = { ...repoConfig('midnight'), dailyTarget: { min: 1, max: 1 } };
+  const config = { general: { timezone: 'Asia/Manila' } };
+
+  await handler.createDailyIssue(target, { title: '${date}' }, false, null, config, lastSecond);
+  assert.equal(calls[0].title, '2026-10-14');
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', lastSecond).daily, 1);
+
+  // The next day's limit is still open
+  const next = await handler.createDailyIssue(target, { title: '${date}' }, false, null, config, nextDay);
+  assert.equal(next.skipped, undefined);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].title, '2026-10-15');
+  assert.equal(state.getCounts('me', 'midnight', 'Asia/Manila', nextDay).daily, 1);
+});
+
 test('rate-limit delays only separate real API calls, never trail the last repo', async () => {
   const { handler, calls } = createHandler();
   const delays = [];
@@ -168,4 +204,59 @@ test('dry runs and limit-reached repos do not wait on rate-limit delays', async 
 
   assert.equal(calls.length, 0);
   assert.deepEqual(delays, []);
+});
+
+const fixedRepo = (repo) => ({ ...repoConfig(repo), dailyTarget: { min: 1, max: 1 } });
+
+test('enabled randomization issueCount replaces the repository dailyTarget as the daily cap', async () => {
+  const { handler, calls } = createHandler();
+  const config = { randomization: { enabled: true, issueCount: { min: 3, max: 3 } } };
+
+  const results = await handler.processRepositories([fixedRepo('rand-count')], {}, false, config);
+
+  assert.equal(calls.length, 3);
+  assert.equal(results[0].successful, 3);
+  assert.equal(results[0].skippedCount, 0);
+  assert.equal(handler.checkLimits(fixedRepo('rand-count'), config).allowed, false);
+});
+
+test('timeVariations.daily max is the daily cap when time variations are enabled', async () => {
+  const { handler, calls } = createHandler();
+  const config = {
+    randomization: {
+      enabled: true,
+      issueCount: { min: 1, max: 1 },
+      timeVariations: { enabled: true, daily: { min: 2, max: 2 } }
+    }
+  };
+
+  const results = await handler.processRepositories([fixedRepo('rand-daily')], {}, false, config);
+
+  assert.equal(calls.length, 2);
+  assert.equal(results[0].successful, 2);
+  assert.equal(handler.checkLimits(fixedRepo('rand-daily'), config).limits.dailyMax, 2);
+});
+
+test('time variations without a daily range create issueCount issues, matching the daily cap', async () => {
+  const { handler, calls } = createHandler();
+  const config = {
+    randomization: {
+      enabled: true,
+      issueCount: { min: 3, max: 3 },
+      timeVariations: { enabled: true, weekly: { min: 10, max: 10 } }
+    }
+  };
+
+  const results = await handler.processRepositories([fixedRepo('rand-no-daily')], {}, false, config);
+
+  assert.equal(calls.length, 3);
+  assert.equal(results[0].successful, 3);
+  assert.equal(handler.checkLimits(fixedRepo('rand-no-daily'), config).limits.dailyMax, 3);
+});
+
+test('disabled randomization keeps the repository dailyTarget as the daily cap', () => {
+  const { handler } = createHandler();
+  const config = { randomization: { enabled: false, issueCount: { min: 5, max: 5 } } };
+
+  assert.equal(handler.checkLimits(fixedRepo('rand-off'), config).limits.dailyMax, 1);
 });

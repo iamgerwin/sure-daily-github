@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { StateManager } from '../src/utils/state.js';
 
 function tmpStateFile(name = 'state-test.json') {
@@ -217,4 +218,23 @@ test('an exact-case entry wins over a differently cased one', () => {
 
   assert.equal(sm.getRepoState('me', 'demo').totalCommits, 1);
   assert.ok(sm.state.repositories['Me/Demo']);
+});
+
+test('the default state instance honors SDG_STATE_FILE from .env, imported the way the CLI imports it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-state-env-'));
+  const stateFile = path.join(dir, 'custom-state.json');
+  fs.writeFileSync(path.join(dir, '.env'), `SDG_STATE_FILE=${stateFile}\n`);
+
+  // The CLI imports the executor (and with it the state singleton) before the config loader
+  const executorUrl = new URL('../src/core/executor.js', import.meta.url).href;
+  const stateUrl = new URL('../src/utils/state.js', import.meta.url).href;
+  const script = `await import(${JSON.stringify(executorUrl)});
+    const { default: state } = await import(${JSON.stringify(stateUrl)});
+    process.stdout.write(state.filePath);`;
+
+  const env = { ...process.env };
+  delete env.SDG_STATE_FILE;
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, env, encoding: 'utf8' });
+
+  assert.equal(output, stateFile);
 });

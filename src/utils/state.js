@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+// The default instance below reads SDG_STATE_FILE on import, before the config loader runs
+import '../config/env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/state.json');
@@ -157,6 +159,13 @@ export class StateManager {
       if (!isCount(repoState.totals[total])) repoState.totals[total] = 0;
     }
 
+    // Legacy fields feed `status`; a string count would otherwise concatenate
+    // ("5" + 1 = "51") and a missing one would show as undefined
+    for (const legacy of ['commitsToday', 'totalCommits']) {
+      if (!isCount(repoState[legacy])) repoState[legacy] = 0;
+    }
+    if (typeof repoState.lastCommitDate !== 'string') repoState.lastCommitDate = null;
+
     return counters;
   }
 
@@ -188,13 +197,12 @@ export class StateManager {
     counters.daily.count += 1;
     counters.weekly.count += 1;
 
-    if (!repoState.totals) repoState.totals = { issues: 0, commits: 0 };
     if (type === 'commit') {
       repoState.totals.commits += 1;
       // Maintain legacy fields for backward compatibility
       repoState.lastCommitDate = counters.daily.key;
-      repoState.commitsToday = (repoState.commitsToday || 0) + 1;
-      repoState.totalCommits = (repoState.totalCommits || 0) + 1;
+      repoState.commitsToday += 1;
+      repoState.totalCommits += 1;
     } else {
       repoState.totals.issues += 1;
     }
