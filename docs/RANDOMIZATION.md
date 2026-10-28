@@ -106,6 +106,8 @@ The system automatically selects the appropriate time period based on your sched
 
 > When randomization is enabled, `issueCount` and each configured `timeVariations` period (when `timeVariations.enabled` is true) must have whole-number `min` and `max` values of at least 1, with `min` not greater than `max`. Invalid ranges are rejected when the configuration loads instead of failing partway through a run.
 
+> If `timeVariations.enabled` is true but no `daily` range is set, the per-run issue count and the daily cap both fall back to `issueCount`.
+
 ## Repository Selection Strategies
 
 Control which repositories are processed during each execution.

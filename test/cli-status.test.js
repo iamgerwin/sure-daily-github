@@ -58,3 +58,25 @@ test('advanced issue-mode status shows times in general.timezone, not the host c
   assert.doesNotMatch(row, new RegExp(`${hhmm('UTC', next)} │$`));
   assert.match(output, /Last daily reset: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(Asia\/Manila\)/);
 });
+
+test('commit-mode status runs without GITHUB_TOKEN because it only reads local state', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  mode: "commit"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    ''
+  ].join('\n'));
+
+  const env = { ...process.env, SDG_STATE_FILE: path.join(dir, 'state.json'), LOG_LEVEL: 'error' };
+  delete env.GITHUB_TOKEN;
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], { env, encoding: 'utf8' });
+
+  const row = output.split('\n').find(line => line.includes('me/demo'));
+  assert.ok(row, output);
+  assert.match(row, /│ +1 │ +0 │ +✗ │$/);
+});

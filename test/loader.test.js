@@ -609,6 +609,27 @@ test('validate keeps boolean and unset on/off flags', () => {
   assert.equal(config.validate({ repositories: [baseRepo] }).general.dryRun, false);
 });
 
+test('validate requires GITHUB_TOKEN unless the caller opts out with requireToken: false', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  delete process.env.GITHUB_TOKEN;
+
+  assert.throws(() => config.validate({ repositories: [baseRepo] }), /GITHUB_TOKEN environment variable is required/);
+  const cfg = config.validate({ repositories: [baseRepo] }, { requireToken: false });
+  assert.equal(cfg.repositories[0].repo, 'demo');
+});
+
+test('validate still rejects a malformed GITHUB_TOKEN with requireToken: false', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  process.env.GITHUB_TOKEN = 'not-a-token';
+
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo] }, { requireToken: false }),
+    /GITHUB_TOKEN appears to be invalid format/
+  );
+});
+
 test('validate rejects a repository commitMessage that is not a string instead of failing every commit', () => {
   for (const commitMessage of [2024, ['docs: a'], { text: 'docs: a' }, true]) {
     assert.throws(
