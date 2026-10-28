@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, graphqlRateLimitError } from '../src/github/octokit.js';
+import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
 
 // Serves the queued responses in order, recording each request method
@@ -238,6 +238,40 @@ test('getRetryDelayMs waits a minute after a secondary rate limit 429 without he
 test('getRetryDelayMs prefers retry-after over the secondary rate limit default', () => {
   const error = { status: 403, message: SECONDARY_MESSAGE, response: { headers: { 'retry-after': '3' } } };
   assert.equal(getRetryDelayMs(error, 'POST', 0), 3000);
+});
+
+test('parseRetryAfterMs reads delay-seconds and HTTP-dates', () => {
+  const now = Date.parse('Wed, 21 Oct 2026 07:28:00 GMT');
+  assert.equal(parseRetryAfterMs('3', now), 3000);
+  assert.equal(parseRetryAfterMs(' 0 ', now), 0);
+  assert.equal(parseRetryAfterMs('Wed, 21 Oct 2026 07:28:30 GMT', now), 30000);
+  assert.equal(parseRetryAfterMs('Wed, 21 Oct 2026 07:27:50 GMT', now), -10000);
+  for (const value of ['', 'soon', '1.5', '-5']) {
+    assert.ok(Number.isNaN(parseRetryAfterMs(value, now)), `expected NaN for ${JSON.stringify(value)}`);
+  }
+});
+
+test('getRetryDelayMs waits until a retry-after HTTP-date', () => {
+  const retryAt = new Date(Math.ceil(Date.now() / 1000) * 1000 + 20000).toUTCString();
+  const error = { status: 429, response: { headers: { 'retry-after': retryAt } } };
+  const delay = getRetryDelayMs(error, 'POST', 0);
+  assert.ok(delay > 15000 && delay <= 21000, `expected about 20s, got ${delay}`);
+});
+
+test('getRetryDelayMs gives up on a retry-after HTTP-date beyond the maximum delay', () => {
+  const retryAt = new Date(Date.now() + MAX_RETRY_DELAY_MS + 60000).toUTCString();
+  const error = { status: 429, response: { headers: { 'retry-after': retryAt } } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), null);
+});
+
+test('getRetryDelayMs retries at once when a retry-after HTTP-date has passed', () => {
+  const error = { status: 429, response: { headers: { 'retry-after': new Date(Date.now() - 5000).toUTCString() } } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), 0);
+});
+
+test('getRetryDelayMs falls back to the secondary rate limit wait for an unparseable retry-after', () => {
+  const error = { status: 403, message: SECONDARY_MESSAGE, response: { headers: { 'retry-after': 'soon' } } };
+  assert.equal(getRetryDelayMs(error, 'POST', 0), SECONDARY_RATE_LIMIT_DELAY_MS);
 });
 
 test('getRetryDelayMs ignores a distant x-ratelimit-reset on a secondary rate limit with quota left', () => {
