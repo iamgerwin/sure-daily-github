@@ -102,6 +102,36 @@ test('advanced issue-mode status dates a next issue that falls on a later day', 
   assert.match(row, new RegExp(`${date} ${hhmm('UTC', next)} │$`));
 });
 
+test('commit-mode status lists a disabled repository below the table instead of as pending', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  mode: "commit"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "active"',
+    '  - owner: "me"',
+    '    repo: "paused"',
+    '    enabled: false',
+    ''
+  ].join('\n'));
+
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  assert.ok(output.split('\n').some(line => line.startsWith('│ me/active ')), output);
+  assert.ok(!output.split('\n').some(line => line.startsWith('│ me/paused ')), output);
+  assert.match(output, /Disabled \(skipped by run\): me\/paused/);
+});
+
 test('commit-mode status runs without GITHUB_TOKEN because it only reads local state', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
   const configFile = path.join(dir, 'config.yaml');

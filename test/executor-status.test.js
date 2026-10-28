@@ -38,3 +38,44 @@ test('getStatus in simple issue mode reports issues created today in the configu
   assert.equal(after.today, 2);
   assert.equal(after.needsCommit, false);
 });
+
+test('getStatus leaves disabled repositories out of the commit-mode table and names them separately', async () => {
+  config.config = {
+    general: { mode: 'commit', timezone: 'UTC', dryRun: false },
+    repositories: [
+      { owner: 'me', repo: 'active', enabled: true, dailyTarget: 1 },
+      { owner: 'me', repo: 'paused', enabled: false, dailyTarget: 1 }
+    ]
+  };
+
+  const result = await executor.getStatus();
+  assert.equal(result.success, true);
+  assert.deepEqual(result.status.map(s => `${s.owner}/${s.repo}`), ['me/active']);
+  assert.deepEqual(result.disabled, ['me/paused']);
+});
+
+test('getStatus leaves disabled repositories out of advanced issue-mode status', async () => {
+  process.env.SDG_ISSUE_STATE_FILE = path.join(stateDir, 'issue-state.json');
+  config.config = {
+    general: { mode: 'issue', timezone: 'UTC', dryRun: false },
+    repositories: [
+      { owner: 'me', repo: 'active', enabled: true, dailyTarget: { min: 1, max: 3 } },
+      { owner: 'me', repo: 'paused', enabled: false, dailyTarget: { min: 1, max: 3 }, intervalMinutes: 60 }
+    ]
+  };
+
+  const result = await executor.getStatus();
+  assert.equal(result.success, true);
+  assert.deepEqual(result.status.repositories.map(s => s.repo), ['me/active']);
+  assert.deepEqual(result.disabled, ['me/paused']);
+});
+
+test('getStatus reports no disabled repositories when all are enabled', async () => {
+  config.config = {
+    general: { mode: 'commit', timezone: 'UTC', dryRun: false },
+    repositories: [{ owner: 'me', repo: 'active', enabled: true, dailyTarget: 1 }]
+  };
+
+  const result = await executor.getStatus();
+  assert.deepEqual(result.disabled, []);
+});
