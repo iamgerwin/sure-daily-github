@@ -272,6 +272,7 @@ repositorySelection:
 | `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template (`${date}`, `${time}` in `general.timezone`, `${timestamp}` UTC ISO, `${repo}`) |
 | `labels` | array | ❌ | Labels to apply (issue mode) |
+| `intervalMinutes` | range | ❌ | Issue mode: wait a random `{ min, max }` whole number of minutes between issues (default: no wait) |
 | `weight` | number | ❌ | Positive weight for weighted selection (default: 1) |
 | `testCommand` | string | ❌ | Test command for `fix-conflicts` (overrides detection) |
 | `conflictFixer` | boolean | ❌ | Per-repo `fix-conflicts` gate override |

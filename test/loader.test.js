@@ -37,8 +37,23 @@ test('validate rejects invalid intervalMinutes', () => {
   );
   assert.throws(
     () => config.validate({ repositories: [{ ...baseRepo, intervalMinutes: { min: 0, max: 30 } }] }),
-    /intervalMinutes must have positive numeric min and max/
+    /intervalMinutes must have positive whole-number min and max/
   );
+});
+
+test('validate rejects fractional or non-numeric intervalMinutes', () => {
+  for (const intervalMinutes of [{ min: 1.5, max: 2 }, { min: 30, max: 45.5 }, { min: '30', max: 60 }, 60]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, intervalMinutes }] }),
+      /intervalMinutes must have positive whole-number min and max/,
+      JSON.stringify(intervalMinutes)
+    );
+  }
+});
+
+test('validate accepts a fixed whole-number intervalMinutes', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, intervalMinutes: { min: 1, max: 1 } }] });
+  assert.deepEqual(cfg.repositories[0].intervalMinutes, { min: 1, max: 1 });
 });
 
 test('validate rejects non-array contentTemplates', () => {
