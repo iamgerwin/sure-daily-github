@@ -9,7 +9,7 @@ import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
 import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
-import { getTemplateDateParts } from './utils/template-date.js';
+import { getTemplateDateParts, formatNextIssueTime } from './utils/template-date.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -275,7 +275,7 @@ program
             let nextIssue = 'Any time';
             
             if (repo.nextIssueTime && repo.nextIssueTime !== 'Any time') {
-              nextIssue = getTemplateDateParts(timezone, new Date(repo.nextIssueTime)).time.slice(0, 5);
+              nextIssue = formatNextIssueTime(timezone, new Date(repo.nextIssueTime));
             }
             
             nextIssue = nextIssue.padStart(20);
