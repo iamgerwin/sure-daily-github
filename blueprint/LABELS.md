@@ -76,13 +76,13 @@ and the hand-off comment on the PR says why.
 | Routine | Schedule | Selects | Sets | Removes | State it writes |
 |---|---|---|---|---|---|
 | Creation, `sdg-autopr.sh` | `0,30 * * * *` | Due slots of the daily plan | `status/awaiting-ai-review`, `quality/low` on the new PR | Nothing | `run.log`, cooldown and breaker files |
-| Conflict repair Phase 0, `sdg-conflict-patrol.sh` | `5,35 * * * *` | Open PRs assigned to the owner, `CONFLICTING`, without `status/conflict` or `status/conflict-resolved` | `status/conflict` | Nothing (the previous lifecycle label stays) | None |
+| Conflict repair Phase 0, `sdg-conflict-patrol.sh` | `5,35 * * * *` | Open PRs assigned to the owner, `CONFLICTING`, without `status/conflict` or `status/conflict-resolved` | `status/conflict` | `status/awaiting-ai-review` (a `status/ai-reviewed` or `status/fix-round` stays) | None |
 | Conflict repair Phase 1 | same tick | PRs labeled `status/conflict` | `status/conflict-resolved` | `status/conflict` | `conflict-patrol/pr-<n>/{date,attempts}` |
 | Conflict repair Phase 2 | same tick | PRs labeled `status/conflict-resolved` | `status/awaiting-ai-review` | `status/conflict-resolved` (a leftover lifecycle label stays) | Deletes `autoreview/done-<pr>`. Keeps `rounds-<pr>`. |
 | Conflict repair Phase 3 (label reconciler) | same tick | Open `auto-pr/*` PRs with no `status/*` label at all; separately, PRs labeled `status/fix-round` with no findings file | `status/fix-round` if `autoreview/findings-<pr>.json` exists, otherwise `status/awaiting-ai-review`. `status/fix-round` without a findings file: nothing, an alert line only. | Nothing | None. Reads `autoreview/findings-<pr>.json`. |
 | Fix rounds, `sdg-fixround.sh` | `10,40 * * * *` | Open `auto-pr/*` PRs labeled `status/fix-round` without `status/conflict`, `status/conflict-resolved`, or `status/awaiting-ai-review`, that have a findings file | `status/awaiting-ai-review` | `status/fix-round` | Deletes `autoreview/done-<pr>`. Writes `autoreview/fixround/` counters, attempt ledgers, transcripts. |
 | Review Phase 0 (push detection), `sdg-autoreview.sh` | `20,50 * * * *` | Open `auto-pr/*` PRs labeled `status/ai-reviewed` without any other lifecycle label, whose ledger records a head SHA different from the current head | `status/awaiting-ai-review` | `status/ai-reviewed` | Deletes `autoreview/done-<pr>` |
-| Review main pass | same tick | Open `auto-pr/*` PRs labeled `status/awaiting-ai-review` | `status/ai-reviewed` or `status/fix-round` | `status/awaiting-ai-review`, plus `status/fix-round` (pass, cap, oversize hand-off) or `status/ai-reviewed` (fix) | `done-<pr>`, `rounds-<pr>`, `findings-<pr>.json`, `count-<date>` |
+| Review main pass | same tick | Open `auto-pr/*` PRs labeled `status/awaiting-ai-review` without `status/conflict`, `status/conflict-resolved`, or `status/fix-round` | `status/ai-reviewed` or `status/fix-round` | `status/awaiting-ai-review`, plus `status/fix-round` (pass, cap, oversize hand-off) or `status/ai-reviewed` (fix) | `done-<pr>`, `rounds-<pr>`, `findings-<pr>.json`, `count-<date>` |
 | Watchdog, `claude-watchdog.sh` | `25,55 * * * *` | Nothing | Nothing | Nothing | None |
 | Human owner | any time | Any PR | `type/*`, `priority/*`, `quality/*`; merges or closes | `quality/low` when upgrading | May delete `rounds-<pr>` to grant a fresh round budget |
 
@@ -97,9 +97,11 @@ labels get lost. It catches only one kind of drift: an open `auto-pr/*` PR
 with no `status/*` label. It does not fix stacked labels or wrong labels.
 A `status/fix-round` with no findings file is how a manual or session fix
 round looks, so the reconciler reports it and leaves it alone. That alert
-repeats on every patrol tick until the PR leaves `status/fix-round` or is
-closed. Phase 3 runs inside the patrol, so it is skipped
-on a tick where the patrol cannot take the repo lock.
+is posted once per PR (marker `conflict-patrol/alerted-nofindings-<pr>`);
+the marker is cleared when a findings file appears for the PR. An earlier
+version repeated the alert on every patrol tick. Phase 3 runs inside the
+patrol, so it is skipped on a tick where the patrol cannot take the repo
+lock.
 
 ## 4. Transitions
 
@@ -124,25 +126,25 @@ the highest one.
 | # | From | To | Routine | Trigger | Guards | Side effects |
 |---|---|---|---|---|---|---|
 | T1 | (new PR) | `status/awaiting-ai-review` | Creation | A due slot of the daily plan; the engine opens the PR | Daily plan (3 to 10), 40-minute cooldown, window until 22:30, backlog gate (30 open), circuit breaker (3 failures), run lock and repo lock | `quality/low` stamped by the engine as instructed in the creation prompt; the script does not verify the labels |
-| T2 | `status/awaiting-ai-review` | `status/ai-reviewed` | Review | Pass: score at least 8 | Kill switch `review-off`, run lock, 10 reviews per day, 2 per tick, diff within the tier line cap, diff truncated to the tier input cap, no ledger entry for the current head SHA | Scorecard comment, score appended to `rounds-<pr>`, `findings-<pr>.json` deleted, ledger `<date> <verdict> <score> <sha>` |
+| T2 | `status/awaiting-ai-review` | `status/ai-reviewed` | Review | Pass: score at least 8 | Kill switch `review-off`, run lock, 20 reviews per day (`SDG_REVIEW_MAX_DAY`; one "day budget spent" channel line per day when it runs out), 2 per tick, diff within the tier line cap, diff truncated to the tier input cap, no ledger entry for the current head SHA. The main query skips PRs that also carry `status/conflict`, `status/conflict-resolved`, or `status/fix-round`: a conflicting PR is not reviewed, because conflict repair is about to rewrite its diff. A Claude review (Haiku, or the Claude fallback) runs on `openai/gpt-6.1-sol` instead while the Claude quota guard is blocked (`blueprint/README.md` section 2). | Scorecard comment, score appended to `rounds-<pr>`, `findings-<pr>.json` deleted, ledger `<date> <verdict> <score> <sha>` |
 | T3 | `status/awaiting-ai-review` | `status/fix-round` | Review | Fix: score below 8 and round below 10 | As T2 | Scorecard comment ("automated fix round queued"), round appended, `findings-<pr>.json` written with findings, score, summary, round, threshold, and reviewed head SHA, ledger written |
 | T4 | `status/awaiting-ai-review` | `status/ai-reviewed` | Review | Cap: score below 8 at round 10 or later | As T2 | Scorecard comment, plus a second comment "score-gate cap reached after N rounds ... human review required"; round appended, findings file deleted, ledger written |
 | T5a | `status/awaiting-ai-review` | `status/ai-reviewed` (oversize hand-off) | Review | Diff (additions plus deletions) over the line cap of the PR's quality tier: 4,000 for `quality/high`, 1,600 for `quality/mid`, 800 otherwise | Kill switch, run lock, no ledger entry for the current head SHA. Runs only while the tick and day budgets have room, but the hand-off spends no engine run and is not counted against them. | No engine run, no scorecard. PR comment: "Automated review skipped: N diff lines exceeds the size cap for its quality tier (CAP). No scorecard — human review required; the label is now `status/ai-reviewed` as your cue." Label changed as for a pass (removes `status/awaiting-ai-review` and `status/fix-round`). Ledger `<date> skipped-size`, with no SHA. No round consumed. Push detection skips the PR from then on (no SHA), so later pushes are not re-queued. Neither the comment nor the relabel result is checked: if the relabel fails, the ledger entry is still written and the PR stays at `status/awaiting-ai-review` in manual review, as under T5b. |
-| T5b | `status/awaiting-ai-review` | unchanged (manual review) | Review | No engine (fallback included) returned a parsable findings list | As T2 | Ledger `<date> failed`, with no SHA. No relabel, no scorecard, no round consumed. One "auto-review failed ... review manually" channel line. The cron reviewer and push detection leave the PR alone from then on; the owner reviews it by hand. Unparseable output never counts as a pass. |
+| T5b | `status/awaiting-ai-review` | unchanged (manual review) | Review | No engine (fallback included) returned a parsable findings list. This includes an OpenCode run that fails while the Claude quota guard is blocked: the Claude fallback is then skipped, and the review takes this path. It is not retried on the next tick, even though the script's log line says "deferred to next tick". | As T2 | Ledger `<date> failed`, with no SHA. No relabel, no scorecard, no round consumed. One "auto-review failed ... review manually" channel line. The cron reviewer and push detection leave the PR alone from then on; the owner reviews it by hand. Unparseable output never counts as a pass. |
 | T6 | `status/awaiting-ai-review` | outcome of T2, T3, or T4 | Review | The ledger already records the current head SHA: a tick died after the ledger write but before the label change | Same tick budgets | Label transition re-applied from the ledger score and `rounds-<pr>`. No second review, no new round. |
-| T7 | `status/fix-round` | `status/awaiting-ai-review` | Fix rounds | Findings were recorded for the current head SHA, and the engine's fixes pass verification | Kill switch `fixround-off`, repo lock, 4 engine runs per day (counted at dispatch), 2 attempts per PR per day, 1 engine run per tick, mergeability neither `UNKNOWN` nor `CONFLICTING`, remote branch at the PR head. Verification: worktree on the branch, history not rewritten, no git operation in progress, no unmerged paths or conflict markers, leftovers committed by the script, clean tree, at least one new commit, no attribution in the message, author, or committer of any new commit, the orchestrator's own `npm test` passes, the PR is still open and still labeled `status/fix-round`, and the push is visible on the remote | Commits pushed by the script (the engine cannot push). Label changed first, then `done-<pr>` deleted. `rounds-<pr>` kept. |
+| T7 | `status/fix-round` | `status/awaiting-ai-review` | Fix rounds | Findings were recorded for the current head SHA, and the engine's fixes pass verification | Kill switch `fixround-off`, repo lock, 4 engine runs per day (counted at dispatch), 2 attempts per PR per day, 1 engine run per tick, mergeability neither `UNKNOWN` nor `CONFLICTING`, remote branch at the PR head. Verification: worktree on the branch, history not rewritten, no git operation in progress, no unmerged paths or conflict markers, leftovers committed by the script, clean tree, at least one new commit, no attribution in the message, author, or committer of any new commit, the orchestrator's own `npm test` passes, the PR is still open and still labeled `status/fix-round`, and the push is visible on the remote. Before it creates its worktree, the job force-removes any other worktree that has the PR branch checked out (one "🧹 freed stale worktree" line, or a "cannot free worktree ... manual cleanup needed" alert if removal fails). A worktree-creation failure posts a channel line. Under a Claude quota block the engine is `openai/gpt-6.1-sol` via OpenCode, with `git push` denied by an OpenCode permission rule; verification is the same. | Commits pushed by the script (the engine cannot push). Label changed first, then `done-<pr>` deleted. `rounds-<pr>` kept. |
 | T8 | `status/fix-round` | `status/awaiting-ai-review` | Fix rounds | Stale findings: the reviewed head SHA in `findings-<pr>.json` differs from the PR head (a human push, or a tick that died after pushing) | Kill switch, repo lock. No engine run, so no budget is spent. | Label changed first, then `done-<pr>` deleted |
-| T9 | `status/fix-round` | unchanged | Fix rounds | Engine reported failure, or any verification check failed | Attempt counted against both daily caps | Nothing pushed. A "failed verification" message. Retried on a later tick, at most twice per PR per day, every day, until it passes or a human acts. |
+| T9 | `status/fix-round` | unchanged | Fix rounds | Engine reported failure, or any verification check failed | Attempt counted against both daily caps | Nothing pushed. A "failed verification" message, or a "worktree creation failed" message if the run never started. Retried on a later tick, at most twice per PR per day, every day, until it passes or a human acts. When a PR reaches the per-PR attempt cap, the job posts one "attempt cap reached ... stalled until tomorrow" alert per PR per day (marker `fixround/pr-<n>/alerted-atcap`) instead of skipping it silently. A spent day budget (4 runs) is still logged only. |
 | T10 | `status/ai-reviewed` | `status/awaiting-ai-review` | Review Phase 0 (push detection) | The ledger records a head SHA and the PR head now differs from it | Kill switch, run lock. Skips PRs that also carry `status/fix-round`, `status/conflict`, `status/conflict-resolved`, or `status/awaiting-ai-review`, and ledger entries without a SHA. Runs before the daily budget check and spends no tokens. | Label changed first, then `done-<pr>` deleted. `rounds-<pr>` kept. |
-| T11 | any open PR without `status/conflict` or `status/conflict-resolved` | adds `status/conflict` | Conflict repair Phase 0 | `mergeable` is `CONFLICTING` and the PR is assigned to the owner | Repo lock | The previous lifecycle label is not removed. Phase 0 does not filter on the head branch or on an existing `status/*` label, so an owner-assigned PR outside `auto-pr/*` enters the conflict loop too; after Phase 2 it carries `status/awaiting-ai-review`, which the reviewer ignores for non-`auto-pr/*` branches. |
-| T12 | `status/conflict` | `status/conflict-resolved` | Conflict repair Phase 1 | A clean `git merge` of the base was pushed, or the engine resolved the conflict and pushed, and verification passed | Repo lock, 2 attempts per PR per day (clean merges count), `UNKNOWN` deferred. Verification: HEAD matches the remote, no attribution in the last commit, no conflict markers, GitHub reports neither `CONFLICTING` nor `UNKNOWN`. Tests are not checked. | PR comment describing the merge |
+| T11 | any open PR without `status/conflict` or `status/conflict-resolved` | adds `status/conflict` | Conflict repair Phase 0 | `mergeable` is `CONFLICTING` and the PR is assigned to the owner | Repo lock | `status/awaiting-ai-review` is removed in the same edit, so a PR that was queued for review carries only `status/conflict`. A `status/ai-reviewed` or `status/fix-round` is not removed and stays next to `status/conflict` (section 6). Phase 0 does not filter on the head branch or on an existing `status/*` label, so an owner-assigned PR outside `auto-pr/*` enters the conflict loop too; after Phase 2 it carries `status/awaiting-ai-review`, which the reviewer ignores for non-`auto-pr/*` branches. |
+| T12 | `status/conflict` | `status/conflict-resolved` | Conflict repair Phase 1 | A clean `git merge` of the base was pushed, or the engine resolved the conflict and pushed, and verification passed | Repo lock, 2 attempts per PR per day (clean merges count), `UNKNOWN` deferred. Before it creates its worktree, the patrol force-removes any other worktree that has the PR branch checked out, with the same 🧹 line or manual-cleanup alert as T7. A worktree-creation failure posts a channel line. When an engine is needed, it is Claude Opus, or `openai/gpt-6.1-sol` via OpenCode under a Claude quota block. Verification: HEAD matches the remote, no attribution in the last commit, no conflict markers, GitHub reports neither `CONFLICTING` nor `UNKNOWN`. Tests are not checked. | PR comment describing the merge |
 | T13 | `status/conflict` | `status/conflict-resolved` | Conflict repair Phase 1 | The PR is no longer `CONFLICTING` (and not `UNKNOWN`), for example because the base moved again | Repo lock | No push |
-| T14 | `status/conflict` | unchanged | Conflict repair Phase 1 | Verification failed, the attempt cap was reached, or mergeability is `UNKNOWN` | 2 attempts per PR per day | Retried on a later tick or the next day |
-| T15 | `status/conflict-resolved` | `status/awaiting-ai-review` | Conflict repair Phase 2 | Every PR labeled `status/conflict-resolved` | Repo lock | `done-<pr>` deleted, so the merged result is reviewed again. `rounds-<pr>` kept: a base merge is not new intent. A lifecycle label left from before the conflict stays until the next review transition removes it. |
+| T14 | `status/conflict` | unchanged | Conflict repair Phase 1 | Verification failed, the attempt cap was reached, or mergeability is `UNKNOWN` | 2 attempts per PR per day | Retried on a later tick or the next day. Reaching the attempt cap is logged only, with no channel line: unlike the fix-round cap, it still stalls silently until the next day. |
+| T15 | `status/conflict-resolved` | `status/awaiting-ai-review` | Conflict repair Phase 2 | Every PR labeled `status/conflict-resolved` | Repo lock | `done-<pr>` deleted, so the merged result is reviewed again. `rounds-<pr>` kept: a base merge is not new intent. A lifecycle label left from before the conflict stays. A leftover `status/ai-reviewed` is removed by the next review transition. A leftover `status/fix-round` leads to a deadlock (section 6). |
 | T16 | any | merged or closed | Human | Explicit human decision | Merge commits only (`gh pr merge --merge`), and only on explicit request | End of lifecycle |
 | T17 | no `status/*` label | `status/awaiting-ai-review` | Conflict repair Phase 3 (reconciler) | Reconciler drift repair: an open `auto-pr/*` PR carries no `status/*` label and has no `findings-<pr>.json` | Repo lock (Phase 3 runs inside the patrol tick) | "drift repaired ... re-entered pipeline" channel line. The review ledger is not touched: if it records the current head SHA, the reviewer re-applies the recorded outcome (T6) instead of reviewing again; if it holds an entry without a SHA, the PR stays in manual review at `status/awaiting-ai-review`. |
 | T18 | no `status/*` label | `status/fix-round` | Conflict repair Phase 3 (reconciler) | Reconciler restore: an open `auto-pr/*` PR carries no `status/*` label but `findings-<pr>.json` exists (mid fix loop, label lost) | Repo lock | "drift repaired — restored status/fix-round" channel line. The fix-round job then picks the PR up as usual, or re-queues it as stale (T8) if the head moved. |
-| T19 | `status/fix-round` without `findings-<pr>.json` | unchanged (no transition) | Conflict repair Phase 3 (reconciler) | A fix-round label with no automated findings file: a manual or session fix round | Repo lock | Alert line only ("manual/session fix round, machine leaves it alone"), repeated on every patrol tick until the PR leaves `status/fix-round`. Human territory: no automation changes the label. |
+| T19 | `status/fix-round` without `findings-<pr>.json` | unchanged (no transition) | Conflict repair Phase 3 (reconciler) | A fix-round label with no automated findings file: a manual or session fix round | Repo lock | Alert line only ("manual/session fix round, machine leaves it alone"), posted once per PR (marker `conflict-patrol/alerted-nofindings-<pr>`, cleared when a findings file appears). Human territory: no automation changes the label. |
 
 ## 5. Lifecycle diagram
 
@@ -188,9 +190,10 @@ stateDiagram-v2
 
 `Merged` is reachable from every state by explicit human action; the
 diagram shows only the usual paths. A transition into `status/conflict`
-adds that label next to the previous one (section 6). Not drawn: a
+replaces `status/awaiting-ai-review`, but is added next to
+`status/ai-reviewed` or `status/fix-round` (section 6). Not drawn: a
 `status/fix-round` without a findings file (T19) makes the reconciler post
-an alert on every patrol tick and change nothing.
+one alert per PR and change nothing.
 
 ## 6. Label hygiene and precedence
 
@@ -206,33 +209,68 @@ label their target state excludes, so after them a PR carries exactly one
 | Push detection (T10) | `status/ai-reviewed` | `status/awaiting-ai-review` |
 | Fix round, verified or stale (T7, T8) | `status/fix-round` | `status/awaiting-ai-review` |
 | Reconciler (T17, T18) | Nothing (the PR has no `status/*` label) | `status/awaiting-ai-review` or `status/fix-round` |
+| Conflict repair Phase 0 (T11) | `status/awaiting-ai-review` | `status/conflict` |
 
-Conflict repair does not follow this rule yet. Phase 0 adds
-`status/conflict` next to the existing lifecycle label (T11), and Phase 2
-adds `status/awaiting-ai-review` without removing a leftover
-`status/ai-reviewed` or `status/fix-round` (T15). The next review
-transition cleans up. Until then, read the current state with this
-precedence, which matches the exclusion filters the routines apply:
+Conflict repair follows this rule only in part. Phase 0 removes
+`status/awaiting-ai-review` when it adds `status/conflict`, so a PR that
+was queued for review carries exactly one `status/*` label. It still adds
+`status/conflict` next to `status/ai-reviewed` or `status/fix-round`
+(T11). Phase 2 then adds `status/awaiting-ai-review` without removing that
+leftover (T15). Read the current state with this precedence, which matches
+the exclusion filters the routines apply:
 
 ```
 conflict > conflict-resolved > awaiting-ai-review > fix-round > ai-reviewed
 ```
 
-For example, `status/fix-round` together with `status/awaiting-ai-review`
-means "queued for review": the fix-round job skips the PR and the reviewer
-picks it up. The reviewer does not exclude PRs that also carry
-`status/conflict`, so a PR that starts conflicting while queued may be
-reviewed once on its pre-merge code and again after Phase 2.
+The reviewer skips every PR that carries `status/conflict`,
+`status/conflict-resolved`, or `status/fix-round`. A conflicting PR is
+therefore never reviewed on its pre-merge code. It is reviewed once, after
+Phase 2.
+
+The two leftovers behave differently after Phase 2:
+
+- `status/ai-reviewed` together with `status/awaiting-ai-review`: the
+  reviewer picks the PR up, and its next transition removes the leftover.
+- `status/fix-round` together with `status/awaiting-ai-review`: this is a
+  **deadlock (known gap)**. The fix-round job skips the PR because of
+  `status/awaiting-ai-review`. The reviewer skips it because of
+  `status/fix-round`. Push detection selects only `status/ai-reviewed`.
+  The reconciler fills only missing labels, and does not alert because the
+  findings file exists. Nothing moves the PR and nothing announces it. This
+  happens to a PR that starts conflicting while it waits in a fix round.
+  Until the scripts handle it, the owner clears it by removing
+  `status/fix-round` by hand, which the reviewer then picks up.
 
 ## 7. Budgets that bound the label loops
 
 | Loop | Budget | Reset |
 |---|---|---|
 | Review and fix (T3, T7, back to T2 to T4) | `rounds-<pr>`: every scored review is one round. Below the gate at round 10 or later, the PR goes to the human (T4) instead of another fix round. At most 9 review-triggered fix rounds per PR, ever. Failed fix-run attempts (T9) consume no round; they are bounded only per day (next row). | Never by automation: not by a fix push, a conflict repair, or push detection. A human grants a fresh budget by deleting `rounds-<pr>`. |
-| Fix-round attempts (T9) | 2 per PR per day, 4 engine runs per day, 1 per tick | Daily. A round that never verifies is retried every day until a human acts; this is bounded per day, not per lifetime. |
-| Conflict repair (T12, T14) | 2 attempts per PR per day | Daily |
-| Reviews (T2 to T6) | 10 per day, 2 per tick. An oversize hand-off (T5a) is not counted. | Daily |
-| Reconciler (T17, T18) | None needed: it only adds a label to a PR that has none, so it cannot loop on its own output. T19 is an alert with no budget and repeats every patrol tick. | — |
+| Fix-round attempts (T9) | 2 per PR per day, 4 engine runs per day, 1 per tick. A PR at the per-PR cap posts one alert per day. | Daily. A round that never verifies is retried every day until a human acts; this is bounded per day, not per lifetime. |
+| Conflict repair (T12, T14) | 2 attempts per PR per day. Reaching the cap is logged only. | Daily |
+| Reviews (T2 to T6) | 20 per day (`SDG_REVIEW_MAX_DAY`), 2 per tick. An oversize hand-off (T5a) is not counted. When the day budget is spent, one "day budget spent" channel line per day (marker `autoreview/budget-alerted-<date>`). | Daily |
+| Reconciler (T17, T18) | None needed: it only adds a label to a PR that has none, so it cannot loop on its own output. T19 is an alert, posted once per PR. | — |
+
+The review day budget was 10 until 2026-10-26. The score-gated fix loop
+multiplies reviews, because every fix round is re-reviewed. On 2026-10-26
+the 10 reviews were spent by early afternoon, and `status/awaiting-ai-review`
+PRs then waited for hours with no message. The default is now 20, and a spent
+budget is announced.
+
+**Stall alerts.** A guard that can leave a PR waiting posts one alert per
+unit of work, guarded by a marker file, instead of skipping in silence:
+
+| Guard | Alert | Marker | Once per |
+|---|---|---|---|
+| Fix-round attempt cap (T9) | "attempt cap reached ... stalled until tomorrow" | `autoreview/fixround/pr-<n>/alerted-atcap` | PR per day |
+| Review day budget (T2 to T6) | "auto-review day budget spent" | `autoreview/budget-alerted-<date>` | Day |
+| Reconciler, fix-round without findings (T19) | "manual/session fix round, machine leaves it alone" | `conflict-patrol/alerted-nofindings-<pr>` | PR |
+
+Guards that still stall in silence (log only): the conflict-repair attempt
+cap (T14), the fix-round day budget of 4 runs, `UNKNOWN` mergeability
+deferrals, and the `status/fix-round` plus `status/awaiting-ai-review`
+deadlock (section 6).
 
 Kill switches: `touch $H/.autopr-sdg/review-off` stops review, including
 push detection. `touch $H/.autopr-sdg/fixround-off` stops fix rounds; PRs
@@ -290,7 +328,8 @@ What enforces the contract today:
 - **The tier fallback is weaker than the tier.** When the OpenCode review
   run fails, a `quality/high` PR falls back to Opus, and a `quality/mid` PR
   of 400 lines or fewer falls back to Haiku, the same fallback as the
-  default tier.
+  default tier. While the Claude quota guard is blocked, there is no Claude
+  fallback: the review goes to manual review (T5b).
 - **Cron does not skip higher tiers.** A `quality/mid` or `quality/high` PR
   on an `auto-pr/*` branch is still picked up by the cron reviewer and the
   fix-round job. The orchestrator's tier obligations come on top of the
