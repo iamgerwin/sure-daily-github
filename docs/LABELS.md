@@ -12,7 +12,7 @@ everything else is human-assigned.
 | `status/awaiting-ai-review` | `FBCA04` | PR created, queued for automated diff review | → `status/ai-reviewed` |
 | `status/ai-reviewed` | `1D76DB` | AI scorecard posted (verdict, findings); human merge decision needed | human merges / requests fixes |
 | `status/conflict` | `D73A4A` | Merge conflict with base branch detected; auto-resolution in progress (max 2 attempts/day) | → `status/conflict-resolved` |
-| `status/conflict-resolved` | `0E8A16` | Conflict auto-resolved, branch merged with base (tests not checked — known gap) | → `status/awaiting-ai-review` (re-review) |
+| `status/conflict-resolved` | `0E8A16` | Conflict auto-resolved: branch merged with base; mechanical checks only, tests not run | → `status/awaiting-ai-review` (re-review) |
 | `status/fix-round` | `A62D03` | Automation is working through AI review findings; one commit per finding | re-review → `status/ai-reviewed` |
 
 Lifecycle: **created → `awaiting-ai-review` → `ai-reviewed` → (human merges)**
