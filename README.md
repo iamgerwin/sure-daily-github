@@ -333,7 +333,7 @@ Existing configurations continue to work without changes. Optional blocks like `
 # Check token format
 echo $GITHUB_TOKEN
 
-# Should start with ghp_ or github_pat_
+# Should start with ghp_, github_pat_, gho_, ghs_ or ghu_
 
 # Test authentication (validate only checks the config file and never calls GitHub;
 # a dry run signs in and then makes no changes)
