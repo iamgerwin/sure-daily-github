@@ -572,6 +572,19 @@ test('inserts configured titles literally, without replacement patterns or neste
   assert.equal(body, `${bugTitle} in shop`);
 });
 
+test('falls back to the default random titles when a title list is empty', () => {
+  const { handler } = createHandler();
+  const config = {
+    randomization: { bugTitles: [], featureTitles: [], docTitles: [], perfTitles: [] },
+    contentTemplates: [{ title: '${randomBugTitle}|${randomFeatureTitle}', body: '${randomDocTitle}|${randomPerfTitle}' }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo(), config);
+
+  assert.equal(title, 'General bug|General feature');
+  assert.equal(body, 'General documentation|General performance');
+});
+
 test('leaves unknown placeholders as written', () => {
   const { handler } = createHandler();
   const config = { contentTemplates: [{ title: '${unknown} ${repo}', body: '${constructor} ${toString}' }] };
