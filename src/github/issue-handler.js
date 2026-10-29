@@ -98,6 +98,16 @@ class IssueHandler {
     return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone, now);
   }
 
+  // Issues the tightest of the hourly/daily/weekly limits still allows (Infinity when uncapped)
+  remainingIssues(repoConfig, config = {}, now = new Date()) {
+    const { counts, limits } = this.checkLimits(repoConfig, config, null, now);
+    return Math.max(0, Math.min(
+      limits.hourlyMax - counts.hourly,
+      limits.dailyMax - counts.daily,
+      limits.weeklyMax - counts.weekly
+    ));
+  }
+
   async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}, now = new Date()) {
     const { owner, repo } = repoConfig;
 
@@ -150,8 +160,18 @@ class IssueHandler {
 
     logger.info('Creating multiple issues', { owner, repo, count });
 
+    // A dry run records nothing, so every preview would pass the same limit
+    // check; stop where a real run would, once the previews use up the headroom
+    const headroom = dryRun ? this.remainingIssues(repoConfig, config) : Infinity;
+
     for (let i = 0; i < count; i++) {
-      const result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null, config);
+      let result;
+      if (i < headroom) {
+        result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null, config);
+      } else {
+        logger.info('[DRY RUN] Limit reached, would skip further issues', { owner, repo, previewed: i });
+        result = { success: true, skipped: true, reason: 'limit_reached' };
+      }
 
       results.push(result);
 
