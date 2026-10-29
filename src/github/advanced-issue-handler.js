@@ -23,6 +23,10 @@ class AdvancedIssueHandler {
     this.cursorStore = stateManager;
   }
 
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async init() {
     try {
       this.client = createOctokit({ auth: this.token });
@@ -314,7 +318,7 @@ class AdvancedIssueHandler {
       }
     }
 
-    for (const repo of selected) {
+    for (const [index, repo] of selected.entries()) {
       const repoState = this.getRepoState(state, repo);
       let issueCreated = false;
 
@@ -414,6 +418,14 @@ class AdvancedIssueHandler {
       // cannot lose the count and cause duplicates on the next run
       if (issueCreated) {
         await this.saveState(state);
+      }
+
+      // Space out issue creation across repositories like the other handlers do,
+      // since back-to-back POSTs can trip GitHub's secondary rate limit. Every
+      // selected repo calls the API (even a failed create), so only a dry run
+      // and the last repo skip the pause.
+      if (!dryRun && index < selected.length - 1) {
+        await this.delay(1000);
       }
     }
 

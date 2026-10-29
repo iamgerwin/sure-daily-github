@@ -26,6 +26,7 @@ function createHandler() {
   process.env.SDG_ISSUE_STATE_FILE = path.join(dir, 'data', 'issue-state.json');
   const handler = new AdvancedIssueHandler('ghp_test');
   delete process.env.SDG_ISSUE_STATE_FILE;
+  handler.delay = async () => {};
 
   const created = [];
   handler.client = {
@@ -593,4 +594,46 @@ test('leaves unknown placeholders as written', () => {
 
   assert.equal(title, '${unknown} shop');
   assert.equal(body, '${constructor} ${toString}');
+});
+
+test('waits between repositories that create issues but not after the last one', async () => {
+  const { handler, created } = createHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+
+  await handler.processRepositories([repo({ repo: 'a' }), repo({ repo: 'b' }), repo({ repo: 'c' })], {}, false, config);
+
+  assert.equal(created.length, 3);
+  assert.deepEqual(delays, [1000, 1000]);
+});
+
+test('still waits after a failed create, since the request reached the API', async () => {
+  const { handler } = createHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+  handler.client.issues.create = async () => { throw new Error('Validation Failed'); };
+
+  const results = await handler.processRepositories([repo({ repo: 'a' }), repo({ repo: 'b' })], {}, false, config);
+
+  assert.ok(results.every(r => !r.success));
+  assert.deepEqual(delays, [1000]);
+});
+
+test('does not wait between repositories in a dry run or for skipped repositories', async () => {
+  const { handler, created } = createHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+
+  const results = await handler.processRepositories([repo({ repo: 'a' }), repo({ repo: 'b' })], {}, true, config);
+  assert.equal(created.length, 0);
+  assert.ok(results.every(r => r.dryRun));
+
+  // One ready repo plus two that are done for the day: nothing follows the API call
+  await handler.processRepositories([
+    repo({ repo: 'a' }),
+    repo({ repo: 'done-1', dailyTarget: { min: 0, max: 0 } }),
+    repo({ repo: 'done-2', enabled: false })
+  ], {}, false, config);
+  assert.equal(created.length, 1);
+  assert.deepEqual(delays, []);
 });
