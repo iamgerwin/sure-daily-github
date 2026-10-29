@@ -101,6 +101,47 @@ test('partial run that hits the limit counts as successful only', async () => {
   assert.deepEqual(summarize(results), { successful: 1, skipped: 0, failed: 0 });
 });
 
+test('dry run previews only the issues the daily limit still allows', async () => {
+  state.recordAction('me', 'dry-partial');
+  const { handler, calls } = createHandler();
+
+  const results = await handler.processRepositories([repoConfig('dry-partial')], {}, true, {});
+
+  assert.equal(calls.length, 0);
+  assert.equal(results[0].successful, 2);
+  assert.equal(results[0].skippedCount, 1);
+  assert.equal(results[0].details[2].reason, 'limit_reached');
+  // Nothing recorded: the real run still has the same headroom
+  assert.equal(state.getCounts('me', 'dry-partial').daily, 1);
+});
+
+test('dry run stops previews at the hourly limit like a real run', async () => {
+  const config = {
+    randomization: {
+      enabled: true,
+      issueCount: { min: 4, max: 4 },
+      timeVariations: { enabled: true, hourly: { min: 2, max: 2 }, daily: { min: 4, max: 4 } }
+    }
+  };
+  const dry = createHandler();
+  const real = createHandler();
+
+  const [dryResult] = await dry.handler.processRepositories([repoConfig('dry-hourly')], {}, true, config);
+  const [realResult] = await real.handler.processRepositories([repoConfig('dry-hourly')], {}, false, config);
+
+  assert.equal(real.calls.length, 2);
+  assert.equal(dryResult.successful, realResult.successful);
+  assert.equal(dryResult.skippedCount, realResult.skippedCount);
+});
+
+test('remainingIssues is Infinity when no limit applies and never negative', () => {
+  const { handler } = createHandler();
+  for (let i = 0; i < 4; i++) state.recordAction('me', 'over-limit');
+
+  assert.equal(handler.remainingIssues({ owner: 'me', repo: 'uncapped' }, {}), Infinity);
+  assert.equal(handler.remainingIssues(repoConfig('over-limit'), {}), 0);
+});
+
 test('run where issue creation fails is reported as failed', async () => {
   const { handler } = createHandler({ fail: true });
 
