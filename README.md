@@ -120,7 +120,7 @@ sure-daily-github start             # Start scheduler (daemon mode)
 sure-daily-github status            # Check repository status (times in general.timezone)
 sure-daily-github babysit [--dry-run] [--repo owner/repo] [--pr N]
                                     # Address review comments on PRs labeled "babysit"
-sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [--pr N]
+sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [--pr N] [--scan-timeout S]
                                     # Resolve merge conflicts on open PRs (pushes only if tests pass)
 sure-daily-github pr-maint [--mode shadow|act|autonomous] [--dry-run] [--repo owner/repo] [--pr N]
                                     # Label, track, and report open PRs through the policy engine (never merges)
