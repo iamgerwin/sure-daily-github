@@ -157,11 +157,13 @@ class Executor {
         return { success: true, status, disabled };
       }
 
-      const handler = usesAdvancedIssueHandler(cfg.repositories)
-        ? new AdvancedIssueHandler()
-        : new CommitHandler();
+      if (usesAdvancedIssueHandler(cfg.repositories)) {
+        const status = await new AdvancedIssueHandler().getStatus(enabled, cfg.general.timezone);
+        return { success: true, status, disabled };
+      }
 
-      const status = await handler.getStatus(enabled, cfg.general.timezone);
+      // Simple issue mode caps each day by checkLimits, which honors randomization
+      const status = await new IssueHandler().getStatus(enabled, cfg);
       return { success: true, status, disabled };
     } catch (error) {
       logger.error('Failed to get status', { error: error.message });
