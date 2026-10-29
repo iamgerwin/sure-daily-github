@@ -70,8 +70,23 @@ Create a GitHub Personal Access Token:
 
 1. Go to https://github.com/settings/tokens
 2. Click "Generate new token" → "Fine-grained tokens"
-3. Set permissions: `contents:write`
+3. Select the target repositories and grant the repository permissions for the commands you use (table below)
 4. Copy the token
+
+#### Token permissions
+
+Fine-grained tokens always include `Metadata: Read`. Each command needs:
+
+| Command | Repository permissions |
+|---------|------------------------|
+| `run` / `start`, commit mode | `Contents: Read and write` |
+| `run` / `start`, issue mode | `Issues: Read and write` |
+| `fix-conflicts` | `Contents: Read and write`, `Pull requests: Read` |
+| `babysit` (also `start` with `babysit.enabled`) | `Contents: Read and write`, `Issues: Read and write`, `Pull requests: Read and write` |
+| `pr-maint` | `Issues: Read and write`, `Pull requests: Read and write`, `Commit statuses: Read and write`, `Checks: Read` |
+| `validate`, `status`, `init` | none (no token needed) |
+
+`fix-conflicts` and `babysit` push to pull request branches; a push that changes `.github/workflows/` is also rejected without `Workflows: Read and write`. A classic token needs the `repo` scope (plus `workflow` for that case). A missing permission shows up as a `403 Resource not accessible by personal access token` error in the logs.
 
 Set the environment variable:
 
@@ -303,7 +318,7 @@ Existing configurations continue to work without changes. Optional blocks like `
 ## Security Best Practices
 
 - ✅ Never commit `.env` files
-- ✅ Use fine-grained tokens with minimum permissions (`contents:write`)
+- ✅ Use fine-grained tokens with only the permissions your commands need (see [Token permissions](#token-permissions))
 - ✅ Rotate tokens regularly (set expiration dates)
 - ✅ Use environment variables for all secrets
 - ✅ Validate all configuration inputs
@@ -320,8 +335,9 @@ echo $GITHUB_TOKEN
 
 # Should start with ghp_ or github_pat_
 
-# Test authentication
-node src/cli.js validate
+# Test authentication (validate only checks the config file and never calls GitHub;
+# a dry run signs in and then makes no changes)
+node src/cli.js run --dry-run
 ```
 
 ### Rate Limit Issues
@@ -334,9 +350,9 @@ The tool includes automatic rate limiting and retry logic. If you hit rate limit
 
 ### Permission Errors
 
-Ensure your GitHub token has:
-- `contents:write` permission for commits
-- Access to target repositories
+A `403 Resource not accessible by personal access token` means the token lacks a permission. Ensure it has:
+- Access to every target repository
+- The permissions listed in [Token permissions](#token-permissions) for the commands you run
 
 ## Resource Usage
 
