@@ -167,15 +167,17 @@ class AdvancedIssueHandler {
     const template = templates.length > 0 ? this.getRandomElement(templates) : {};
     // ${date} and ${time} follow general.timezone, not the host's locale and clock
     const { date, time, timestamp } = getTemplateDateParts(config.general?.timezone || 'UTC', now);
-    
+    // An empty list would otherwise put "null" into the issue
+    const pick = (list, fallback) => (Array.isArray(list) && list.length > 0 ? this.getRandomElement(list) : fallback);
+
     // Replace placeholders
     const replacements = {
       repo: repo.repo,
       timestamp,
-      randomBugTitle: randomization.bugTitles ? this.getRandomElement(randomization.bugTitles) : 'General bug',
-      randomFeatureTitle: randomization.featureTitles ? this.getRandomElement(randomization.featureTitles) : 'General feature',
-      randomDocTitle: randomization.docTitles ? this.getRandomElement(randomization.docTitles) : 'General documentation',
-      randomPerfTitle: randomization.perfTitles ? this.getRandomElement(randomization.perfTitles) : 'General performance',
+      randomBugTitle: pick(randomization.bugTitles, 'General bug'),
+      randomFeatureTitle: pick(randomization.featureTitles, 'General feature'),
+      randomDocTitle: pick(randomization.docTitles, 'General documentation'),
+      randomPerfTitle: pick(randomization.perfTitles, 'General performance'),
       randomBugDescription: 'Issue detected in the system that needs attention',
       randomFeatureDescription: 'New functionality that would improve user experience',
       step1: 'Navigate to the relevant section',

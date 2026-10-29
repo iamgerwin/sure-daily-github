@@ -266,6 +266,27 @@ test('validate keeps valid repository paths and defaults a missing path', () => 
   assert.deepEqual(cfg.repositories.map(repo => repo.path), ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024, 'daily-updates']);
 });
 
+test('validate rejects random title lists that are not lists of non-empty strings, even with randomization off', () => {
+  for (const key of ['bugTitles', 'featureTitles', 'docTitles', 'perfTitles']) {
+    for (const value of ['Login fails', ['ok', ''], ['ok', 3], { a: 'b' }]) {
+      assert.throws(
+        () => config.validate({ repositories: [baseRepo], randomization: { [key]: value } }),
+        new RegExp(`randomization\\.${key} must be a list of non-empty strings`),
+        `${key}: ${JSON.stringify(value)}`
+      );
+    }
+  }
+});
+
+test('validate keeps valid or empty random title lists', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    randomization: { enabled: false, bugTitles: ['Login fails'], perfTitles: [] }
+  });
+  assert.deepEqual(cfg.randomization.bugTitles, ['Login fails']);
+  assert.deepEqual(cfg.randomization.perfTitles, []);
+});
+
 test('validate rejects fractional or non-positive randomization.issueCount instead of crashing at run time', () => {
   for (const issueCount of [{ min: 1.5, max: 4 }, { min: 0, max: 4 }, { min: -2, max: 4 }, { min: '2', max: 4 }, 0, '']) {
     assert.throws(

@@ -121,6 +121,8 @@ export const BABYSIT_DEFAULTS = {
 const isPositiveInt = (value) => Number.isInteger(value) && value >= 1;
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
 
+const TITLE_LIST_KEYS = ['bugTitles', 'featureTitles', 'docTitles', 'perfTitles'];
+
 function validateBabysit(babysit, errors) {
   if (babysit === undefined || babysit === null) return;
   if (typeof babysit !== 'object' || Array.isArray(babysit)) {
@@ -414,6 +416,17 @@ class ConfigLoader {
     validateBooleanFlag(config.randomization?.enabled, 'randomization.enabled', errors);
     validateBooleanFlag(config.randomization?.timeVariations?.enabled, 'randomization.timeVariations.enabled', errors);
     validateBooleanFlag(config.schedule?.enabled, 'schedule.enabled', errors);
+
+    // Advanced issue mode draws ${randomBugTitle} and friends from these lists
+    // whether or not randomization is enabled; a bare string would otherwise
+    // yield a single random character as the title
+    for (const key of TITLE_LIST_KEYS) {
+      const list = config.randomization?.[key];
+      if (list !== undefined && list !== null
+        && (!Array.isArray(list) || !list.every(isNonEmptyString))) {
+        errors.push(`randomization.${key} must be a list of non-empty strings`);
+      }
+    }
 
     // Validate randomization settings; a fractional or inverted range would
     // otherwise throw from randomInt partway through an issue-mode run
