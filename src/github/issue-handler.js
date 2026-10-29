@@ -268,6 +268,26 @@ class IssueHandler {
 
     return results;
   }
+
+  // Reports against the same daily cap checkLimits enforces in `run`, so an
+  // enabled randomization range replaces the repository dailyTarget here too
+  async getStatus(repositories, config = {}, now = new Date()) {
+    return repositories.map(repoConfig => {
+      const { owner, repo } = repoConfig;
+      const { counts, limits } = this.checkLimits(repoConfig, config, null, now);
+      const repoState = state.getRepoState(owner, repo);
+
+      return {
+        owner,
+        repo,
+        target: limits.dailyMax,
+        today: counts.daily,
+        total: repoState.totals?.issues ?? 0,
+        lastCommit: repoState.lastCommitDate,
+        needsCommit: counts.daily < limits.dailyMax
+      };
+    });
+  }
 }
 
 export default IssueHandler;

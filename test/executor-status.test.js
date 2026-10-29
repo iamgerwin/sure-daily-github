@@ -39,6 +39,54 @@ test('getStatus in simple issue mode reports issues created today in the configu
   assert.equal(after.needsCommit, false);
 });
 
+test('getStatus in simple issue mode reports the randomization daily cap that run enforces', async (t) => {
+  mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-20T12:00:00Z') });
+  t.after(() => mock.timers.reset());
+
+  const timezone = 'UTC';
+  config.config = {
+    general: { mode: 'issue', timezone, dryRun: false },
+    randomization: { enabled: true, issueCount: { min: 2, max: 4 } },
+    repositories: [{ owner: 'me', repo: 'randomized', enabled: true, dailyTarget: 1 }]
+  };
+
+  state.recordAction('me', 'randomized', { type: 'issue', timezone });
+
+  // dailyTarget 1 is already met, but run keeps creating issues up to issueCount.max
+  const [status] = (await executor.getStatus()).status;
+  assert.equal(status.target, 4);
+  assert.equal(status.today, 1);
+  assert.equal(status.needsCommit, true);
+
+  for (let i = 0; i < 3; i++) state.recordAction('me', 'randomized', { type: 'issue', timezone });
+  const [after] = (await executor.getStatus()).status;
+  assert.equal(after.today, 4);
+  assert.equal(after.needsCommit, false);
+});
+
+test('getStatus in simple issue mode uses timeVariations.daily when time variations are enabled', async (t) => {
+  mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-21T12:00:00Z') });
+  t.after(() => mock.timers.reset());
+
+  config.config = {
+    general: { mode: 'issue', timezone: 'UTC', dryRun: false },
+    randomization: {
+      enabled: true,
+      issueCount: { min: 1, max: 2 },
+      timeVariations: { enabled: true, daily: { min: 3, max: 6 }, hourly: { min: 1, max: 1 } }
+    },
+    repositories: [{ owner: 'me', repo: 'varied', enabled: true, dailyTarget: 1 }]
+  };
+
+  state.recordAction('me', 'varied', { type: 'issue', timezone: 'UTC' });
+
+  // The hourly cap pauses run for this hour, but today's target is not met
+  const [status] = (await executor.getStatus()).status;
+  assert.equal(status.target, 6);
+  assert.equal(status.today, 1);
+  assert.equal(status.needsCommit, true);
+});
+
 test('getStatus leaves disabled repositories out of the commit-mode table and names them separately', async () => {
   config.config = {
     general: { mode: 'commit', timezone: 'UTC', dryRun: false },
