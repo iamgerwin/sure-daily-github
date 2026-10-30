@@ -35,6 +35,8 @@ if ! [[ "$HEARTBEAT_MAX_AGE_MINUTES" =~ ^[0-9]+$ ]]; then
   log "⚠️  Ignoring HEARTBEAT_MAX_AGE_MINUTES=$HEARTBEAT_MAX_AGE_MINUTES (expected whole minutes)"
   HEARTBEAT_MAX_AGE_MINUTES=0
 fi
+# Force base 10: bash arithmetic reads a leading zero (e.g. 090) as octal
+HEARTBEAT_MAX_AGE_MINUTES=$(( 10#$HEARTBEAT_MAX_AGE_MINUTES ))
 
 # Check if service is running
 if ! systemctl is-active --quiet "$SERVICE_NAME"; then

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execFileSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { writeHeartbeat, heartbeatFilePath } from '../src/utils/heartbeat.js';
 import scheduler from '../src/core/scheduler.js';
@@ -76,20 +76,20 @@ test('start writes a heartbeat before the first tick', (t) => {
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid);
 });
 
-// Runs scripts/health-check.sh against a stub systemctl that reports the
-// service as active and records every call
-function runHealthCheck(t, { heartbeatAgeMinutes, maxAge }) {
-  const dir = tmpDir(t);
+// Runs scripts/health-check.sh against a stub systemctl that records every
+// call and, unless `active` is false, reports the service as active
+function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = tmpDir(t) }) {
   const bin = path.join(dir, 'bin');
   const calls = path.join(dir, 'systemctl-calls');
-  fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'systemctl'), `#!/bin/bash\necho "$*" >> "${calls}"\n[ "$1" = show ] && echo 4242\nexit 0\n`, { mode: 0o755 });
+  fs.mkdirSync(bin, { recursive: true });
+  const isActive = active ? 'exit 0' : 'exit 3';
+  fs.writeFileSync(path.join(bin, 'systemctl'), `#!/bin/bash\necho "$*" >> "${calls}"\n[ "$1" = show ] && echo 4242\n[ "$1" = is-active ] && ${isActive}\nexit 0\n`, { mode: 0o755 });
   // sleep after a restart is not worth waiting for in a test
   fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
 
   const heartbeat = path.join(dir, 'data', 'scheduler-heartbeat.json');
   if (heartbeatAgeMinutes !== undefined) {
-    fs.mkdirSync(path.dirname(heartbeat));
+    fs.mkdirSync(path.dirname(heartbeat), { recursive: true });
     fs.writeFileSync(heartbeat, '{}');
     const mtime = new Date(Date.now() - heartbeatAgeMinutes * 60 * 1000);
     fs.utimesSync(heartbeat, mtime, mtime);
@@ -97,9 +97,10 @@ function runHealthCheck(t, { heartbeatAgeMinutes, maxAge }) {
 
   const env = { PATH: `${bin}:${process.env.PATH}`, SDG_APP_DIR: dir };
   if (maxAge !== undefined) env.HEARTBEAT_MAX_AGE_MINUTES = String(maxAge);
-  execFileSync('bash', [HEALTH_CHECK], { env });
+  const { status } = spawnSync('bash', [HEALTH_CHECK], { env });
 
   return {
+    status,
     calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [],
     log: fs.readFileSync(path.join(dir, 'logs', 'health-check.log'), 'utf8')
   };
@@ -125,4 +126,11 @@ test('health-check does not restart when no heartbeat has been written yet', (t)
   const { calls, log } = runHealthCheck(t, { maxAge: 90 });
   assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
   assert.match(log, /No scheduler heartbeat/);
+});
+
+test('health-check reads a limit with a leading zero as decimal', (t) => {
+  const { calls, log, status } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge: '090' });
+  assert.equal(status, 0);
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /\(limit 90\)/);
 });
