@@ -22,7 +22,7 @@ All windows respect `general.timezone` from your configuration (default: `UTC`).
 
 Limits are evaluated before each action:
 
-- When `randomization.timeVariations.enabled: true`, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps.
+- In issue mode with fixed targets (the simple issue handler), when `randomization.timeVariations.enabled: true`, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps. Commit mode and the advanced issue handler do not read them.
 - In issue mode with fixed targets (the simple issue handler) and `randomization.enabled: true`, the daily cap is `timeVariations.daily.max` when time variations are enabled, otherwise `randomization.issueCount.max`; the repository `dailyTarget` is not used.
 - Otherwise, the repository `dailyTarget` (number or range) determines the daily cap.
 - A dry run of the simple issue handler records nothing, so when one run rolls several issues it previews only as many as the hourly, daily, and weekly caps still allow, then reports the rest as `limit_reached`, the same as a real run.

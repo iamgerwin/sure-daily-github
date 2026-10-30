@@ -73,7 +73,9 @@ randomization:
     max: 50
 ```
 
-When randomization is enabled, it overrides individual repository `dailyTarget` ranges and uses the global `issueCount` range instead. If `issueCount` is omitted, it defaults to `general.dailyTarget` (or 1 when that is unset).
+When randomization is enabled in issue mode with fixed targets (the simple issue handler), it overrides each repository's `dailyTarget` and uses the global `issueCount` range instead. If `issueCount` is omitted, it defaults to `general.dailyTarget` (or 1 when that is unset).
+
+> `issueCount` and `timeVariations` are only used by the simple issue handler. Commit mode, and issue mode with a `dailyTarget` range or `intervalMinutes` on any enabled repository (the advanced issue handler), follow each repository's `dailyTarget` and ignore them; the advanced issue handler still uses the `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` lists. `validate` prints a warning when randomization is enabled but its counts will not be used.
 
 ### Time-Based Variations
 
@@ -385,7 +387,7 @@ These tests cover:
 
 ## Limits Enforcement
 
-When `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When disabled, the repository `dailyTarget` (fixed or range) acts as the daily cap. See docs/STATE.md for details.
+In issue mode with fixed targets (the simple issue handler), when `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When disabled, the repository `dailyTarget` (fixed or range) acts as the daily cap, as it always does in commit mode and in the advanced issue handler. See docs/STATE.md for details.
 
 ## Troubleshooting
 
