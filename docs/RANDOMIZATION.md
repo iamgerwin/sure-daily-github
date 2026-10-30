@@ -7,6 +7,7 @@ This guide explains the advanced randomization and multi-repository selection fe
 - [Overview](#overview)
 - [Range-Based Issue Counts](#range-based-issue-counts)
 - [Randomization Configuration](#randomization-configuration)
+- [Issue Content Templates](#issue-content-templates)
 - [Repository Selection Strategies](#repository-selection-strategies)
 - [Time-Based Variations](#time-based-variations)
 - [Configuration Examples](#configuration-examples)
@@ -107,6 +108,52 @@ The system automatically selects the appropriate time period based on your sched
 > When randomization is enabled, `issueCount` and each configured `timeVariations` period (when `timeVariations.enabled` is true) must have whole-number `min` and `max` values of at least 1, with `min` not greater than `max`. Invalid ranges are rejected when the configuration loads instead of failing partway through a run.
 
 > If `timeVariations.enabled` is true but no `daily` range is set, the per-run issue count and the daily cap both fall back to `issueCount`.
+
+## Issue Content Templates
+
+The advanced issue handler (issue mode with range targets or `intervalMinutes`) does not use the single `contentTemplate` block. Each issue instead uses one entry picked at random from the top-level `contentTemplates` list:
+
+```yaml
+contentTemplates:
+  - title: "Bug: ${randomBugTitle}"
+    body: |
+      Found in ${repo} on ${date} at ${time}.
+
+      Priority: ${priority}
+    labels: ["bug"]
+  - title: "Docs: ${randomDocTitle}"
+    body: "${proposedChanges} (${reason})"
+
+randomization:
+  enabled: true
+  bugTitles: ["Login form rejects valid emails", "Cache not cleared on logout"]
+  featureTitles: ["Export to CSV"]
+  docTitles: ["Document the retry settings"]
+  perfTitles: ["Slow dashboard query"]
+```
+
+- `title` and `body` are optional strings. Without a list (or for a missing field), the issue is titled `Automated Issue - <date> <time>` and gets a short default body naming the repository.
+- `labels` are added to the issue together with the repository's `labels` (default `["automated"]`).
+- `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` feed the `${randomBug…}` style placeholders below. A missing or empty list falls back to `General bug`, `General feature`, `General documentation` and `General performance`.
+
+Placeholders filled in `title` and `body`:
+
+| Placeholder | Value |
+|-------------|-------|
+| `${date}`, `${time}` | Creation date and time in `general.timezone` |
+| `${timestamp}` | Creation instant as a UTC ISO string |
+| `${repo}` | Repository name |
+| `${randomBugTitle}`, `${randomFeatureTitle}`, `${randomDocTitle}`, `${randomPerfTitle}` | A random entry from `bugTitles`, `featureTitles`, `docTitles`, `perfTitles` |
+| `${priority}` | `Low`, `Medium` or `High`, picked at random |
+| `${randomBugDescription}`, `${randomFeatureDescription}` | Fixed generic descriptions |
+| `${step1}`, `${step2}`, `${step3}`, `${expectedBehavior}`, `${actualBehavior}` | Fixed bug-report filler text |
+| `${useCase}`, `${proposedSolution}`, `${alternatives}` | Fixed feature-request filler text |
+| `${section}`, `${currentState}`, `${proposedChanges}`, `${reason}` | Fixed documentation filler text |
+| `${area}`, `${currentPerf}`, `${targetPerf}`, `${approach}` | Fixed performance filler text |
+
+Values are inserted literally, and any other `${name}` is left as written.
+
+The simple issue handler (fixed targets) and commit mode use `contentTemplate` instead, which supports only `${date}`, `${time}`, `${timestamp}` and `${repo}`.
 
 ## Repository Selection Strategies
 
