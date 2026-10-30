@@ -61,6 +61,11 @@ function validateCountRange(range, label, errors) {
   }
 }
 
+// Prefixes of tokens that authenticate API calls: classic and fine-grained PATs,
+// OAuth app tokens, and GitHub App tokens (ghs_ is what GitHub Actions provides
+// as GITHUB_TOKEN, ghu_ a user-to-server token). ghr_ refresh tokens cannot.
+export const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
+
 // GitHub expects a list of label names; a bare string such as `labels: bug`
 // would be spread into one label per character ("b", "u", "g")
 function validateLabels(labels, label, errors) {
@@ -254,8 +259,8 @@ class ConfigLoader {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
       if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
-    } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
-      errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
+    } else if (!GITHUB_TOKEN_PREFIXES.some(prefix => token.startsWith(prefix))) {
+      errors.push(`GITHUB_TOKEN appears to be invalid format (must start with ${GITHUB_TOKEN_PREFIXES.join(', ')})`);
     }
 
     // Validate repositories
