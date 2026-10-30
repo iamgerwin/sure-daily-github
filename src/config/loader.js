@@ -105,6 +105,13 @@ export function defaultConfigPath() {
   return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
 }
 
+// Used when the config has no contentTemplate. Shared by identity so advanced
+// issue mode can tell it apart from a configured one and keep its own default.
+export const DEFAULT_CONTENT_TEMPLATE = Object.freeze({
+  title: 'Daily Update',
+  body: 'Progress update for ${date}'
+});
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -556,10 +563,7 @@ class ConfigLoader {
         rateLimits: { ...PR_MAINT_DEFAULTS.rateLimits, ...(config.prMaint?.rateLimits || {}) },
         budgets: { ...PR_MAINT_DEFAULTS.budgets, ...(config.prMaint?.budgets || {}) }
       },
-      contentTemplate: config.contentTemplate || {
-        title: 'Daily Update',
-        body: 'Progress update for ${date}'
-      },
+      contentTemplate: config.contentTemplate || DEFAULT_CONTENT_TEMPLATE,
       // Randomly picked per issue by AdvancedIssueHandler
       contentTemplates: config.contentTemplates || []
     };

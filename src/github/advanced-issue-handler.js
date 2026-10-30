@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
+import { DEFAULT_CONTENT_TEMPLATE } from '../config/loader.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -166,9 +167,17 @@ class AdvancedIssueHandler {
   generateIssueContent(repo, config, now = new Date()) {
     const randomization = config.randomization || {};
     const templates = config.contentTemplates || [];
-    
+    // Without a contentTemplates list, a configured contentTemplate (the one
+    // simple issue mode uses) still applies, so moving a repository to a range
+    // target or an interval does not silently drop it. The loader's built-in
+    // default does not count, so unconfigured titles keep the date and time.
+    // Only title and body are taken, as in simple issue mode (no labels).
+    const single = config.contentTemplate && config.contentTemplate !== DEFAULT_CONTENT_TEMPLATE
+      ? { title: config.contentTemplate.title, body: config.contentTemplate.body }
+      : {};
+
     // Pick a random template or use default
-    const template = templates.length > 0 ? this.getRandomElement(templates) : {};
+    const template = templates.length > 0 ? this.getRandomElement(templates) : single;
     // ${date} and ${time} follow general.timezone, not the host's locale and clock
     const { date, time, timestamp } = getTemplateDateParts(config.general?.timezone || 'UTC', now);
     // An empty list would otherwise put "null" into the issue
