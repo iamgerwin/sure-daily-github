@@ -200,3 +200,31 @@ test('health-check restarts a hang again once the heartbeat was refreshed after 
   const { calls } = runHealthCheck(t, { dir, heartbeatAgeMinutes: 120, maxAge: 90 });
   assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
 });
+
+test('health-check ignores a non-numeric limit and exits cleanly', (t) => {
+  const { calls, log, status } = runHealthCheck(t, { heartbeatAgeMinutes: 600, maxAge: 'abc' });
+  assert.equal(status, 0);
+  assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
+  assert.match(log, /Ignoring HEARTBEAT_MAX_AGE_MINUTES=abc/);
+});
+
+test('health-check exits 1 when the service does not come back after a restart', (t) => {
+  const { calls, log, status } = runHealthCheck(t, { active: false });
+  assert.equal(status, 1);
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /Failed to restart service/);
+});
+
+test('a tick still runs the execution when the heartbeat cannot be written', async (t) => {
+  const dir = tmpDir(t);
+  // A file where the heartbeat's directory should be
+  fs.writeFileSync(path.join(dir, 'blocker'), '');
+  useHeartbeatFile(t, path.join(dir, 'blocker', 'heartbeat.json'));
+  const original = executor.execute;
+  let executed = false;
+  executor.execute = async () => { executed = true; return { success: true }; };
+  t.after(() => { executor.execute = original; });
+
+  assert.deepEqual(await scheduler.runScheduledTask({}), { success: true });
+  assert.ok(executed);
+});
