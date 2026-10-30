@@ -172,5 +172,31 @@ test('health-check reads a limit with a leading zero as decimal', (t) => {
   const { calls, log, status } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge: '090' });
   assert.equal(status, 0);
   assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
-  assert.match(log, /\(limit 90\)/);
+  assert.match(log, /\(limit 90,/);
+});
+
+test('health-check does not restart again when the last hang restart left the heartbeat stale', (t) => {
+  const dir = tmpDir(t);
+  const first = runHealthCheck(t, { dir, heartbeatAgeMinutes: 120, maxAge: 90 });
+  assert.ok(first.calls.includes('restart sure-daily-github'), first.calls.join('\n'));
+
+  // The restarted service never rewrote the heartbeat (e.g. it cannot write it)
+  fs.rmSync(path.join(dir, 'systemctl-calls'));
+  const second = runHealthCheck(t, { dir, heartbeatAgeMinutes: 150, maxAge: 90 });
+  assert.equal(second.status, 0);
+  assert.ok(!second.calls.some(c => c.startsWith('restart')), second.calls.join('\n'));
+  assert.match(second.log, /was not refreshed after the hang restart.*Not restarting again/);
+});
+
+test('health-check restarts a hang again once the heartbeat was refreshed after the last restart', (t) => {
+  const dir = tmpDir(t);
+  runHealthCheck(t, { dir, heartbeatAgeMinutes: 120, maxAge: 90 });
+  // The previous restart was followed by a fresh heartbeat, which then went stale again
+  const marker = path.join(dir, 'logs', 'health-check-hang-restart');
+  const old = new Date(Date.now() - 300 * 60 * 1000);
+  fs.utimesSync(marker, old, old);
+
+  fs.rmSync(path.join(dir, 'systemctl-calls'));
+  const { calls } = runHealthCheck(t, { dir, heartbeatAgeMinutes: 120, maxAge: 90 });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
 });

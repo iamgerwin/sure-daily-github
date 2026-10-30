@@ -12,6 +12,9 @@ APP_DIR="${SDG_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOG_FILE="$APP_DIR/logs/health-check.log"
 HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
 HEARTBEAT_MAX_AGE_MINUTES="${HEARTBEAT_MAX_AGE_MINUTES:-0}"
+# Touched on every hang restart; a heartbeat not newer than it means the
+# restarted scheduler never wrote one, so another restart would not help
+HANG_RESTART_MARKER="$APP_DIR/logs/health-check-hang-restart"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -54,8 +57,14 @@ if [ "$HEARTBEAT_MAX_AGE_MINUTES" -gt 0 ]; then
   else
     AGE_SECONDS=$(( $(date +%s) - $(stat -c %Y "$HEARTBEAT_FILE") ))
     if [ "$AGE_SECONDS" -gt $(( HEARTBEAT_MAX_AGE_MINUTES * 60 )) ]; then
-      log "⚠️  Scheduler heartbeat is $(( AGE_SECONDS / 60 )) minutes old (limit ${HEARTBEAT_MAX_AGE_MINUTES}). Restarting hung service..."
-      restart_service
+      HEARTBEAT_INFO="owner $(stat -c %U "$HEARTBEAT_FILE"), directory owner $(stat -c %U "$(dirname "$HEARTBEAT_FILE")")"
+      if [ -f "$HANG_RESTART_MARKER" ] && ! [ "$HEARTBEAT_FILE" -nt "$HANG_RESTART_MARKER" ]; then
+        log "❌ Scheduler heartbeat is $(( AGE_SECONDS / 60 )) minutes old and was not refreshed after the hang restart at $(date -d "@$(stat -c %Y "$HANG_RESTART_MARKER")" '+%Y-%m-%d %H:%M:%S'). Not restarting again: check that the service can write $HEARTBEAT_FILE ($HEARTBEAT_INFO) and that it uses the same SDG_HEARTBEAT_FILE"
+      else
+        log "⚠️  Scheduler heartbeat is $(( AGE_SECONDS / 60 )) minutes old (limit ${HEARTBEAT_MAX_AGE_MINUTES}, $HEARTBEAT_INFO). Restarting hung service..."
+        touch "$HANG_RESTART_MARKER"
+        restart_service
+      fi
     fi
   fi
 fi

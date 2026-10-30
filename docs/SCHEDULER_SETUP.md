@@ -34,6 +34,8 @@ A scheduler process can stay `active` to systemd while its cron ticks no longer 
 
 A skipped tick only proves the timer fires, not that the scheduler is doing its work: an execution that never finishes keeps every later tick skipped (and so no daily reset or submission happens). To catch that too, set `SDG_MAX_EXECUTION_MINUTES` in the service's environment. Once an execution has been in flight longer than that, skipped ticks stop refreshing the heartbeat, it goes stale, and the health check restarts the service. Pick a value well above your longest legitimate run, including issue pacing delays. Without it, a hung execution is not detected.
 
+The restarted scheduler writes a fresh heartbeat on start, so a heartbeat that is still older than the last hang restart means the service cannot write it (permissions, another user, or a different `SDG_HEARTBEAT_FILE` than the health check's). The health check then logs the file and directory owners and does not restart again until the heartbeat is refreshed, instead of restarting on every run. It records hang restarts in `logs/health-check-hang-restart`.
+
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HEARTBEAT_MAX_AGE_MINUTES` | `0` (off) | Heartbeat age, in whole minutes, after which a running service is restarted |
