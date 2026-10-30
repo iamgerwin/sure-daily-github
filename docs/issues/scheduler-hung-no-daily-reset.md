@@ -289,7 +289,7 @@ shouldResetDaily(state, timezone) {
 - [ ] Set up automatic restart on failure
 - [ ] Add forced reset after 24 hours threshold
 - [ ] Document restart procedures in runbook
-- [ ] Set up log rotation to prevent disk space issues
+- [x] Set up log rotation to prevent disk space issues (`LOG_RETENTION_DAYS` prunes the daily log files)
 - [ ] Add memory limits and automatic restarts on high memory usage
 
 ## Related Files

@@ -362,6 +362,8 @@ Typical resource usage on VPS:
 - **Disk**: <100 MB including node_modules
 - **Network**: Minimal (only GitHub API calls)
 
+The logger writes one `logs/YYYY-MM-DD.log` file per UTC day and keeps every file by default. Set `LOG_RETENTION_DAYS` (a whole number, e.g. `14`) to keep only that many days, today included; older daily files are deleted once a day when the next line is logged. Other files in `logs/` (`systemd.log`, `cron.log`, `health-check.log`) are left alone, so rotate those with logrotate (see [deployment/DEPLOYMENT.md](./deployment/DEPLOYMENT.md)).
+
 Recommended VPS specs:
 - 512 MB RAM minimum
 - 1 vCPU
