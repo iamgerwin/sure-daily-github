@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { writeHeartbeat, heartbeatFilePath } from '../src/utils/heartbeat.js';
+import { writeHeartbeat, heartbeatFilePath, maxExecutionMs } from '../src/utils/heartbeat.js';
 import scheduler from '../src/core/scheduler.js';
 import executor from '../src/core/executor.js';
 
@@ -65,6 +65,46 @@ test('every scheduled tick writes a heartbeat, including one skipped for overlap
 
   release();
   await first;
+});
+
+function useMaxExecutionMinutes(t, value) {
+  const previous = process.env.SDG_MAX_EXECUTION_MINUTES;
+  process.env.SDG_MAX_EXECUTION_MINUTES = value;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SDG_MAX_EXECUTION_MINUTES;
+    else process.env.SDG_MAX_EXECUTION_MINUTES = previous;
+  });
+}
+
+test('a skipped tick stops refreshing the heartbeat once the execution exceeds SDG_MAX_EXECUTION_MINUTES', async (t) => {
+  const file = path.join(tmpDir(t), 'heartbeat.json');
+  useHeartbeatFile(t, file);
+  useMaxExecutionMinutes(t, '60');
+  const original = executor.execute;
+  let release;
+  executor.execute = () => new Promise(resolve => { release = () => resolve({ success: true }); });
+  t.after(() => { executor.execute = original; });
+
+  const first = scheduler.runScheduledTask({});
+
+  fs.rmSync(file);
+  assert.deepEqual(await scheduler.runScheduledTask({}), { skipped: true });
+  assert.ok(fs.existsSync(file), 'an execution within the limit keeps the heartbeat fresh');
+
+  fs.rmSync(file);
+  scheduler.executionStartedAt = Date.now() - 61 * 60 * 1000;
+  assert.deepEqual(await scheduler.runScheduledTask({}), { skipped: true });
+  assert.ok(!fs.existsSync(file), 'a hung execution must let the heartbeat go stale');
+
+  release();
+  await first;
+});
+
+test('maxExecutionMs is off unless SDG_MAX_EXECUTION_MINUTES is whole minutes', (t) => {
+  useMaxExecutionMinutes(t, 'abc');
+  assert.equal(maxExecutionMs(), 0);
+  process.env.SDG_MAX_EXECUTION_MINUTES = '090';
+  assert.equal(maxExecutionMs(), 90 * 60 * 1000);
 });
 
 test('start writes a heartbeat before the first tick', (t) => {

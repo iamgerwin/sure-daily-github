@@ -11,6 +11,15 @@ export function heartbeatFilePath() {
   return process.env.SDG_HEARTBEAT_FILE || DEFAULT_HEARTBEAT_FILE;
 }
 
+// Minutes an execution may stay in flight before skipped ticks stop refreshing
+// the heartbeat, so the health check restarts a process stuck in one run.
+// 0 or unset disables the limit.
+export function maxExecutionMs() {
+  const raw = process.env.SDG_MAX_EXECUTION_MINUTES;
+  if (!raw || !/^[0-9]+$/.test(raw)) return 0;
+  return Number(raw) * 60 * 1000;
+}
+
 // Records that the scheduler is alive and its cron ticks still fire. A process
 // can stay "active" to systemd while its timer no longer triggers (the December
 // 2025 outage), so the health check reads this file's age instead. Never

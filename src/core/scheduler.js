@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import executor from './executor.js';
 import babysitter from './babysitter.js';
-import { writeHeartbeat } from '../utils/heartbeat.js';
+import { writeHeartbeat, maxExecutionMs } from '../utils/heartbeat.js';
 
 const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 
@@ -17,14 +17,21 @@ class Scheduler {
   // Runs one scheduled execution, skipping the tick if the previous one is
   // still in flight so concurrent runs cannot race on the state files
   async runScheduledTask(config) {
-    // Every tick counts as a heartbeat, a skipped one too: the timer still fires
-    writeHeartbeat();
     if (this.executing) {
-      logger.warn('Previous execution still in progress, skipping this run', {
-        startedAt: new Date(this.executionStartedAt).toISOString()
-      });
+      const startedAt = new Date(this.executionStartedAt).toISOString();
+      const limitMs = maxExecutionMs();
+      if (limitMs > 0 && Date.now() - this.executionStartedAt > limitMs) {
+        // A hung execution: withhold the heartbeat so the health check restarts us
+        logger.error('Previous execution exceeded SDG_MAX_EXECUTION_MINUTES, not refreshing the heartbeat', { startedAt });
+      } else {
+        // A skipped tick still proves the timer fires
+        writeHeartbeat();
+        logger.warn('Previous execution still in progress, skipping this run', { startedAt });
+      }
       return { skipped: true };
     }
+
+    writeHeartbeat();
 
     this.executing = true;
     this.executionStartedAt = Date.now();
