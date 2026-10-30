@@ -370,6 +370,34 @@ test('the daily reset keeps a pending interval from the previous day', async () 
   assert.equal(saved.nextIssueTime, next);
 });
 
+for (const [label, remainingMs, minutes] of [
+  ['under half a minute', 20 * 1000, 1],
+  ['a minute and a half', 90 * 1000, 2],
+  ['exactly ten minutes', 10 * 60 * 1000, 10]
+]) {
+  test(`an interval with ${label} left reports ${minutes} minute(s) remaining`, async () => {
+    const { handler, created } = createHandler();
+    const realNow = Date.now;
+    const now = realNow();
+    Date.now = () => now;
+    try {
+      writeState(handler, {
+        lastDailyReset: new Date(now).toISOString(),
+        repositories: {
+          'me/demo': { issuesCreatedToday: 1, lastIssueTime: now - 1000, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: now + remainingMs }
+        }
+      });
+
+      const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 60, max: 60 } })], {}, false, config);
+
+      assert.equal(created.length, 0);
+      assert.equal(result.reason, `Waiting for interval (${minutes} minutes remaining)`);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+}
+
 test('the daily reset clears counts so a new day starts from zero', async () => {
   const { handler, created } = createHandler();
   const yesterday = Date.now() - 36 * 60 * 60 * 1000;

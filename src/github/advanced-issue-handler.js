@@ -288,7 +288,9 @@ class AdvancedIssueHandler {
       
       // Check if enough time has passed since last issue
       if (repoState.nextIssueTime && now < repoState.nextIssueTime) {
-        const minutesRemaining = Math.round((repoState.nextIssueTime - now) / 60000);
+        // Rounded up: a wait under half a minute would otherwise read as
+        // "0 minutes remaining" while the repository is still held back
+        const minutesRemaining = Math.ceil((repoState.nextIssueTime - now) / 60000);
         results.push({
           success: true,
           skipped: true,
