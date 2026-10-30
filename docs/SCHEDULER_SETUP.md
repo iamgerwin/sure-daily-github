@@ -26,8 +26,22 @@ The automated issue submission system is now configured with multiple layers of 
 - **Function**: 
   - Verifies systemd service is running
   - Auto-restarts service if stopped
-  - Monitors for process hangs
+  - With `HEARTBEAT_MAX_AGE_MINUTES` set, restarts a running service whose scheduler stopped ticking (see [Hung scheduler detection](#hung-scheduler-detection))
   - Logs status to: `/opt/sure-daily-github/logs/health-check.log`
+
+#### Hung scheduler detection
+A scheduler process can stay `active` to systemd while its cron ticks no longer fire (the December 2025 outage, see [issues/scheduler-hung-no-daily-reset.md](issues/scheduler-hung-no-daily-reset.md)). The scheduler rewrites `data/scheduler-heartbeat.json` (`lastTickAt`, `pid`) when it starts and on every tick, including ticks skipped because the previous execution is still running (within `SDG_MAX_EXECUTION_MINUTES`, below). When `HEARTBEAT_MAX_AGE_MINUTES` is set, the health check restarts the service if that file is older than the limit. Pick a limit above the cron interval, e.g. `90` for `*/30 * * * *`. The check is off by default and does nothing until the scheduler has written its first heartbeat.
+
+A skipped tick only proves the timer fires, not that the scheduler is doing its work: an execution that never finishes keeps every later tick skipped (and so no daily reset or submission happens). To catch that too, set `SDG_MAX_EXECUTION_MINUTES` in the service's environment. Once an execution has been in flight longer than that, skipped ticks stop refreshing the heartbeat, it goes stale, and the health check restarts the service. Pick a value well above your longest legitimate run, including issue pacing delays. Without it, a hung execution is not detected.
+
+The restarted scheduler writes a fresh heartbeat on start, so a heartbeat that is still older than the last hang restart means the service cannot write it (permissions, another user, or a different `SDG_HEARTBEAT_FILE` than the health check's). The health check then logs the file and directory owners and does not restart again until the heartbeat is refreshed, instead of restarting on every run. It records hang restarts in `logs/health-check-hang-restart`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HEARTBEAT_MAX_AGE_MINUTES` | `0` (off) | Heartbeat age, in whole minutes, after which a running service is restarted |
+| `SDG_MAX_EXECUTION_MINUTES` | unset (off) | Set on the service: minutes an execution may stay in flight before skipped ticks stop refreshing the heartbeat |
+| `SDG_HEARTBEAT_FILE` | `data/scheduler-heartbeat.json` | Heartbeat location; set the same value for the service and the health check |
+| `SDG_APP_DIR` | the script's parent directory | Install directory holding `logs/` and `data/` |
 
 ### 4. Daily Reset
 - **Automatic**: Yes, the scheduler handles daily resets at midnight (Asia/Manila timezone)
@@ -138,6 +152,9 @@ journalctl -u sure-daily-github -n 50
 ```bash
 # Health check runs every 30 minutes
 */30 * * * * /opt/sure-daily-github/scripts/health-check.sh
+
+# Also restart a hung scheduler (heartbeat older than 90 minutes)
+*/30 * * * * HEARTBEAT_MAX_AGE_MINUTES=90 /opt/sure-daily-github/scripts/health-check.sh
 ```
 
 To view/edit: `crontab -e`
