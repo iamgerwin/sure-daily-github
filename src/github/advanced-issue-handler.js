@@ -106,17 +106,16 @@ class AdvancedIssueHandler {
     return state.repositories[key];
   }
 
-  shouldResetDaily(state, timezone) {
+  shouldResetDaily(state, timezone, now = new Date()) {
     if (!state.lastDailyReset) return true;
-    
-    const now = new Date();
+
+    // An unparseable timestamp (hand edit) cannot be placed in a day; reset
+    // rather than let Intl throw a RangeError and abort the run
     const lastReset = new Date(state.lastDailyReset);
-    
+    if (!Number.isFinite(lastReset.getTime())) return true;
+
     // Check if we've crossed midnight in the specified timezone
-    const nowDate = this.getDateInTimezone(now, timezone);
-    const lastResetDate = this.getDateInTimezone(lastReset, timezone);
-    
-    return nowDate !== lastResetDate;
+    return this.getDateInTimezone(now, timezone) !== this.getDateInTimezone(lastReset, timezone);
   }
 
   // A new day clears counts and targets but keeps the issue timing, so an issue
@@ -130,8 +129,12 @@ class AdvancedIssueHandler {
     }]));
   }
 
+  // YYYY-MM-DD in the timezone, from the same Intl parts as state.js windows.
+  // Re-parsing a toLocaleString() result relies on implementation-defined Date
+  // parsing: where it yields Invalid Date (e.g. the U+202F before AM/PM in newer
+  // ICU), both sides compare equal and the daily reset never happens.
   getDateInTimezone(date, timezone) {
-    return new Date(date.toLocaleString('en-US', { timeZone: timezone })).toDateString();
+    return getTemplateDateParts(timezone, date).date;
   }
 
   getRandomInt(min, max) {

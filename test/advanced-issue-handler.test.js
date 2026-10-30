@@ -637,3 +637,29 @@ test('does not wait between repositories in a dry run or for skipped repositorie
   assert.equal(created.length, 1);
   assert.deepEqual(delays, []);
 });
+
+test('daily reset follows the calendar day in general.timezone', () => {
+  const { handler } = createHandler();
+  // 23:30 UTC on Oct 29 is already Oct 30 in Manila (UTC+8)
+  const state = { lastDailyReset: '2026-10-29T15:30:00.000Z' };
+  const now = new Date('2026-10-29T23:30:00.000Z');
+  assert.equal(handler.shouldResetDaily(state, 'UTC', now), false);
+  assert.equal(handler.shouldResetDaily(state, 'Asia/Manila', now), true);
+  // Same Manila day on both sides of UTC midnight
+  assert.equal(handler.shouldResetDaily({ lastDailyReset: '2026-10-29T17:00:00.000Z' }, 'Asia/Manila', new Date('2026-10-30T01:00:00.000Z')), false);
+});
+
+test('daily reset does not depend on re-parsing toLocaleString output', (t) => {
+  const { handler } = createHandler();
+  // Some ICU/V8 pairings render text Date cannot parse back (Invalid Date on both
+  // sides compared equal, so the day never rolled over)
+  t.mock.method(Date.prototype, 'toLocaleString', () => 'unparseable');
+  const state = { lastDailyReset: '2026-10-29T12:00:00.000Z' };
+  assert.equal(handler.shouldResetDaily(state, 'UTC', new Date('2026-10-30T12:00:00.000Z')), true);
+  assert.equal(handler.shouldResetDaily(state, 'UTC', new Date('2026-10-29T18:00:00.000Z')), false);
+});
+
+test('an unparseable lastDailyReset triggers a reset instead of throwing', () => {
+  const { handler } = createHandler();
+  assert.equal(handler.shouldResetDaily({ lastDailyReset: 'not a date' }, 'UTC'), true);
+});
