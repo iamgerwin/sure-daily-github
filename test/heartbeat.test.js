@@ -1,0 +1,128 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { execFileSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { writeHeartbeat, heartbeatFilePath } from '../src/utils/heartbeat.js';
+import scheduler from '../src/core/scheduler.js';
+import executor from '../src/core/executor.js';
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const HEALTH_CHECK = path.join(root, 'scripts', 'health-check.sh');
+
+function tmpDir(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-heartbeat-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function useHeartbeatFile(t, file) {
+  const previous = process.env.SDG_HEARTBEAT_FILE;
+  process.env.SDG_HEARTBEAT_FILE = file;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SDG_HEARTBEAT_FILE;
+    else process.env.SDG_HEARTBEAT_FILE = previous;
+  });
+}
+
+test('writeHeartbeat records the tick time and pid, creating the directory', (t) => {
+  const file = path.join(tmpDir(t), 'nested', 'heartbeat.json');
+  const now = new Date('2026-10-30T01:02:03.000Z');
+
+  assert.equal(writeHeartbeat({ now, filePath: file }), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { lastTickAt: now.toISOString(), pid: process.pid });
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['heartbeat.json']);
+});
+
+test('writeHeartbeat reports a failure instead of throwing', (t) => {
+  const dir = tmpDir(t);
+  // A file where the parent directory should be
+  fs.writeFileSync(path.join(dir, 'blocker'), '');
+  assert.equal(writeHeartbeat({ filePath: path.join(dir, 'blocker', 'heartbeat.json') }), false);
+});
+
+test('heartbeatFilePath honors SDG_HEARTBEAT_FILE', (t) => {
+  useHeartbeatFile(t, '/tmp/custom-heartbeat.json');
+  assert.equal(heartbeatFilePath(), '/tmp/custom-heartbeat.json');
+});
+
+test('every scheduled tick writes a heartbeat, including one skipped for overlap', async (t) => {
+  const file = path.join(tmpDir(t), 'heartbeat.json');
+  useHeartbeatFile(t, file);
+  const original = executor.execute;
+  let release;
+  executor.execute = () => new Promise(resolve => { release = () => resolve({ success: true }); });
+  t.after(() => { executor.execute = original; });
+
+  const first = scheduler.runScheduledTask({});
+  assert.ok(fs.existsSync(file), 'the tick that runs writes a heartbeat');
+
+  fs.rmSync(file);
+  assert.deepEqual(await scheduler.runScheduledTask({}), { skipped: true });
+  assert.ok(fs.existsSync(file), 'a skipped tick still proves the timer fires');
+
+  release();
+  await first;
+});
+
+test('start writes a heartbeat before the first tick', (t) => {
+  const file = path.join(tmpDir(t), 'heartbeat.json');
+  useHeartbeatFile(t, file);
+  t.after(() => scheduler.stop());
+
+  assert.equal(scheduler.start({ schedule: { enabled: true, cron: '0 0 1 1 *' }, general: {} }), true);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid);
+});
+
+// Runs scripts/health-check.sh against a stub systemctl that reports the
+// service as active and records every call
+function runHealthCheck(t, { heartbeatAgeMinutes, maxAge }) {
+  const dir = tmpDir(t);
+  const bin = path.join(dir, 'bin');
+  const calls = path.join(dir, 'systemctl-calls');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'systemctl'), `#!/bin/bash\necho "$*" >> "${calls}"\n[ "$1" = show ] && echo 4242\nexit 0\n`, { mode: 0o755 });
+  // sleep after a restart is not worth waiting for in a test
+  fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+
+  const heartbeat = path.join(dir, 'data', 'scheduler-heartbeat.json');
+  if (heartbeatAgeMinutes !== undefined) {
+    fs.mkdirSync(path.dirname(heartbeat));
+    fs.writeFileSync(heartbeat, '{}');
+    const mtime = new Date(Date.now() - heartbeatAgeMinutes * 60 * 1000);
+    fs.utimesSync(heartbeat, mtime, mtime);
+  }
+
+  const env = { PATH: `${bin}:${process.env.PATH}`, SDG_APP_DIR: dir };
+  if (maxAge !== undefined) env.HEARTBEAT_MAX_AGE_MINUTES = String(maxAge);
+  execFileSync('bash', [HEALTH_CHECK], { env });
+
+  return {
+    calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [],
+    log: fs.readFileSync(path.join(dir, 'logs', 'health-check.log'), 'utf8')
+  };
+}
+
+test('health-check restarts a running service whose heartbeat is older than the limit', (t) => {
+  const { calls, log } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge: 90 });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+});
+
+test('health-check leaves a running service with a fresh heartbeat alone', (t) => {
+  const { calls } = runHealthCheck(t, { heartbeatAgeMinutes: 10, maxAge: 90 });
+  assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
+});
+
+test('health-check skips the hang check unless HEARTBEAT_MAX_AGE_MINUTES is set', (t) => {
+  const { calls } = runHealthCheck(t, { heartbeatAgeMinutes: 600 });
+  assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
+});
+
+test('health-check does not restart when no heartbeat has been written yet', (t) => {
+  const { calls, log } = runHealthCheck(t, { maxAge: 90 });
+  assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
+  assert.match(log, /No scheduler heartbeat/);
+});

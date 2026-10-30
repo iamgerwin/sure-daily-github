@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import executor from './executor.js';
 import babysitter from './babysitter.js';
+import { writeHeartbeat } from '../utils/heartbeat.js';
 
 const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 
@@ -16,6 +17,8 @@ class Scheduler {
   // Runs one scheduled execution, skipping the tick if the previous one is
   // still in flight so concurrent runs cannot race on the state files
   async runScheduledTask(config) {
+    // Every tick counts as a heartbeat, a skipped one too: the timer still fires
+    writeHeartbeat();
     if (this.executing) {
       logger.warn('Previous execution still in progress, skipping this run', {
         startedAt: new Date(this.executionStartedAt).toISOString()
@@ -86,6 +89,9 @@ class Scheduler {
     });
 
     this.running = true;
+    // A fresh heartbeat on start, so a health check right after a restart does
+    // not read the hung process's old one and restart again before the first tick
+    writeHeartbeat();
     logger.info('Scheduler started', {
       cron: cronExpression,
       timezone: config.schedule.timezone || config.general.timezone || 'UTC'
