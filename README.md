@@ -159,7 +159,8 @@ re-review. It never merges. Configure it in the `babysit:` block; set
 
 `fix-conflicts` merges the base branch into conflicted open PRs and pushes
 the result (never forced) only if the repository's own tests pass
-(`testCommand`, else `npm test`, else a `test` rule in the makefile). Source
+(`testCommand`, else `npm test`, else a `test` rule in the makefile, else
+`go test ./...` or `cargo test` for a `go.mod` or `Cargo.toml`). Source
 hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
 `escalate`) can send them to manual review instead. Test files
 (`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
@@ -406,7 +407,7 @@ sure-daily-github/
 │       ├── state.js        # State management
 │       ├── run-lock.js     # Shared run lock
 │       ├── randomizer.js   # Range and selection randomization
-│       ├── test-detector.js     # Test command detection (npm / make)
+│       ├── test-detector.js     # Test command detection (npm / make / go / cargo)
 │       └── *-ledger.js     # babysit and fix-conflicts ledgers
 ├── config/
 │   └── config.example.yaml

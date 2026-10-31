@@ -58,6 +58,13 @@ function lockfileInstall(dir) {
   return declaresDependencies(readPackageJson(dir)) ? UNLOCKED_NPM_INSTALL : null;
 }
 
+// Toolchains whose manifest at the repository root implies a standard test
+// command. Checked after npm and make, which a repo uses to wrap these.
+const NATIVE_TEST_COMMANDS = [
+  ['go.mod', 'go test ./...'],
+  ['Cargo.toml', 'cargo test']
+];
+
 // Returns { install, test } shell commands, or null when the repository has no
 // test suite we can run. A configured testCommand is used as-is, but still gets
 // the dependency install a fresh clone needs.
@@ -75,6 +82,12 @@ export function detectTestCommand(dir, repoConfig = {}, { installDeps = true } =
 
   if (hasMakeTestTarget(dir)) {
     return { install: null, test: 'make test' };
+  }
+
+  // Go and Cargo fetch dependencies themselves, so there is no install step
+  const native = NATIVE_TEST_COMMANDS.find(([file]) => fs.existsSync(path.join(dir, file)))?.[1];
+  if (native) {
+    return { install: null, test: native };
   }
 
   return null;
