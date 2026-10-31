@@ -35,6 +35,26 @@ export function getRunExitCode(result) {
   return result.summary?.failed > 0 ? 1 : 0;
 }
 
+// A dry-run preview is reported by the handler as a success, but nothing was
+// created; simple issue mode nests the previews under `details`
+function isPreview(result) {
+  return Boolean(result?.dryRun) || (Array.isArray(result?.details) && result.details.some(d => d?.dryRun));
+}
+
+// Counts for the run summary. Previews get their own bucket so a dry run does
+// not report repositories as "successful" when no commit or issue was made.
+export function summarizeResults(results = []) {
+  const done = results.filter(r => r.success && !r.skipped);
+  const previewed = done.filter(isPreview).length;
+  return {
+    total: results.length,
+    successful: done.length - previewed,
+    previewed,
+    skipped: results.filter(r => r.skipped).length,
+    failed: results.filter(r => !r.success).length
+  };
+}
+
 // One "owner/repo: reason" line per failed repository for the CLI summary
 export function describeFailures(results = []) {
   return results
@@ -112,22 +132,10 @@ class Executor {
       );
 
       // Log summary
-      const successful = results.filter(r => r.success && !r.skipped).length;
-      const skipped = results.filter(r => r.skipped).length;
-      const failed = results.filter(r => !r.success).length;
+      const summary = summarizeResults(results);
+      logger.info('Execution completed', summary);
 
-      logger.info('Execution completed', {
-        total: results.length,
-        successful,
-        skipped,
-        failed
-      });
-
-      return {
-        success: true,
-        results,
-        summary: { total: results.length, successful, skipped, failed }
-      };
+      return { success: true, results, summary };
     } catch (error) {
       logger.error('Execution failed', { error: error.message });
       return {

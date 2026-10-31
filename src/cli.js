@@ -42,6 +42,9 @@ program
         console.log('\n✅ Execution completed\n');
         console.log(`Total:      ${result.summary.total}`);
         console.log(`Successful: ${result.summary.successful}`);
+        if (cfg.general.dryRun || result.summary.previewed > 0) {
+          console.log(`Previewed:  ${result.summary.previewed} (dry run, nothing created)`);
+        }
         console.log(`Skipped:    ${result.summary.skipped}`);
         console.log(`Failed:     ${result.summary.failed}\n`);
 
