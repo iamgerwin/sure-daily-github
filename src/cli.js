@@ -10,6 +10,7 @@ import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
 import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
 import { getTemplateDateParts, formatNextIssueTime } from './utils/template-date.js';
+import logger from './utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -236,7 +237,9 @@ program
       console.log('\n🚀 Sure Daily GitHub - Scheduler Started\n');
       console.log(`Schedule:  ${cfg.schedule.cron}`);
       console.log(`Timezone:  ${cfg.schedule.timezone || cfg.general.timezone}`);
-      console.log(`Logs:      ./logs/\n`);
+      // The logger writes to the project's logs/ directory, not one relative
+      // to the working directory the service or shell started in
+      console.log(`Logs:      ${logger.logDir}\n`);
       console.log('Press Ctrl+C to stop\n');
 
       // Keep process alive; SIGINT and SIGTERM stop it
