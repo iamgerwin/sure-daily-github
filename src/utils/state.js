@@ -71,6 +71,12 @@ export class StateManager {
     }
   }
 
+  // Call before creating a commit or issue: once the action exists on GitHub, a
+  // failed save cannot undo it, so an unwritable state file must stop the run first
+  assertWritable() {
+    this.save();
+  }
+
   getRepoState(owner, repo) {
     const key = `${owner}/${repo}`;
     // GitHub names are case-insensitive: an entry recorded under other casing is
