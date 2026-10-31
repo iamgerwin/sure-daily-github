@@ -201,6 +201,9 @@ export class StateManager {
   recordAction(owner, repo, { type = 'issue', timezone = 'UTC', now = new Date() } = {}) {
     const repoState = this.getRepoState(owner, repo);
     const counters = this.ensureWindows(owner, repo, timezone, now);
+    // A failed save reports the action as failed, so it must not stay counted in
+    // memory for a later save (next repo or issue) to persist
+    const before = structuredClone(repoState);
 
     counters.hourly.count += 1;
     counters.daily.count += 1;
@@ -216,7 +219,13 @@ export class StateManager {
       repoState.totals.issues += 1;
     }
 
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      for (const key of Object.keys(repoState)) delete repoState[key];
+      Object.assign(repoState, before);
+      throw error;
+    }
   }
 
   getCounts(owner, repo, timezone = 'UTC', now = new Date()) {

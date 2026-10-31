@@ -130,6 +130,25 @@ test('crash mid-write keeps the previous state file intact and cleans up the tem
   assert.equal(reloaded.getRepoState('me', 'demo').totals.commits, 1);
 });
 
+test('an action whose save fails is not persisted by a later successful save', (t) => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+  const repoState = sm.getRepoState('me', 'demo');
+
+  t.mock.method(fs, 'renameSync', () => { throw new Error('disk full'); });
+  assert.throws(() => sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' }), /disk full/);
+  fs.renameSync.mock.restore();
+
+  assert.equal(sm.getCounts('me', 'demo').daily, 1);
+  assert.equal(repoState.totalCommits, 1);
+  sm.setRoundRobinIndex(1);
+  const saved = new StateManager({ filePath }).getRepoState('me', 'demo');
+  assert.equal(saved.counters.daily.count, 1);
+  assert.equal(saved.totals.commits, 1);
+  assert.equal(saved.commitsToday, 1);
+});
+
 test('getDailyTarget still returns the rolled target when the state cannot be saved', (t) => {
   const sm = new StateManager({ filePath: tmpStateFile() });
   t.mock.method(fs, 'renameSync', () => { throw new Error('read-only file system'); });
