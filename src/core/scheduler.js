@@ -11,6 +11,8 @@ class Scheduler {
     this.running = false;
     this.executing = false;
     this.executionStartedAt = null;
+    // Set by a shutdown signal that arrived mid-execution; called once it ends
+    this.pendingExit = null;
   }
 
   // Runs one scheduled execution, skipping the tick if the previous one is
@@ -33,7 +35,8 @@ class Scheduler {
       } else if (!result?.success) {
         logger.error('Scheduled task failed', { error: result?.error });
       }
-      await this.runScheduledBabysit(config);
+      // A shutdown requested during the execution skips the babysit scan
+      if (!this.pendingExit) await this.runScheduledBabysit(config);
       return result;
     } catch (error) {
       logger.error('Scheduled task failed', { error: error.message });
@@ -41,6 +44,12 @@ class Scheduler {
     } finally {
       this.executing = false;
       this.executionStartedAt = null;
+      if (this.pendingExit) {
+        const exit = this.pendingExit;
+        this.pendingExit = null;
+        logger.info('Scheduled execution finished, exiting');
+        exit(0);
+      }
     }
   }
 
@@ -114,6 +123,9 @@ class Scheduler {
   // Ctrl+C or a service stop (SIGTERM from systemd or pm2). A babysit scan in
   // flight has its own handlers that kill its detached engine and test process
   // groups, clean up and exit; exiting here first would orphan them.
+  // An execution in flight is allowed to finish: exiting between creating an
+  // issue or commit and recording it in the state file would repeat it on the
+  // next run. A second signal while waiting exits at once.
   handleShutdown(signal, { exit = (code) => process.exit(code) } = {}) {
     if (this.running) {
       logger.info('Stopping scheduler', { signal });
@@ -123,6 +135,12 @@ class Scheduler {
       logger.info('Waiting for the babysit scan to stop', { signal });
       return false;
     }
+    if (this.executing && !this.pendingExit) {
+      logger.info('Waiting for the scheduled execution to finish', { signal });
+      this.pendingExit = exit;
+      return false;
+    }
+    this.pendingExit = null;
     exit(0);
     return true;
   }

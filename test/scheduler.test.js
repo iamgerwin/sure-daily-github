@@ -133,6 +133,61 @@ test('handleShutdown leaves the exit to an in-flight babysit scan', (t) => {
   assert.deepEqual(exits, []);
 });
 
+test('handleShutdown waits for an in-flight execution and exits once it finishes', async (t) => {
+  const originalRunning = babysitter.isRunning;
+  const originalExecute = executor.execute;
+  const originalBabysit = babysitter.execute;
+  babysitter.isRunning = () => false;
+  let release;
+  executor.execute = () => new Promise(resolve => { release = () => resolve({ success: true }); });
+  let babysitCalls = 0;
+  babysitter.execute = async () => { babysitCalls++; return { success: true }; };
+  t.after(() => {
+    babysitter.isRunning = originalRunning;
+    executor.execute = originalExecute;
+    babysitter.execute = originalBabysit;
+  });
+
+  scheduler.task = { stop: () => {} };
+  scheduler.running = true;
+  const exits = [];
+
+  const tick = scheduler.runScheduledTask({ babysit: { enabled: true } });
+  assert.equal(scheduler.handleShutdown('SIGTERM', { exit: code => exits.push(code) }), false);
+  assert.equal(scheduler.isRunning(), false);
+  assert.deepEqual(exits, []);
+
+  release();
+  assert.deepEqual(await tick, { success: true });
+  assert.deepEqual(exits, [0]);
+  // The babysit scan that would follow the execution is skipped on shutdown
+  assert.equal(babysitCalls, 0);
+  assert.equal(scheduler.pendingExit, null);
+});
+
+test('a second signal exits at once while an execution is still in flight', async (t) => {
+  const originalRunning = babysitter.isRunning;
+  const originalExecute = executor.execute;
+  babysitter.isRunning = () => false;
+  let release;
+  executor.execute = () => new Promise(resolve => { release = () => resolve({ success: true }); });
+  t.after(() => {
+    babysitter.isRunning = originalRunning;
+    executor.execute = originalExecute;
+  });
+
+  const exits = [];
+  const tick = scheduler.runScheduledTask({});
+  assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), false);
+  assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), true);
+  assert.deepEqual(exits, [0]);
+
+  // The finished execution does not exit a second time
+  release();
+  await tick;
+  assert.deepEqual(exits, [0]);
+});
+
 test('installSignalHandlers handles SIGINT and SIGTERM until removed', (t) => {
   const originalRunning = babysitter.isRunning;
   babysitter.isRunning = () => false;
