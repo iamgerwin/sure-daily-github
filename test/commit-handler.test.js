@@ -319,3 +319,16 @@ test('processRepositories does not wait on rate-limit delays in a dry run', asyn
   assert.ok(results.every(r => r.dryRun));
   assert.deepEqual(delays, []);
 });
+
+test('a commit whose count cannot be saved fails the run instead of being repeated next run', async (t) => {
+  const { handler, calls } = stubbedHandler();
+  t.mock.method(fs, 'renameSync', () => { throw new Error('read-only file system'); });
+  const repo = { ...repoConfig, repo: 'unsaved', dailyTarget: { min: 1, max: 1 } };
+
+  const [result] = await handler.processRepositories([repo], {}, false, {});
+  fs.renameSync.mock.restore();
+
+  assert.equal(calls.length, 1);
+  assert.equal(result.success, false);
+  assert.match(result.error, /Could not save state to .*: read-only file system/);
+});

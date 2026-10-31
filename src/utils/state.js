@@ -51,6 +51,9 @@ export class StateManager {
     console.error(message);
   }
 
+  // Throws on failure: a commit or issue whose count cannot be persisted would
+  // be repeated by every later run (each `cli.js run` reloads the file), so the
+  // daily target would never be reached
   save() {
     const tmpFile = `${this.filePath}.${process.pid}.tmp`;
     try {
@@ -64,7 +67,7 @@ export class StateManager {
       fs.renameSync(tmpFile, this.filePath);
     } catch (error) {
       try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
-      console.error('Error saving state:', error.message);
+      throw new Error(`Could not save state to ${this.filePath}: ${error.message}`);
     }
   }
 
@@ -227,7 +230,13 @@ export class StateManager {
     }
     const value = crypto.randomInt(min, max + 1);
     repoState.dailyTarget = { day, min, max, value };
-    this.save();
+    // `status` rolls the target too and must not fail on read-only state; a run
+    // still fails when it records the action. Unsaved, the next process re-rolls.
+    try {
+      this.save();
+    } catch (error) {
+      console.error(error.message);
+    }
     return value;
   }
 

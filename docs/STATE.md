@@ -36,7 +36,8 @@ Limits are evaluated before each action:
 - A state file that is valid JSON but not an object (for example `[]`) is treated the same way: it is copied to `.bak` before starting fresh. A `repositories` section that is not an object is reset to empty after the same `.bak` backup, and the rest of the file (such as the round-robin cursor `roundRobin`) is kept.
 - A repository entry, counter window, or total with the wrong shape (for example a hand edit that drops `count`) is reset to its default on its own; the rest of the state is kept. The same applies to the legacy fields: a `commitsToday` or `totalCommits` that is not a non-negative whole number resets to `0`, and a `lastCommitDate` that is not a string resets to `null`.
 - The same applies to `data/issue-state.json`: a file that is not a JSON object is backed up as `issue-state.json.corrupt-<time>` and started fresh, a `repositories` section that is not an object is replaced with an empty one, and a repository entry that is not an object or has a missing or invalid `issuesCreatedToday` starts from zero, so the daily target is still enforced.
-- The directory structure is created on demand; failures are logged without crashing the process.
+- The directory structure is created on demand.
+- If `data/state.json` cannot be written (read-only mount, permissions, full disk), the commit or issue that was just created is reported as failed with `Could not save state to <path>: <reason>`, so `run` exits `1`. Otherwise every later run would reload the old counts and create another commit or issue, never reaching the daily target. A failure to save a newly rolled `dailyTarget` range value is only logged, so `status` still works on a read-only state file; the next process rolls the value again.
 - Legacy methods `isCommitNeeded` and `recordCommit` are still supported and map to daily limits to preserve original behavior.
 
 ## Overriding State Path
