@@ -45,6 +45,18 @@ export function describeFailures(results = []) {
     });
 }
 
+// What `run` will do with this config, for `validate`: issue mode names the
+// handler execute() picks, and a dryRun left on in the config file is called
+// out because every run then writes nothing to GitHub
+export function describeRunMode(cfg) {
+  const mode = cfg.general?.mode || 'commit';
+  const handler = mode === 'issue'
+    ? ` (${usesAdvancedIssueHandler(cfg.repositories) ? 'advanced' : 'simple'} issue handler)`
+    : '';
+  const dryRun = cfg.general?.dryRun ? ', dry run (nothing is written to GitHub)' : '';
+  return `${mode}${handler}${dryRun}`;
+}
+
 class Executor {
   async execute(configOverride = null) {
     let lock;

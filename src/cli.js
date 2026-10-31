@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
-import executor, { describeFailures, getRunExitCode } from './core/executor.js';
+import executor, { describeFailures, describeRunMode, getRunExitCode } from './core/executor.js';
 import scheduler from './core/scheduler.js';
 import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
@@ -384,6 +384,7 @@ program
       const cfg = config.load(options.config);
       console.log('✅ Configuration is valid');
       console.log(`   Repositories: ${cfg.repositories.length}`);
+      console.log(`   Mode: ${describeRunMode(cfg)}`);
 
       // The loader normalizes every dailyTarget to { min, max }, so a fixed
       // target arrives as min === max and is shown as the single number

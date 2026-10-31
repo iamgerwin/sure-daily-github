@@ -101,7 +101,7 @@ echo "GITHUB_TOKEN=ghp_your_token_here" > .env
 ### 4. Test
 
 ```bash
-# Validate configuration (pretty prints ranges/randomization)
+# Validate configuration (pretty prints mode, ranges/randomization)
 node src/cli.js validate
 
 # Test with dry-run (no actual writes)
