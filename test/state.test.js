@@ -118,14 +118,46 @@ test('crash mid-write keeps the previous state file intact and cleans up the tem
     realWrite(file, String(data).slice(0, 10));
     throw new Error('simulated crash');
   });
-  t.mock.method(console, 'error', () => {});
 
-  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+  assert.throws(
+    () => sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' }),
+    /Could not save state to .*: simulated crash/
+  );
   fs.writeFileSync.mock.restore();
 
   assert.deepEqual(fs.readdirSync(path.dirname(filePath)), [path.basename(filePath)]);
   const reloaded = new StateManager({ filePath });
   assert.equal(reloaded.getRepoState('me', 'demo').totals.commits, 1);
+});
+
+test('an action whose save fails is not persisted by a later successful save', (t) => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+  const repoState = sm.getRepoState('me', 'demo');
+
+  t.mock.method(fs, 'renameSync', () => { throw new Error('disk full'); });
+  assert.throws(() => sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' }), /disk full/);
+  fs.renameSync.mock.restore();
+
+  assert.equal(sm.getCounts('me', 'demo').daily, 1);
+  assert.equal(repoState.totalCommits, 1);
+  sm.setRoundRobinIndex(1);
+  const saved = new StateManager({ filePath }).getRepoState('me', 'demo');
+  assert.equal(saved.counters.daily.count, 1);
+  assert.equal(saved.totals.commits, 1);
+  assert.equal(saved.commitsToday, 1);
+});
+
+test('getDailyTarget still returns the rolled target when the state cannot be saved', (t) => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  t.mock.method(fs, 'renameSync', () => { throw new Error('read-only file system'); });
+  const errors = [];
+  t.mock.method(console, 'error', (message) => errors.push(message));
+
+  const target = sm.getDailyTarget('me', 'demo', { min: 2, max: 3 }, 'UTC', new Date('2026-10-18T10:00:00Z'));
+  assert.ok(target === 2 || target === 3);
+  assert.match(errors[0], /Could not save state to .*: read-only file system/);
 });
 
 test('lastCommitDate tracks the last recorded commit, not the last window check', () => {
