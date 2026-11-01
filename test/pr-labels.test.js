@@ -246,3 +246,23 @@ test('rollupState leaves out our own status and reports the worst remaining stat
   assert.equal(rollupState([run('COMPLETED', 'FAILURE'), ctx('ci', 'PENDING')]), 'FAILURE');
   assert.equal(mergePolicyState([ctx('ci', 'SUCCESS'), ctx(MERGE_POLICY_CONTEXT, 'PENDING')]), 'PENDING');
 });
+
+test('rollupState counts only passing conclusions as success; stale and unknown ones are pending', () => {
+  const run = (status, conclusion) => ({ __typename: 'CheckRun', name: 'test', status, conclusion });
+  const ctx = (context, state) => ({ __typename: 'StatusContext', context, state });
+  // Required status checks accept success, neutral and skipped
+  assert.equal(rollupState([run('COMPLETED', 'SUCCESS'), run('COMPLETED', 'NEUTRAL'), run('COMPLETED', 'SKIPPED')]), 'SUCCESS');
+  assert.equal(rollupState([ctx('ci', 'SUCCESS')]), 'SUCCESS');
+  // A stale check run has to be re-run before it passes
+  assert.equal(rollupState([run('COMPLETED', 'SUCCESS'), run('COMPLETED', 'STALE')]), 'PENDING');
+  // Values GitHub may add later, or a completed run without a conclusion, never pass
+  assert.equal(rollupState([run('COMPLETED', 'SOMETHING_NEW')]), 'PENDING');
+  assert.equal(rollupState([run('COMPLETED', null)]), 'PENDING');
+  assert.equal(rollupState([ctx('ci', 'SOMETHING_NEW')]), 'PENDING');
+  assert.equal(rollupState([ctx('ci', 'EXPECTED')]), 'PENDING');
+  // Failures still win over pending
+  for (const conclusion of ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE']) {
+    assert.equal(rollupState([run('COMPLETED', 'STALE'), run('COMPLETED', conclusion)]), 'FAILURE', conclusion);
+  }
+  assert.equal(rollupState([run('COMPLETED', 'STALE'), ctx('ci', 'ERROR')]), 'FAILURE');
+});
