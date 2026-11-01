@@ -54,7 +54,7 @@ repositories:
   - owner: "yourusername"
     repo: "your-repo"
     enabled: true
-    branch: "main"
+    # branch: "main"  # Omit to use the repository's default branch
     # Fixed number or range
     # dailyTarget: 1
     dailyTarget:
