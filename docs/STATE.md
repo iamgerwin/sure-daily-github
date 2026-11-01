@@ -5,7 +5,7 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
 ## How It Works
 
 - Per repository counters stored in `data/state.json`:
-  - hourly: `YYYY-MM-DDTHH`
+  - hourly: `YYYY-MM-DDTHH` (the local hour that repeats when clocks fall back carries its UTC offset, e.g. `2026-11-01T01-04:00` and `2026-11-01T01-05:00`, so each real hour gets its own window)
   - daily: `YYYY-MM-DD`
   - weekly: ISO week key `YYYY-Www`
 - Totals
@@ -16,7 +16,7 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
 
 ## Timezone
 
-All windows respect `general.timezone` from your configuration (default: `UTC`). This impacts boundary resets for hourly/daily/weekly periods.
+All windows respect `general.timezone` from your configuration (default: `UTC`). This impacts boundary resets for hourly/daily/weekly periods. On a daylight saving fall-back day the repeated local hour is two separate hourly windows, so an hourly cap applies to each real hour rather than to both together.
 
 ## Limits
 

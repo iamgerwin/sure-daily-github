@@ -119,11 +119,40 @@ export class StateManager {
     const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
     const weekKey = `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 
+    const hourKey = `${y}-${m}-${d}T${H}`;
     return {
-      hourly: `${y}-${m}-${d}T${H}`,
+      hourly: this.isRepeatedHour(hourKey, timezone, now)
+        ? `${hourKey}${this.getUtcOffset(timezone, now)}`
+        : hourKey,
       daily: `${y}-${m}-${d}`,
       weekly: weekKey
     };
+  }
+
+  // "-04:00" style UTC offset of the timezone at `now`
+  getUtcOffset(timezone, now) {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'longOffset' })
+      .formatToParts(now).find(p => p.type === 'timeZoneName')?.value || '';
+    return name.replace(/^GMT/, '');
+  }
+
+  // When clocks fall back (e.g. 01:00-02:00 in America/New_York on the first
+  // Sunday of November), the same local hour happens twice. Keyed by the wall
+  // clock alone, both real hours would share one hourly window and its cap.
+  // Only that repeated hour carries the UTC offset in its key, so every other
+  // key keeps the YYYY-MM-DDTHH format (and existing counters stay valid).
+  isRepeatedHour(hourKey, timezone, now) {
+    const offset = this.getUtcOffset(timezone, now);
+    // Offsets shift by 30 or 60 minutes, so a repeat lies within an hour of now
+    for (const deltaMin of [-60, -30, 30, 60]) {
+      const other = new Date(now.getTime() + deltaMin * 60 * 1000);
+      if (this.getUtcOffset(timezone, other) === offset) continue;
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
+      }).formatToParts(other).map(p => [p.type, p.value]));
+      if (`${parts.year}-${parts.month}-${parts.day}T${parts.hour}` === hourKey) return true;
+    }
+    return false;
   }
 
   ensureWindows(owner, repo, timezone = 'UTC', now = new Date()) {

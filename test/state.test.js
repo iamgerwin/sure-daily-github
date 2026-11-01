@@ -238,3 +238,43 @@ test('the default state instance honors SDG_STATE_FILE from .env, imported the w
 
   assert.equal(output, stateFile);
 });
+
+test('getPeriodKeys keeps the repeated fall-back hour as two hourly windows', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const tz = 'America/New_York';
+  // 2026-11-01: 01:00-02:00 local happens at 05:xxZ (EDT, -04:00) and again at 06:xxZ (EST, -05:00)
+  const first = sm.getPeriodKeys(tz, new Date('2026-11-01T05:10:00Z'));
+  const second = sm.getPeriodKeys(tz, new Date('2026-11-01T06:10:00Z'));
+  assert.equal(first.hourly, '2026-11-01T01-04:00');
+  assert.equal(second.hourly, '2026-11-01T01-05:00');
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T05:59:59Z')).hourly, '2026-11-01T01-04:00');
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T06:59:59Z')).hourly, '2026-11-01T01-05:00');
+  assert.equal(first.daily, second.daily);
+
+  // The hours around it keep the plain YYYY-MM-DDTHH key
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T04:59:59Z')).hourly, '2026-11-01T00');
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T07:00:00Z')).hourly, '2026-11-01T02');
+});
+
+test('getPeriodKeys leaves spring-forward and offset-free hours unchanged', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  // 2026-03-08: 02:00 EST jumps to 03:00 EDT, no hour repeats
+  assert.equal(sm.getPeriodKeys('America/New_York', new Date('2026-03-08T06:30:00Z')).hourly, '2026-03-08T01');
+  assert.equal(sm.getPeriodKeys('America/New_York', new Date('2026-03-08T07:15:00Z')).hourly, '2026-03-08T03');
+  assert.equal(sm.getPeriodKeys('UTC', new Date('2026-11-01T05:10:00Z')).hourly, '2026-11-01T05');
+  assert.equal(sm.getPeriodKeys('Asia/Manila', new Date('2026-11-01T05:10:00Z')).hourly, '2026-11-01T13');
+});
+
+test('hourly cap applies to each real hour when clocks fall back', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const tz = 'America/New_York';
+  const firstPass = new Date('2026-11-01T05:30:00Z'); // 01:30 EDT
+  const secondPass = new Date('2026-11-01T06:30:00Z'); // 01:30 EST, one real hour later
+
+  sm.recordAction('me', 'demo', { timezone: tz, now: firstPass });
+  assert.equal(sm.isWithinLimits('me', 'demo', { hourlyMax: 1 }, tz, firstPass).allowed, false);
+
+  const later = sm.isWithinLimits('me', 'demo', { hourlyMax: 1 }, tz, secondPass);
+  assert.equal(later.allowed, true);
+  assert.deepEqual(later.counts, { hourly: 0, daily: 1, weekly: 1 });
+});
