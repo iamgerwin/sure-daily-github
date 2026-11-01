@@ -761,3 +761,45 @@ test('validate keeps boolean and unset randomization and schedule flags', () => 
   assert.equal(config.validate({ repositories: [baseRepo], schedule: { enabled: null } }).schedule.enabled, null);
   assert.equal(config.validate({ repositories: [baseRepo], schedule: { enabled: true, cron: '0 9 * * *' } }).schedule.enabled, true);
 });
+
+test('validate stringifies an owner and repo that YAML read as numbers', () => {
+  const cfg = config.validate(yaml.load('repositories:\n  - owner: 1234\n    repo: 2024\n'));
+  assert.equal(cfg.repositories[0].owner, '1234');
+  assert.equal(cfg.repositories[0].repo, '2024');
+});
+
+test('validate catches a duplicate repository written once as a number', () => {
+  assert.throws(
+    () => config.validate(yaml.load('repositories:\n  - owner: me\n    repo: 2024\n  - owner: me\n    repo: "2024"\n')),
+    /Repository 1: duplicate of repository 0 \(me\/2024\)/
+  );
+});
+
+test('validate rejects an owner or repo that is not a name', () => {
+  for (const owner of [['me'], { name: 'me' }, true, -1, 1.5]) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, owner }] }),
+      /Repository 0: invalid owner format/,
+      `owner ${JSON.stringify(owner)} should be rejected`
+    );
+  }
+  for (const repo of [['demo'], { name: 'demo' }, true, -1, 1.5, '.', '..']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, repo }] }),
+      /Repository 0: invalid repo format/,
+      `repo ${JSON.stringify(repo)} should be rejected`
+    );
+  }
+});
+
+test('validate still requires owner and repo', () => {
+  for (const value of [undefined, null, '']) {
+    assert.throws(() => config.validate({ repositories: [{ owner: value, repo: 'demo' }] }), /Repository 0: owner is required/);
+    assert.throws(() => config.validate({ repositories: [{ owner: 'me', repo: value }] }), /Repository 0: repo is required/);
+  }
+});
+
+test('validate accepts repo names with dots that are not . or ..', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, repo: '.github' }, { ...baseRepo, repo: 'a..b' }] });
+  assert.deepEqual(cfg.repositories.map(r => r.repo), ['.github', 'a..b']);
+});
