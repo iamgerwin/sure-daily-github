@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readLedgerObject } from './ledger-file.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEDGER_FILE = path.join(__dirname, '../../data/conflict-fixer-state.json');
@@ -43,12 +44,8 @@ export class FixerLedger {
   }
 
   load() {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? normalizeKeys(parsed) : {};
-    } catch (_) {
-      return {};
-    }
+    const parsed = readLedgerObject(this.filePath, 'conflict-fixer ledger');
+    return parsed ? normalizeKeys(parsed) : {};
   }
 
   // Temp file + rename so a crash mid-write never leaves a truncated ledger.

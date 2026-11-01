@@ -97,7 +97,9 @@ costs one GraphQL query, one dashboard read, and no writes.
 the head commit has no `sdg/merge-policy` context, and an existing one is never overwritten. The sticky and the dashboard
 are found by marker (and must be authored by the token's user), then edited only when their body changed. If you delete
 `data/pr-maint-state.json`, the next tick costs extra reads but makes no duplicate writes. The one exception is escalation
-records, which live only in the state file in this release.
+records, which live only in the state file in this release. A state file that cannot be parsed (or is not a JSON
+object) loads as empty, which also clears the breaker and the write budget; the unreadable file is first copied to
+`pr-maint-state.json.bak` and reported on stderr, since the next tick's save replaces it.
 
 **File locations.** Each pr-maint file has its own environment override:
 
