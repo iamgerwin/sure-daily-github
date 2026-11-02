@@ -38,3 +38,17 @@ test('every environment variable read by src/ is documented', () => {
   const undocumented = vars.filter(name => !new RegExp(`\\b${name}\\b`).test(docs));
   assert.deepEqual(undocumented, []);
 });
+
+// The reverse direction: a variable offered in .env.example that no code reads
+// is a setting that silently does nothing (e.g. a DEBUG=... line that never
+// enabled debug output; LOG_LEVEL=debug does)
+test('every variable in .env.example is read by src/', () => {
+  const example = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
+  const offered = [...example.matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)].map(match => match[1]);
+  assert.ok(offered.length > 0, 'expected .env.example to offer at least one variable');
+
+  const source = listFiles(path.join(root, 'src'), '.js')
+    .map(file => fs.readFileSync(file, 'utf8')).join('\n');
+  const unused = offered.filter(name => !new RegExp(`\\b${name}\\b`).test(source));
+  assert.deepEqual(unused, []);
+});
