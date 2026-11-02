@@ -247,6 +247,11 @@ program
     }
   });
 
+// The repository column fits the longest owner/repo name; padEnd never
+// truncates, so a fixed width let a long name push the borders out of line
+const MIN_REPO_COLUMN_WIDTH = 31;
+const repoColumnWidth = (names) => Math.max(MIN_REPO_COLUMN_WIDTH, ...names.map(name => name.length));
+
 // Status command - check repository status
 program
   .command('status')
@@ -264,12 +269,14 @@ program
         if (result.status.repositories && Array.isArray(result.status.repositories)) {
           // Show times in general.timezone, the same clock the daily reset uses
           const timezone = result.status.timezone || 'UTC';
-          console.log('┌─────────────────────────────────┬────────────┬───────┬──────────────────────┐');
-          console.log('│ Repository                      │ Target     │ Today │ Next Issue           │');
-          console.log('├─────────────────────────────────┼────────────┼───────┼──────────────────────┤');
+          const nameWidth = repoColumnWidth(result.status.repositories.map(repo => repo.repo));
+          const bar = '─'.repeat(nameWidth + 2);
+          console.log(`┌${bar}┬────────────┬───────┬──────────────────────┐`);
+          console.log(`│ ${'Repository'.padEnd(nameWidth)} │ Target     │ Today │ Next Issue           │`);
+          console.log(`├${bar}┼────────────┼───────┼──────────────────────┤`);
 
           result.status.repositories.forEach(repo => {
-            const repoName = repo.repo.padEnd(31);
+            const repoName = repo.repo.padEnd(nameWidth);
             const target = (repo.todayTarget || 'N/A').toString().padStart(10);
             const today = (repo.issuesCreatedToday || 0).toString().padStart(5);
             let nextIssue = 'Any time';
@@ -283,7 +290,7 @@ program
             console.log(`│ ${repoName} │ ${target} │ ${today} │ ${nextIssue} │`);
           });
 
-          console.log('└─────────────────────────────────┴────────────┴───────┴──────────────────────┘\n');
+          console.log(`└${bar}┴────────────┴───────┴──────────────────────┘\n`);
           
           if (result.status.lastDailyReset) {
             const { date, time } = getTemplateDateParts(timezone, new Date(result.status.lastDailyReset));
@@ -292,12 +299,14 @@ program
         } 
         // Legacy format
         else if (Array.isArray(result.status)) {
-          console.log('┌─────────────────────────────────┬────────┬───────┬────────┐');
-          console.log('│ Repository                      │ Target │ Today │ Status │');
-          console.log('├─────────────────────────────────┼────────┼───────┼────────┤');
+          const nameWidth = repoColumnWidth(result.status.map(repo => `${repo.owner}/${repo.repo}`));
+          const bar = '─'.repeat(nameWidth + 2);
+          console.log(`┌${bar}┬────────┬───────┬────────┐`);
+          console.log(`│ ${'Repository'.padEnd(nameWidth)} │ Target │ Today │ Status │`);
+          console.log(`├${bar}┼────────┼───────┼────────┤`);
 
           result.status.forEach(repo => {
-            const repoName = `${repo.owner}/${repo.repo}`.padEnd(31);
+            const repoName = `${repo.owner}/${repo.repo}`.padEnd(nameWidth);
             const target = repo.target.toString().padStart(6);
             const today = repo.today.toString().padStart(5);
             const status = repo.needsCommit ? '✗'.padStart(6) : '✓'.padStart(6);
@@ -305,7 +314,7 @@ program
             console.log(`│ ${repoName} │ ${target} │ ${today} │ ${status} │`);
           });
 
-          console.log('└─────────────────────────────────┴────────┴───────┴────────┘\n');
+          console.log(`└${bar}┴────────┴───────┴────────┘\n`);
         }
 
         if (result.disabled?.length) {
