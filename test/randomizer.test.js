@@ -210,3 +210,39 @@ test('selectRepositories round-robin wraps a stale cursor and skips disabled rep
   assert.deepEqual(selected.map(r => r.id), ['b']);
   assert.equal(store.index, 0);
 });
+
+test('selectRepositories round-robin does not skip a repository when an earlier one drops out', () => {
+  const rotation = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const [a, b, c] = rotation;
+  const store = memoryCursorStore();
+  const cfg = { strategy: 'round-robin', maxPerExecution: 1 };
+
+  assert.deepEqual(randomizer.selectRepositories([a, b, c], cfg, store, { rotation }).map(r => r.id), ['a']);
+  // a met its target, so only b and c are candidates; b is next, not c
+  assert.deepEqual(randomizer.selectRepositories([b, c], cfg, store, { rotation }).map(r => r.id), ['b']);
+  assert.deepEqual(randomizer.selectRepositories([b, c], cfg, store, { rotation }).map(r => r.id), ['c']);
+  assert.deepEqual(randomizer.selectRepositories([a, b, c], cfg, store, { rotation }).map(r => r.id), ['a']);
+});
+
+test('selectRepositories round-robin passes over a waiting repository and resumes after the pick', () => {
+  const rotation = ['a', 'b', 'c', 'd'].map(id => ({ id, enabled: true }));
+  const [a, , c, d] = rotation;
+  const store = memoryCursorStore(1);
+  const cfg = { strategy: 'round-robin', maxPerExecution: 2 };
+
+  // b is waiting, so the picks after the cursor are c and d; the next run starts at a
+  assert.deepEqual(randomizer.selectRepositories([a, c, d], cfg, store, { rotation }).map(r => r.id), ['c', 'd']);
+  assert.equal(store.index, 0);
+});
+
+test('selectRepositories round-robin ignores disabled repositories in the rotation', () => {
+  const rotation = [
+    { id: 'a', enabled: true },
+    { id: 'x', enabled: false },
+    { id: 'b', enabled: true }
+  ];
+  const store = memoryCursorStore(1);
+  const selected = randomizer.selectRepositories(rotation, { strategy: 'round-robin', maxPerExecution: 1 }, store, { rotation });
+  assert.deepEqual(selected.map(r => r.id), ['b']);
+  assert.equal(store.index, 0);
+});
