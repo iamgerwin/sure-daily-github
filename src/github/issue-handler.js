@@ -98,6 +98,16 @@ class IssueHandler {
     return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone, now);
   }
 
+  // Issues the tightest of the hourly/daily/weekly limits still allows (Infinity when uncapped)
+  remainingIssues(repoConfig, config = {}, now = new Date()) {
+    const { counts, limits } = this.checkLimits(repoConfig, config, null, now);
+    return Math.max(0, Math.min(
+      limits.hourlyMax - counts.hourly,
+      limits.dailyMax - counts.daily,
+      limits.weeklyMax - counts.weekly
+    ));
+  }
+
   async createDailyIssue(repoConfig, contentTemplate, dryRun = false, targetCount = null, config = {}, now = new Date()) {
     const { owner, repo } = repoConfig;
 
@@ -119,6 +129,9 @@ class IssueHandler {
       // Generate issue content
       const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
       const labels = repoConfig.labels || ['automated'];
+
+      // Fail before the API call: an uncounted issue would be repeated every run
+      state.assertWritable();
 
       // Create issue
       const result = await this.createIssue(owner, repo, title, body, labels);
@@ -150,8 +163,18 @@ class IssueHandler {
 
     logger.info('Creating multiple issues', { owner, repo, count });
 
+    // A dry run records nothing, so every preview would pass the same limit
+    // check; stop where a real run would, once the previews use up the headroom
+    const headroom = dryRun ? this.remainingIssues(repoConfig, config) : Infinity;
+
     for (let i = 0; i < count; i++) {
-      const result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null, config);
+      let result;
+      if (i < headroom) {
+        result = await this.createDailyIssue(repoConfig, contentTemplate, dryRun, null, config);
+      } else {
+        logger.info('[DRY RUN] Limit reached, would skip further issues', { owner, repo, previewed: i });
+        result = { success: true, skipped: true, reason: 'limit_reached' };
+      }
 
       results.push(result);
 
@@ -187,7 +210,7 @@ class IssueHandler {
       }
     }
 
-    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun });
+    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun, rotation: repositories });
     for (const repo of ready) {
       if (!selectedRepos.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });
@@ -267,6 +290,26 @@ class IssueHandler {
     }
 
     return results;
+  }
+
+  // Reports against the same daily cap checkLimits enforces in `run`, so an
+  // enabled randomization range replaces the repository dailyTarget here too
+  async getStatus(repositories, config = {}, now = new Date()) {
+    return repositories.map(repoConfig => {
+      const { owner, repo } = repoConfig;
+      const { counts, limits } = this.checkLimits(repoConfig, config, null, now);
+      const repoState = state.getRepoState(owner, repo);
+
+      return {
+        owner,
+        repo,
+        target: limits.dailyMax,
+        today: counts.daily,
+        total: repoState.totals?.issues ?? 0,
+        lastCommit: repoState.lastCommitDate,
+        needsCommit: counts.daily < limits.dailyMax
+      };
+    });
   }
 }
 

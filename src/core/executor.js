@@ -28,11 +28,45 @@ export function usesAdvancedIssueHandler(repositories = []) {
   );
 }
 
+// Only the simple issue handler reads randomization.issueCount and
+// timeVariations; commit mode and the advanced issue handler follow each
+// repository's dailyTarget. Returns why the counts go unused, or null.
+export function randomizationCountsIgnoredReason(cfg) {
+  if (!cfg?.randomization?.enabled) return null;
+  if ((cfg.general?.mode || 'commit') !== 'issue') {
+    return 'commit mode follows each repository dailyTarget';
+  }
+  if (usesAdvancedIssueHandler(cfg.repositories)) {
+    return 'repositories with a dailyTarget range or intervalMinutes use the advanced issue handler, which follows each repository dailyTarget';
+  }
+  return null;
+}
+
 // A run that completes but fails some repositories must still exit non-zero,
 // otherwise cron and systemd report every failed commit/issue as a success
 export function getRunExitCode(result) {
   if (!result?.success) return 1;
   return result.summary?.failed > 0 ? 1 : 0;
+}
+
+// A dry-run preview is reported by the handler as a success, but nothing was
+// created; simple issue mode nests the previews under `details`
+function isPreview(result) {
+  return Boolean(result?.dryRun) || (Array.isArray(result?.details) && result.details.some(d => d?.dryRun));
+}
+
+// Counts for the run summary. Previews get their own bucket so a dry run does
+// not report repositories as "successful" when no commit or issue was made.
+export function summarizeResults(results = []) {
+  const done = results.filter(r => r.success && !r.skipped);
+  const previewed = done.filter(isPreview).length;
+  return {
+    total: results.length,
+    successful: done.length - previewed,
+    previewed,
+    skipped: results.filter(r => r.skipped).length,
+    failed: results.filter(r => !r.success).length
+  };
 }
 
 // One "owner/repo: reason" line per failed repository for the CLI summary
@@ -112,22 +146,10 @@ class Executor {
       );
 
       // Log summary
-      const successful = results.filter(r => r.success && !r.skipped).length;
-      const skipped = results.filter(r => r.skipped).length;
-      const failed = results.filter(r => !r.success).length;
+      const summary = summarizeResults(results);
+      logger.info('Execution completed', summary);
 
-      logger.info('Execution completed', {
-        total: results.length,
-        successful,
-        skipped,
-        failed
-      });
-
-      return {
-        success: true,
-        results,
-        summary: { total: results.length, successful, skipped, failed }
-      };
+      return { success: true, results, summary };
     } catch (error) {
       logger.error('Execution failed', { error: error.message });
       return {
@@ -142,20 +164,29 @@ class Executor {
       const cfg = config.get();
       const mode = cfg.general.mode || 'commit';
 
+      // `run` never processes a disabled repository, so listing it with a
+      // pending target would report work that will not happen; it is named
+      // separately instead. The handler is still chosen from every repository,
+      // the same way `run` chooses it.
+      const enabled = cfg.repositories.filter(repo => repo.enabled);
+      const disabled = cfg.repositories.filter(repo => !repo.enabled).map(repo => `${repo.owner}/${repo.repo}`);
+
       // Status only reads the local state files, so the handlers are built
       // without a token and never call GitHub
       // Commit mode tracks progress in StateManager, not the issue state file
       if (mode !== 'issue') {
-        const status = await new CommitHandler().getStatus(cfg.repositories, cfg.general.timezone);
-        return { success: true, status };
+        const status = await new CommitHandler().getStatus(enabled, cfg.general.timezone);
+        return { success: true, status, disabled };
       }
 
-      const handler = usesAdvancedIssueHandler(cfg.repositories)
-        ? new AdvancedIssueHandler()
-        : new CommitHandler();
+      if (usesAdvancedIssueHandler(cfg.repositories)) {
+        const status = await new AdvancedIssueHandler().getStatus(enabled, cfg.general.timezone);
+        return { success: true, status, disabled };
+      }
 
-      const status = await handler.getStatus(cfg.repositories, cfg.general.timezone);
-      return { success: true, status };
+      // Simple issue mode caps each day by checkLimits, which honors randomization
+      const status = await new IssueHandler().getStatus(enabled, cfg);
+      return { success: true, status, disabled };
     } catch (error) {
       logger.error('Failed to get status', { error: error.message });
       return { success: false, error: error.message };

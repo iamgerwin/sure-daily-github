@@ -20,10 +20,6 @@ function isValidTimezone(timezone) {
   }
 }
 
-// Personal (classic and fine-grained), OAuth, and GitHub App installation and
-// user-to-server tokens; the last two are what Actions and App-based setups pass
-const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
-
 // YAML 1.2 (js-yaml) reads `no`, `off` and `"false"` as strings, which are
 // truthy, so a flag meant to switch something off would silently stay on
 function validateBooleanFlag(value, label, errors) {
@@ -64,6 +60,11 @@ function validateCountRange(range, label, errors) {
     errors.push(`${label} min cannot be greater than max`);
   }
 }
+
+// Prefixes of tokens that authenticate API calls: classic and fine-grained PATs,
+// OAuth app tokens, and GitHub App tokens (ghs_ is what GitHub Actions provides
+// as GITHUB_TOKEN, ghu_ a user-to-server token). ghr_ refresh tokens cannot.
+export const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
 
 // GitHub expects a list of label names; a bare string such as `labels: bug`
 // would be spread into one label per character ("b", "u", "g")
@@ -109,6 +110,13 @@ export function defaultConfigPath() {
   return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
 }
 
+// Used when the config has no contentTemplate. Shared by identity so advanced
+// issue mode can tell it apart from a configured one and keep its own default.
+export const DEFAULT_CONTENT_TEMPLATE = Object.freeze({
+  title: 'Daily Update',
+  body: 'Progress update for ${date}'
+});
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -122,8 +130,11 @@ export const BABYSIT_DEFAULTS = {
   engineTimeoutMinutes: 30
 };
 
+const isMapping = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isPositiveInt = (value) => Number.isInteger(value) && value >= 1;
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+
+const TITLE_LIST_KEYS = ['bugTitles', 'featureTitles', 'docTitles', 'perfTitles'];
 
 function validateBabysit(babysit, errors) {
   if (babysit === undefined || babysit === null) return;
@@ -389,6 +400,22 @@ class ConfigLoader {
     }
     validateContentTemplate(config.contentTemplate, 'contentTemplate', errors);
 
+    // A section written as a scalar or list (e.g. `schedule: "0 9 * * *"` or
+    // `repositorySelection: random`) has none of the keys read below, so it
+    // would pass and its settings would be silently ignored
+    const sections = {
+      general: config.general,
+      randomization: config.randomization,
+      'randomization.timeVariations': isMapping(config.randomization) ? config.randomization.timeVariations : undefined,
+      repositorySelection: config.repositorySelection,
+      schedule: config.schedule
+    };
+    for (const [label, value] of Object.entries(sections)) {
+      if (value !== undefined && value !== null && !isMapping(value)) {
+        errors.push(`${label} must be a mapping`);
+      }
+    }
+
     // Validate general settings
     const general = config.general || {};
 
@@ -418,6 +445,17 @@ class ConfigLoader {
     validateBooleanFlag(config.randomization?.enabled, 'randomization.enabled', errors);
     validateBooleanFlag(config.randomization?.timeVariations?.enabled, 'randomization.timeVariations.enabled', errors);
     validateBooleanFlag(config.schedule?.enabled, 'schedule.enabled', errors);
+
+    // Advanced issue mode draws ${randomBugTitle} and friends from these lists
+    // whether or not randomization is enabled; a bare string would otherwise
+    // yield a single random character as the title
+    for (const key of TITLE_LIST_KEYS) {
+      const list = config.randomization?.[key];
+      if (list !== undefined && list !== null
+        && (!Array.isArray(list) || !list.every(isNonEmptyString))) {
+        errors.push(`randomization.${key} must be a list of non-empty strings`);
+      }
+    }
 
     // Validate randomization settings; a fractional or inverted range would
     // otherwise throw from randomInt partway through an issue-mode run
@@ -547,10 +585,7 @@ class ConfigLoader {
         rateLimits: { ...PR_MAINT_DEFAULTS.rateLimits, ...(config.prMaint?.rateLimits || {}) },
         budgets: { ...PR_MAINT_DEFAULTS.budgets, ...(config.prMaint?.budgets || {}) }
       },
-      contentTemplate: config.contentTemplate || {
-        title: 'Daily Update',
-        body: 'Progress update for ${date}'
-      },
+      contentTemplate: config.contentTemplate || DEFAULT_CONTENT_TEMPLATE,
       // Randomly picked per issue by AdvancedIssueHandler
       contentTemplates: config.contentTemplates || []
     };

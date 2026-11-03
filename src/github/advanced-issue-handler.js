@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
+import { DEFAULT_CONTENT_TEMPLATE } from '../config/loader.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,6 +22,10 @@ class AdvancedIssueHandler {
     this.stateFile = process.env.SDG_ISSUE_STATE_FILE || DEFAULT_STATE_FILE;
     // Persists the round-robin cursor shared with the simple issue handler
     this.cursorStore = stateManager;
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async init() {
@@ -102,17 +107,16 @@ class AdvancedIssueHandler {
     return state.repositories[key];
   }
 
-  shouldResetDaily(state, timezone) {
+  shouldResetDaily(state, timezone, now = new Date()) {
     if (!state.lastDailyReset) return true;
-    
-    const now = new Date();
+
+    // An unparseable timestamp (hand edit) cannot be placed in a day; reset
+    // rather than let Intl throw a RangeError and abort the run
     const lastReset = new Date(state.lastDailyReset);
-    
+    if (!Number.isFinite(lastReset.getTime())) return true;
+
     // Check if we've crossed midnight in the specified timezone
-    const nowDate = this.getDateInTimezone(now, timezone);
-    const lastResetDate = this.getDateInTimezone(lastReset, timezone);
-    
-    return nowDate !== lastResetDate;
+    return this.getDateInTimezone(now, timezone) !== this.getDateInTimezone(lastReset, timezone);
   }
 
   // A new day clears counts and targets but keeps the issue timing, so an issue
@@ -126,8 +130,12 @@ class AdvancedIssueHandler {
     }]));
   }
 
+  // YYYY-MM-DD in the timezone, from the same Intl parts as state.js windows.
+  // Re-parsing a toLocaleString() result relies on implementation-defined Date
+  // parsing: where it yields Invalid Date (e.g. the U+202F before AM/PM in newer
+  // ICU), both sides compare equal and the daily reset never happens.
   getDateInTimezone(date, timezone) {
-    return new Date(date.toLocaleString('en-US', { timeZone: timezone })).toDateString();
+    return getTemplateDateParts(timezone, date).date;
   }
 
   getRandomInt(min, max) {
@@ -162,20 +170,30 @@ class AdvancedIssueHandler {
   generateIssueContent(repo, config, now = new Date()) {
     const randomization = config.randomization || {};
     const templates = config.contentTemplates || [];
-    
+    // Without a contentTemplates list, a configured contentTemplate (the one
+    // simple issue mode uses) still applies, so moving a repository to a range
+    // target or an interval does not silently drop it. The loader's built-in
+    // default does not count, so unconfigured titles keep the date and time.
+    // Only title and body are taken, as in simple issue mode (no labels).
+    const single = config.contentTemplate && config.contentTemplate !== DEFAULT_CONTENT_TEMPLATE
+      ? { title: config.contentTemplate.title, body: config.contentTemplate.body }
+      : {};
+
     // Pick a random template or use default
-    const template = templates.length > 0 ? this.getRandomElement(templates) : {};
+    const template = templates.length > 0 ? this.getRandomElement(templates) : single;
     // ${date} and ${time} follow general.timezone, not the host's locale and clock
     const { date, time, timestamp } = getTemplateDateParts(config.general?.timezone || 'UTC', now);
-    
+    // An empty list would otherwise put "null" into the issue
+    const pick = (list, fallback) => (Array.isArray(list) && list.length > 0 ? this.getRandomElement(list) : fallback);
+
     // Replace placeholders
     const replacements = {
       repo: repo.repo,
       timestamp,
-      randomBugTitle: randomization.bugTitles ? this.getRandomElement(randomization.bugTitles) : 'General bug',
-      randomFeatureTitle: randomization.featureTitles ? this.getRandomElement(randomization.featureTitles) : 'General feature',
-      randomDocTitle: randomization.docTitles ? this.getRandomElement(randomization.docTitles) : 'General documentation',
-      randomPerfTitle: randomization.perfTitles ? this.getRandomElement(randomization.perfTitles) : 'General performance',
+      randomBugTitle: pick(randomization.bugTitles, 'General bug'),
+      randomFeatureTitle: pick(randomization.featureTitles, 'General feature'),
+      randomDocTitle: pick(randomization.docTitles, 'General documentation'),
+      randomPerfTitle: pick(randomization.perfTitles, 'General performance'),
       randomBugDescription: 'Issue detected in the system that needs attention',
       randomFeatureDescription: 'New functionality that would improve user experience',
       step1: 'Navigate to the relevant section',
@@ -282,7 +300,9 @@ class AdvancedIssueHandler {
       
       // Check if enough time has passed since last issue
       if (repoState.nextIssueTime && now < repoState.nextIssueTime) {
-        const minutesRemaining = Math.round((repoState.nextIssueTime - now) / 60000);
+        // Rounded up: a wait under half a minute would otherwise read as
+        // "0 minutes remaining" while the repository is still held back
+        const minutesRemaining = Math.ceil((repoState.nextIssueTime - now) / 60000);
         results.push({
           success: true,
           skipped: true,
@@ -299,7 +319,7 @@ class AdvancedIssueHandler {
     // Apply repositorySelection (strategy, maxPerExecution) to the repositories
     // that can take an issue now, so selection slots are not spent on repos
     // that are done for the day or still waiting for their interval
-    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun });
+    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun, rotation: repositories });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({
@@ -312,7 +332,7 @@ class AdvancedIssueHandler {
       }
     }
 
-    for (const repo of selected) {
+    for (const [index, repo] of selected.entries()) {
       const repoState = this.getRepoState(state, repo);
       let issueCreated = false;
 
@@ -412,6 +432,14 @@ class AdvancedIssueHandler {
       // cannot lose the count and cause duplicates on the next run
       if (issueCreated) {
         await this.saveState(state);
+      }
+
+      // Space out issue creation across repositories like the other handlers do,
+      // since back-to-back POSTs can trip GitHub's secondary rate limit. Every
+      // selected repo calls the API (even a failed create), so only a dry run
+      // and the last repo skip the pause.
+      if (!dryRun && index < selected.length - 1) {
+        await this.delay(1000);
       }
     }
 

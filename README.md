@@ -70,8 +70,23 @@ Create a GitHub Personal Access Token:
 
 1. Go to https://github.com/settings/tokens
 2. Click "Generate new token" → "Fine-grained tokens"
-3. Set permissions: `contents:write`
+3. Select the target repositories and grant the repository permissions for the commands you use (table below)
 4. Copy the token
+
+#### Token permissions
+
+Fine-grained tokens always include `Metadata: Read`. Each command needs:
+
+| Command | Repository permissions |
+|---------|------------------------|
+| `run` / `start`, commit mode | `Contents: Read and write` |
+| `run` / `start`, issue mode | `Issues: Read and write` |
+| `fix-conflicts` | `Contents: Read and write`, `Pull requests: Read` |
+| `babysit` (also `start` with `babysit.enabled`) | `Contents: Read and write`, `Issues: Read and write`, `Pull requests: Read and write` |
+| `pr-maint` | `Issues: Read and write`, `Pull requests: Read and write`, `Commit statuses: Read and write`, `Checks: Read` |
+| `validate`, `status`, `init` | none (no token needed) |
+
+`fix-conflicts` and `babysit` push to pull request branches; a push that changes `.github/workflows/` is also rejected without `Workflows: Read and write`. A classic token needs the `repo` scope (plus `workflow` for that case). A missing permission shows up as a `403 Resource not accessible by personal access token` error in the logs.
 
 Set the environment variable:
 
@@ -95,7 +110,8 @@ node src/cli.js run --dry-run
 # Run unit tests
 npm test
 
-# Check repository status (times shown in general.timezone; reads local state, no GITHUB_TOKEN needed)
+# Check repository status (times shown in general.timezone; reads local state, no GITHUB_TOKEN needed;
+# disabled repositories are named below the table, not listed as pending)
 node src/cli.js status
 ```
 
@@ -119,7 +135,7 @@ sure-daily-github start             # Start scheduler (daemon mode)
 sure-daily-github status            # Check repository status (times in general.timezone)
 sure-daily-github babysit [--dry-run] [--repo owner/repo] [--pr N]
                                     # Address review comments on PRs labeled "babysit"
-sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [--pr N]
+sure-daily-github fix-conflicts [--dry-run] [--scan-only] [--repo owner/repo] [--pr N] [--scan-timeout S]
                                     # Resolve merge conflicts on open PRs (pushes only if tests pass)
 sure-daily-github pr-maint [--mode shadow|act|autonomous] [--dry-run] [--repo owner/repo] [--pr N]
                                     # Label, track, and report open PRs through the policy engine (never merges)
@@ -143,7 +159,8 @@ re-review. It never merges. Configure it in the `babysit:` block; set
 
 `fix-conflicts` merges the base branch into conflicted open PRs and pushes
 the result (never forced) only if the repository's own tests pass
-(`testCommand`, else `npm test`, else a `test` rule in the makefile). Source
+(`testCommand`, else `npm test`, else a `test` rule in the makefile, else
+`go test ./...` or `cargo test` for a `go.mod` or `Cargo.toml`). Source
 hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
 `escalate`) can send them to manual review instead. Test files
 (`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
@@ -302,7 +319,7 @@ Existing configurations continue to work without changes. Optional blocks like `
 ## Security Best Practices
 
 - ✅ Never commit `.env` files
-- ✅ Use fine-grained tokens with minimum permissions (`contents:write`)
+- ✅ Use fine-grained tokens with only the permissions your commands need (see [Token permissions](#token-permissions))
 - ✅ Rotate tokens regularly (set expiration dates)
 - ✅ Use environment variables for all secrets
 - ✅ Validate all configuration inputs
@@ -317,10 +334,12 @@ Existing configurations continue to work without changes. Optional blocks like `
 # Check token format
 echo $GITHUB_TOKEN
 
-# Should start with ghp_, github_pat_, gho_, ghs_ or ghu_
+# Should start with ghp_ or github_pat_ (personal access tokens),
+# gho_ (OAuth app), or ghs_ / ghu_ (GitHub App, e.g. the GitHub Actions GITHUB_TOKEN)
 
-# Test authentication
-node src/cli.js validate
+# Test authentication (validate only checks the config file and never calls GitHub;
+# a dry run signs in and then makes no changes)
+node src/cli.js run --dry-run
 ```
 
 ### Rate Limit Issues
@@ -333,9 +352,9 @@ The tool includes automatic rate limiting and retry logic. If you hit rate limit
 
 ### Permission Errors
 
-Ensure your GitHub token has:
-- `contents:write` permission for commits
-- Access to target repositories
+A `403 Resource not accessible by personal access token` means the token lacks a permission. Ensure it has:
+- Access to every target repository
+- The permissions listed in [Token permissions](#token-permissions) for the commands you run
 
 ## Resource Usage
 
@@ -344,6 +363,8 @@ Typical resource usage on VPS:
 - **CPU**: <1% (idle), 2-5% (during execution)
 - **Disk**: <100 MB including node_modules
 - **Network**: Minimal (only GitHub API calls)
+
+The logger writes one `logs/YYYY-MM-DD.log` file per UTC day and keeps every file by default. Set `LOG_RETENTION_DAYS` (a whole number, e.g. `14`) to keep only that many days, today included; older daily files are deleted once a day when the next line is logged. Other files in `logs/` (`systemd.log`, `cron.log`, `health-check.log`) are left alone, so rotate those with logrotate (see [deployment/DEPLOYMENT.md](./deployment/DEPLOYMENT.md)).
 
 Recommended VPS specs:
 - 512 MB RAM minimum
@@ -389,7 +410,7 @@ sure-daily-github/
 │       ├── state.js        # State management
 │       ├── run-lock.js     # Shared run lock
 │       ├── randomizer.js   # Range and selection randomization
-│       ├── test-detector.js     # Test command detection (npm / make)
+│       ├── test-detector.js     # Test command detection (npm / make / go / cargo)
 │       └── *-ledger.js     # babysit and fix-conflicts ledgers
 ├── config/
 │   └── config.example.yaml

@@ -169,7 +169,7 @@ pm2 stop sure-daily-github
 sudo systemctl stop sure-daily-github
 ```
 
-Ctrl+C (SIGINT) and a service stop (SIGTERM) both stop the scheduler and exit. If a scheduled babysit scan is in progress, the scan handles the signal instead: it kills its engine and test processes, records the interruption, removes its temp clones, and then exits (code 130 for SIGINT, 143 for SIGTERM).
+Ctrl+C (SIGINT) and a service stop (SIGTERM) both stop the scheduler and exit. If a scheduled execution is in progress, the process first waits for it to finish (skipping the babysit scan that would follow), so an issue or commit it has just created is still recorded in the state file and not repeated on the next run; a second signal exits at once. With systemd, a run that outlasts `TimeoutStopSec` (90 seconds by default) is killed anyway. If a scheduled babysit scan is in progress, the scan handles the signal instead: it kills its engine and test processes, records the interruption, removes its temp clones, and then exits (code 130 for SIGINT, 143 for SIGTERM).
 
 ### Monitor Scheduler
 

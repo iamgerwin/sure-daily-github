@@ -21,3 +21,12 @@ export function getTemplateDateParts(timezone = 'UTC', now = new Date()) {
     timestamp: now.toISOString()
   };
 }
+
+// HH:MM for the status table's next-issue column. An interval can run past
+// midnight, so a time on another local day carries its date as well;
+// otherwise "02:00" seen at 23:30 reads as earlier today.
+export function formatNextIssueTime(timezone = 'UTC', instant, now = new Date()) {
+  const next = getTemplateDateParts(timezone, instant);
+  const time = next.time.slice(0, 5);
+  return next.date === getTemplateDateParts(timezone, now).date ? time : `${next.date} ${time}`;
+}

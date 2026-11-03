@@ -168,8 +168,9 @@ interpreter gap completely requires running the engine in a container.
    tree must be clean. Then the **test gate** runs: `testCommand`, or a command
    detected the same way as `fix-conflicts` (`npm test` after installing
    from the npm, pnpm, yarn or bun lockfile, or with `npm install` when
-   dependencies are declared but no lockfile is committed, or a `Makefile`
-   `test` target). If no test
+   dependencies are declared but no lockfile is committed, a `Makefile`
+   `test` target, `go test ./...` for a `go.mod`, or `cargo test` for a
+   `Cargo.toml`). If no test
    command can be found, nothing is pushed. Set `testCommand: "true"` to opt a
    repository out deliberately. Afterwards HEAD must still be the tested
    commit and tracked files unmodified.
