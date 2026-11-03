@@ -301,3 +301,16 @@ test('disabled randomization keeps the repository dailyTarget as the daily cap',
 
   assert.equal(handler.checkLimits(fixedRepo('rand-off'), config).limits.dailyMax, 1);
 });
+
+test('an unwritable state file fails the run before any issue is created', async (t) => {
+  const { handler, calls } = createHandler();
+  t.mock.method(fs, 'renameSync', () => { throw new Error('read-only file system'); });
+
+  const results = await handler.processRepositories([repoConfig('unsaved')], {}, false, {});
+  fs.renameSync.mock.restore();
+
+  assert.equal(calls.length, 0);
+  assert.equal(results[0].success, false);
+  assert.match(describeFailures(results)[0], /Could not save state to .*: read-only file system/);
+  assert.equal(getRunExitCode({ success: true, summary: summarize(results) }), 1);
+});

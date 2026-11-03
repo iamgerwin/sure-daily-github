@@ -51,6 +51,9 @@ export class StateManager {
     console.error(message);
   }
 
+  // Throws on failure: a commit or issue whose count cannot be persisted would
+  // be repeated by every later run (each `cli.js run` reloads the file), so the
+  // daily target would never be reached
   save() {
     const tmpFile = `${this.filePath}.${process.pid}.tmp`;
     try {
@@ -64,8 +67,14 @@ export class StateManager {
       fs.renameSync(tmpFile, this.filePath);
     } catch (error) {
       try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
-      console.error('Error saving state:', error.message);
+      throw new Error(`Could not save state to ${this.filePath}: ${error.message}`);
     }
+  }
+
+  // Call before creating a commit or issue: once the action exists on GitHub, a
+  // failed save cannot undo it, so an unwritable state file must stop the run first
+  assertWritable() {
+    this.save();
   }
 
   getRepoState(owner, repo) {
@@ -192,6 +201,9 @@ export class StateManager {
   recordAction(owner, repo, { type = 'issue', timezone = 'UTC', now = new Date() } = {}) {
     const repoState = this.getRepoState(owner, repo);
     const counters = this.ensureWindows(owner, repo, timezone, now);
+    // A failed save reports the action as failed, so it must not stay counted in
+    // memory for a later save (next repo or issue) to persist
+    const before = structuredClone(repoState);
 
     counters.hourly.count += 1;
     counters.daily.count += 1;
@@ -207,7 +219,13 @@ export class StateManager {
       repoState.totals.issues += 1;
     }
 
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      for (const key of Object.keys(repoState)) delete repoState[key];
+      Object.assign(repoState, before);
+      throw error;
+    }
   }
 
   getCounts(owner, repo, timezone = 'UTC', now = new Date()) {
@@ -227,7 +245,13 @@ export class StateManager {
     }
     const value = crypto.randomInt(min, max + 1);
     repoState.dailyTarget = { day, min, max, value };
-    this.save();
+    // `status` rolls the target too and must not fail on read-only state; a run
+    // still fails when it records the action. Unsaved, the next process re-rolls.
+    try {
+      this.save();
+    } catch (error) {
+      console.error(error.message);
+    }
     return value;
   }
 

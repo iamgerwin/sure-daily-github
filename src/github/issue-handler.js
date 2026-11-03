@@ -130,6 +130,9 @@ class IssueHandler {
       const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
       const labels = repoConfig.labels || ['automated'];
 
+      // Fail before the API call: an uncounted issue would be repeated every run
+      state.assertWritable();
+
       // Create issue
       const result = await this.createIssue(owner, repo, title, body, labels);
 

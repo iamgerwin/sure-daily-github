@@ -89,6 +89,9 @@ class CommitHandler {
       const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
       const filePath = this.generateFilePath(basePath, repo, timezone, now);
 
+      // Fail before the API call: an uncounted commit would be repeated every run
+      state.assertWritable();
+
       // Create commit
       const result = await this.client.createOrUpdateFile(
         owner,
