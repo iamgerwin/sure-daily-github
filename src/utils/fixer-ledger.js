@@ -36,6 +36,18 @@ function normalizeKeys(entries) {
   return normalized;
 }
 
+// An entry stops blocking once its in-progress TTL or finished cooldown has
+// passed (and an interrupted one never blocks), so past the longer of the two
+// windows it only takes space; a malformed entry never blocks either
+function pruneExpired(entries, now, { attemptTtlMs, retryCooldownMs }) {
+  const maxAgeMs = Math.max(attemptTtlMs, retryCooldownMs);
+  if (!Number.isFinite(maxAgeMs)) return;
+  for (const [key, entry] of Object.entries(entries)) {
+    const at = entry && typeof entry === 'object' ? (entry.finishedAt ?? entry.startedAt) : null;
+    if (!Number.isFinite(at) || now - at >= maxAgeMs) delete entries[key];
+  }
+}
+
 // Records per-PR fix attempts keyed by head SHA so overlapping or repeated
 // runs do not clone and test the same commit again
 export class FixerLedger {
@@ -82,8 +94,13 @@ export class FixerLedger {
     return null;
   }
 
-  start(key, headSha, now = Date.now()) {
+  // Starting an attempt also drops entries that can no longer cause a skip, so
+  // the ledger holds recent attempts instead of every PR ever attempted.
+  // `windows` is the same { attemptTtlMs, retryCooldownMs } given to skipReason;
+  // without it nothing is pruned.
+  start(key, headSha, now = Date.now(), windows = null) {
     this.update(entries => {
+      if (windows) pruneExpired(entries, now, windows);
       entries[key] = { headSha, status: 'in-progress', startedAt: now, finishedAt: null };
     });
   }

@@ -151,3 +151,42 @@ test('a failed save removes its temp file and rethrows', (t) => {
   assert.throws(() => ledger.start(KEY, 'sha1', 1000));
   assert.deepEqual(fs.readdirSync(path.dirname(ledger.filePath)), ['state.json']);
 });
+
+test('starting an attempt prunes entries past the longer window and keeps the rest', (t) => {
+  const { ledger } = tmpLedger(t);
+  const now = 1000 * MINUTE;
+  ledger.save({
+    'me/demo#1': { headSha: 'a', status: 'fixed', startedAt: 0, finishedAt: now - 240 * MINUTE },
+    'me/demo#2': { headSha: 'b', status: 'failed', startedAt: 0, finishedAt: now - 239 * MINUTE },
+    'me/demo#3': { headSha: 'c', status: 'in-progress', startedAt: now - 240 * MINUTE, finishedAt: null },
+    'me/demo#4': { headSha: 'd', status: 'in-progress', startedAt: now - 30 * MINUTE, finishedAt: null },
+    'me/demo#5': { headSha: 'e', status: 'interrupted', startedAt: 0, finishedAt: now - 500 * MINUTE },
+    'me/demo#6': 'garbage'
+  });
+
+  ledger.start(KEY, 'sha1', now, windows);
+
+  assert.deepEqual(Object.keys(ledger.load()).sort(), ['me/demo#2', 'me/demo#4', KEY].sort());
+});
+
+test('pruning never drops an entry that would still cause a skip', (t) => {
+  const { ledger } = tmpLedger(t);
+  const now = 1000 * MINUTE;
+  const blocking = ledgerKey('me', 'demo', 2);
+  ledger.start(blocking, 'sha2', now - 239 * MINUTE);
+  ledger.finish(blocking, 'needs-manual-review', now - 239 * MINUTE);
+
+  ledger.start(KEY, 'sha1', now, windows);
+
+  assert.equal(ledger.skipReason(blocking, 'sha2', { now, ...windows }), 'already-attempted');
+});
+
+test('starting an attempt without windows prunes nothing', (t) => {
+  const { ledger } = tmpLedger(t);
+  const old = { headSha: 'a', status: 'fixed', startedAt: 0, finishedAt: 0 };
+  ledger.save({ 'me/demo#1': old });
+
+  ledger.start(KEY, 'sha1', 1000 * MINUTE);
+
+  assert.deepEqual(ledger.load()['me/demo#1'], old);
+});

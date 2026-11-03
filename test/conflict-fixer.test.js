@@ -577,6 +577,20 @@ test('records a finished attempt in the ledger', async (t) => {
   });
 });
 
+test('an attempt drops ledger entries that are past the retry cooldown', async (t) => {
+  const fx = await fixture(t);
+  const now = 1000 * MINUTE;
+  const stale = ledgerKey('me', 'gone', 3);
+  fs.writeFileSync(fx.ledgerFile, JSON.stringify({
+    [stale]: { headSha: 'old', status: 'fixed', startedAt: 0, finishedAt: now - 241 * MINUTE }
+  }));
+  const { fixer } = makeFixer(fx, [fx.pr], { now: () => now });
+
+  await fixer.run(config());
+
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(fx.ledgerFile, 'utf8'))), [KEY]);
+});
+
 test('skips a PR whose same head SHA is already in progress', async (t) => {
   const fx = await fixture(t);
   const now = 100 * MINUTE;

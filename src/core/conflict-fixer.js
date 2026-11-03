@@ -327,7 +327,7 @@ class ConflictFixer {
       return this.fixPullRequest(repoConfig, pr, { dryRun, settings, identity });
     }
 
-    this.ledger.start(key, pr.headRefOid, this.now());
+    this.ledger.start(key, pr.headRefOid, this.now(), { attemptTtlMs, retryCooldownMs });
     this.activeKeys.add(key);
     try {
       const result = await this.fixPullRequest(repoConfig, pr, { dryRun, settings, identity });
