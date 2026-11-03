@@ -125,6 +125,7 @@ export const BABYSIT_DEFAULTS = {
   engineTimeoutMinutes: 30
 };
 
+const isMapping = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isPositiveInt = (value) => Number.isInteger(value) && value >= 1;
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
 
@@ -393,6 +394,22 @@ class ConfigLoader {
       });
     }
     validateContentTemplate(config.contentTemplate, 'contentTemplate', errors);
+
+    // A section written as a scalar or list (e.g. `schedule: "0 9 * * *"` or
+    // `repositorySelection: random`) has none of the keys read below, so it
+    // would pass and its settings would be silently ignored
+    const sections = {
+      general: config.general,
+      randomization: config.randomization,
+      'randomization.timeVariations': isMapping(config.randomization) ? config.randomization.timeVariations : undefined,
+      repositorySelection: config.repositorySelection,
+      schedule: config.schedule
+    };
+    for (const [label, value] of Object.entries(sections)) {
+      if (value !== undefined && value !== null && !isMapping(value)) {
+        errors.push(`${label} must be a mapping`);
+      }
+    }
 
     // Validate general settings
     const general = config.general || {};
