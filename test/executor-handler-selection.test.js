@@ -10,7 +10,7 @@ process.env.SDG_STATE_FILE = path.join(stateDir, 'state.json');
 process.env.SDG_ISSUE_STATE_FILE = path.join(stateDir, 'issue-state.json');
 process.env.GITHUB_TOKEN = 'ghp_test';
 
-const { default: executor, usesAdvancedIssueHandler } = await import('../src/core/executor.js');
+const { default: executor, usesAdvancedIssueHandler, randomizationCountsIgnoredReason } = await import('../src/core/executor.js');
 const { default: config } = await import('../src/config/loader.js');
 const { default: IssueHandler } = await import('../src/github/issue-handler.js');
 const { default: AdvancedIssueHandler } = await import('../src/github/advanced-issue-handler.js');
@@ -52,6 +52,24 @@ test('a disabled repository with a range or interval does not select the advance
   cfg.repositories[1].enabled = true;
   assert.equal(usesAdvancedIssueHandler(cfg.repositories), true);
   assert.equal(usesAdvancedIssueHandler([{ enabled: false, dailyTarget: { min: 1, max: 4 } }]), false);
+});
+
+test('randomization counts are reported unused outside simple issue mode', () => {
+  const randomized = (general, repo) => config.validate({
+    general: { mode: 'issue', dailyTarget: 1, ...general },
+    randomization: { enabled: true, issueCount: { min: 2, max: 4 } },
+    repositories: [{ owner: 'me', repo: 'demo', ...repo }]
+  });
+
+  assert.equal(randomizationCountsIgnoredReason(randomized({}, { dailyTarget: 3 })), null);
+  assert.match(randomizationCountsIgnoredReason(randomized({ mode: 'commit' }, {})), /commit mode/);
+  assert.match(randomizationCountsIgnoredReason(randomized({}, { dailyTarget: { min: 2, max: 5 } })), /advanced issue handler/);
+  assert.match(randomizationCountsIgnoredReason(randomized({}, { intervalMinutes: { min: 30, max: 60 } })), /advanced issue handler/);
+
+  const disabled = randomized({ mode: 'commit' }, {});
+  disabled.randomization.enabled = false;
+  assert.equal(randomizationCountsIgnoredReason(disabled), null);
+  assert.equal(randomizationCountsIgnoredReason(issueConfig({})), null);
 });
 
 test('execute routes a loaded fixed-target issue config to IssueHandler', async (t) => {

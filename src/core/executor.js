@@ -28,6 +28,20 @@ export function usesAdvancedIssueHandler(repositories = []) {
   );
 }
 
+// Only the simple issue handler reads randomization.issueCount and
+// timeVariations; commit mode and the advanced issue handler follow each
+// repository's dailyTarget. Returns why the counts go unused, or null.
+export function randomizationCountsIgnoredReason(cfg) {
+  if (!cfg?.randomization?.enabled) return null;
+  if ((cfg.general?.mode || 'commit') !== 'issue') {
+    return 'commit mode follows each repository dailyTarget';
+  }
+  if (usesAdvancedIssueHandler(cfg.repositories)) {
+    return 'repositories with a dailyTarget range or intervalMinutes use the advanced issue handler, which follows each repository dailyTarget';
+  }
+  return null;
+}
+
 // A run that completes but fails some repositories must still exit non-zero,
 // otherwise cron and systemd report every failed commit/issue as a success
 export function getRunExitCode(result) {

@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
-import executor, { describeFailures, getRunExitCode } from './core/executor.js';
+import executor, { describeFailures, getRunExitCode, randomizationCountsIgnoredReason } from './core/executor.js';
 import scheduler from './core/scheduler.js';
 import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
@@ -401,6 +401,11 @@ program
 
       if (cfg.randomization?.enabled) {
         console.log('   Randomization: enabled');
+        // The block validates either way, but only simple issue mode uses its counts
+        const ignored = randomizationCountsIgnoredReason(cfg);
+        if (ignored) {
+          console.log(`   ⚠️  randomization.issueCount and timeVariations are not used: ${ignored}`);
+        }
       }
       
       if (cfg.repositorySelection?.strategy) {
