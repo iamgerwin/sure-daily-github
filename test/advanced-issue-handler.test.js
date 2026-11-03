@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
 import { describeFailures } from '../src/core/executor.js';
+import loader, { DEFAULT_CONTENT_TEMPLATE } from '../src/config/loader.js';
 
 const config = { general: { timezone: 'UTC' }, randomization: {}, contentTemplates: [] };
 
@@ -584,6 +585,50 @@ test('falls back to the default random titles when a title list is empty', () =>
 
   assert.equal(title, 'General bug|General feature');
   assert.equal(body, 'General documentation|General performance');
+});
+
+test('uses the configured contentTemplate when no contentTemplates list is set', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-15T00:05:00Z');
+  const contentTemplate = { title: 'Progress ${date} for ${repo}', body: 'Logged at ${time}', labels: ['ignored'] };
+
+  for (const contentTemplates of [undefined, []]) {
+    const issue = handler.generateIssueContent(repo({ repo: 'shop' }), { contentTemplate, contentTemplates }, now);
+    assert.equal(issue.title, 'Progress 2026-10-15 for shop');
+    assert.equal(issue.body, 'Logged at 00:05:00');
+    // Like simple issue mode, contentTemplate does not add labels
+    assert.deepEqual(issue.labels, ['automated']);
+  }
+});
+
+test('contentTemplates takes precedence over contentTemplate', () => {
+  const { handler } = createHandler();
+  const issue = handler.generateIssueContent(repo(), {
+    contentTemplate: { title: 'Single', body: 'Single body' },
+    contentTemplates: [{ title: 'From list', body: 'List body' }]
+  });
+
+  assert.equal(issue.title, 'From list');
+  assert.equal(issue.body, 'List body');
+});
+
+test('fills a field the contentTemplate leaves out with the advanced default', () => {
+  const { handler } = createHandler();
+  const issue = handler.generateIssueContent(repo(), { contentTemplate: { body: 'Only a body' } }, new Date('2026-10-15T00:05:00Z'));
+
+  assert.equal(issue.title, 'Automated Issue - 2026-10-15 00:05:00');
+  assert.equal(issue.body, 'Only a body');
+});
+
+test('keeps the dated default title when the config has no contentTemplate', () => {
+  const { handler } = createHandler();
+  const cfg = loader.validate({ repositories: [{ owner: 'me', repo: 'demo' }] }, { requireToken: false });
+  assert.equal(cfg.contentTemplate, DEFAULT_CONTENT_TEMPLATE);
+
+  const issue = handler.generateIssueContent(repo(), cfg, new Date('2026-10-15T00:05:00Z'));
+
+  assert.equal(issue.title, 'Automated Issue - 2026-10-15 00:05:00');
+  assert.match(issue.body, /^# Automated Issue/);
 });
 
 test('leaves unknown placeholders as written', () => {
