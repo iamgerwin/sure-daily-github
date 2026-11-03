@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readLedgerObject } from './ledger-file.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEDGER_FILE = path.join(__dirname, '../../data/pr-maint-state.json');
@@ -38,12 +39,8 @@ export class PrMaintLedger {
   }
 
   load() {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
-      return isPlainObject(parsed) ? normalize(parsed) : emptyState();
-    } catch (_) {
-      return emptyState();
-    }
+    const parsed = readLedgerObject(this.filePath, 'pr-maint ledger');
+    return parsed ? normalize(parsed) : emptyState();
   }
 
   // Temp file + rename so a crash mid-write never leaves a truncated ledger.

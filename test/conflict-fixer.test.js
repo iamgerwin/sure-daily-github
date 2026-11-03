@@ -330,6 +330,48 @@ test('--pr accepts a plain digit string or an integer', async (t) => {
   }
 });
 
+test('--pr reports a pull request that is not open instead of an empty run', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr], { git: async () => assert.fail('git must not run') });
+
+  const result = await fixer.run(config(), { repos: ['me/demo'], pr: '99' });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.results.map(r => [r.pr, r.status, r.reason]), [[99, 'skipped', 'not an open pull request']]);
+  assert.equal(result.summary.skipped, 1);
+  assert.equal(getRunExitCode(result), 0);
+});
+
+test('--pr reports an open pull request that is not conflicted', async (t) => {
+  const fx = await fixture(t);
+  const clean = { ...fx.pr, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' };
+  const { fixer } = makeFixer(fx, [clean], { git: async () => assert.fail('git must not run') });
+
+  const result = await fixer.run(config(), { repos: ['me/demo'], pr: 7 });
+
+  assert.deepEqual(result.results.map(r => [r.pr, r.status, r.reason]), [[7, 'skipped', 'not conflicted (MERGEABLE)']]);
+});
+
+test('--pr does not claim a pull request is closed when the scan timed out', async (t) => {
+  const fx = await fixture(t);
+  const { fixer } = makeFixer(fx, [fx.pr]);
+  fixer.client.listOpenPullRequests = async () => ({ success: true, data: [fx.pr], timedOut: true });
+
+  const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr: '99' });
+
+  assert.deepEqual(result.results.map(r => r.status), ['scan-timeout']);
+});
+
+test('--pr leaves unknown mergeability to the unknown status', async (t) => {
+  const fx = await fixture(t);
+  const pending = { ...fx.pr, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' };
+  const { fixer } = makeFixer(fx, [pending]);
+
+  const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr: '7' });
+
+  assert.deepEqual(result.results.map(r => [r.pr, r.status]), [[7, 'unknown']]);
+});
+
 // --- Untrusted test code ---
 
 test('hooks planted by the tests never run during the push', async (t) => {

@@ -159,7 +159,8 @@ re-review. It never merges. Configure it in the `babysit:` block; set
 
 `fix-conflicts` merges the base branch into conflicted open PRs and pushes
 the result (never forced) only if the repository's own tests pass
-(`testCommand`, else `npm test`, else a `test` rule in the makefile). Source
+(`testCommand`, else `npm test`, else a `test` rule in the makefile, else
+`go test ./...` or `cargo test` for a `go.mod` or `Cargo.toml`). Source
 hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
 `escalate`) can send them to manual review instead. Test files
 (`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
@@ -333,7 +334,8 @@ Existing configurations continue to work without changes. Optional blocks like `
 # Check token format
 echo $GITHUB_TOKEN
 
-# Should start with ghp_ or github_pat_
+# Should start with ghp_ or github_pat_ (personal access tokens),
+# gho_ (OAuth app), or ghs_ / ghu_ (GitHub App, e.g. the GitHub Actions GITHUB_TOKEN)
 
 # Test authentication (validate only checks the config file and never calls GitHub;
 # a dry run signs in and then makes no changes)
@@ -361,6 +363,8 @@ Typical resource usage on VPS:
 - **CPU**: <1% (idle), 2-5% (during execution)
 - **Disk**: <100 MB including node_modules
 - **Network**: Minimal (only GitHub API calls)
+
+The logger writes one `logs/YYYY-MM-DD.log` file per UTC day and keeps every file by default. Set `LOG_RETENTION_DAYS` (a whole number, e.g. `14`) to keep only that many days, today included; older daily files are deleted once a day when the next line is logged. Other files in `logs/` (`systemd.log`, `cron.log`, `health-check.log`) are left alone, so rotate those with logrotate (see [deployment/DEPLOYMENT.md](./deployment/DEPLOYMENT.md)).
 
 Recommended VPS specs:
 - 512 MB RAM minimum
@@ -406,7 +410,7 @@ sure-daily-github/
 │       ├── state.js        # State management
 │       ├── run-lock.js     # Shared run lock
 │       ├── randomizer.js   # Range and selection randomization
-│       ├── test-detector.js     # Test command detection (npm / make)
+│       ├── test-detector.js     # Test command detection (npm / make / go / cargo)
 │       └── *-ledger.js     # babysit and fix-conflicts ledgers
 ├── config/
 │   └── config.example.yaml

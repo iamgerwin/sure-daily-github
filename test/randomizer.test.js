@@ -130,6 +130,77 @@ test('selectRepositories weighted uses weights (stubbed Math.random sequence)', 
   }
 });
 
+// Seeded mulberry32 generator so the frequency check below can never flake
+function withSeededRandom(fn) {
+  let seed = 12345;
+  const originalRandom = Math.random;
+  Math.random = () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  try {
+    return fn();
+  } finally {
+    Math.random = originalRandom;
+  }
+}
+
+test('selectRepositories weighted selection odds match docs/RANDOMIZATION.md', () => {
+  // A weight is the chance of the first pick; with 2 of 3 drawn without
+  // replacement the documented selection rates are ~84%, ~68% and ~49%
+  const repos = [
+    { id: 'high', enabled: true, weight: 50 },
+    { id: 'medium', enabled: true, weight: 30 },
+    { id: 'low', enabled: true, weight: 20 }
+  ];
+  const runs = 20000;
+  const selected = { high: 0, medium: 0, low: 0 };
+  const first = { high: 0, medium: 0, low: 0 };
+
+  withSeededRandom(() => {
+    for (let i = 0; i < runs; i++) {
+      const picks = randomizer.selectRepositories(repos, { strategy: 'weighted', maxPerExecution: 2 });
+      assert.equal(new Set(picks).size, 2);
+      first[picks[0].id]++;
+      picks.forEach(repo => { selected[repo.id]++; });
+    }
+  });
+
+  const near = (count, expected) => Math.abs(count / runs - expected) < 0.02;
+  assert.ok(near(first.high, 0.5) && near(first.medium, 0.3) && near(first.low, 0.2), JSON.stringify(first));
+  assert.ok(near(selected.high, 0.839), JSON.stringify(selected));
+  assert.ok(near(selected.medium, 0.675), JSON.stringify(selected));
+  assert.ok(near(selected.low, 0.486), JSON.stringify(selected));
+});
+
+test('selectRepositories weighted without maxPerExecution selects every repository', () => {
+  const repos = [
+    { id: 'A', enabled: true, weight: 50 },
+    { id: 'B', enabled: true, weight: 30 },
+    { id: 'C', enabled: true }
+  ];
+
+  withSeededRandom(() => {
+    for (let i = 0; i < 50; i++) {
+      const selected = randomizer.selectRepositories(repos, { strategy: 'weighted' });
+      assert.deepEqual(selected.map(repo => repo.id).sort(), ['A', 'B', 'C']);
+    }
+  });
+});
+
+test('selectRepositories round-robin ignores randomizeOrder', () => {
+  const repos = ['a', 'b', 'c', 'd'].map(id => ({ id, enabled: true }));
+  let index = 1;
+  const cursor = { getRoundRobinIndex: () => index, setRoundRobinIndex: (next) => { index = next; } };
+
+  withSeededRandom(() => {
+    const selected = randomizer.selectRepositories(repos, { strategy: 'round-robin', randomizeOrder: true }, cursor);
+    assert.deepEqual(selected.map(repo => repo.id), ['b', 'c', 'd', 'a']);
+  });
+});
+
 test('selectRepositories weighted picks the last repo when rounding leaves a remainder', () => {
   // 0.7 + 2.3 + 0.2 rounds so that subtracting each weight from the top draw stays above zero
   const repos = [
@@ -207,6 +278,42 @@ test('selectRepositories round-robin wraps a stale cursor and skips disabled rep
   ];
   const store = memoryCursorStore(7);
   const selected = randomizer.selectRepositories(repos, { strategy: 'round-robin', maxPerExecution: 1 }, store);
+  assert.deepEqual(selected.map(r => r.id), ['b']);
+  assert.equal(store.index, 0);
+});
+
+test('selectRepositories round-robin does not skip a repository when an earlier one drops out', () => {
+  const rotation = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const [a, b, c] = rotation;
+  const store = memoryCursorStore();
+  const cfg = { strategy: 'round-robin', maxPerExecution: 1 };
+
+  assert.deepEqual(randomizer.selectRepositories([a, b, c], cfg, store, { rotation }).map(r => r.id), ['a']);
+  // a met its target, so only b and c are candidates; b is next, not c
+  assert.deepEqual(randomizer.selectRepositories([b, c], cfg, store, { rotation }).map(r => r.id), ['b']);
+  assert.deepEqual(randomizer.selectRepositories([b, c], cfg, store, { rotation }).map(r => r.id), ['c']);
+  assert.deepEqual(randomizer.selectRepositories([a, b, c], cfg, store, { rotation }).map(r => r.id), ['a']);
+});
+
+test('selectRepositories round-robin passes over a waiting repository and resumes after the pick', () => {
+  const rotation = ['a', 'b', 'c', 'd'].map(id => ({ id, enabled: true }));
+  const [a, , c, d] = rotation;
+  const store = memoryCursorStore(1);
+  const cfg = { strategy: 'round-robin', maxPerExecution: 2 };
+
+  // b is waiting, so the picks after the cursor are c and d; the next run starts at a
+  assert.deepEqual(randomizer.selectRepositories([a, c, d], cfg, store, { rotation }).map(r => r.id), ['c', 'd']);
+  assert.equal(store.index, 0);
+});
+
+test('selectRepositories round-robin ignores disabled repositories in the rotation', () => {
+  const rotation = [
+    { id: 'a', enabled: true },
+    { id: 'x', enabled: false },
+    { id: 'b', enabled: true }
+  ];
+  const store = memoryCursorStore(1);
+  const selected = randomizer.selectRepositories(rotation, { strategy: 'round-robin', maxPerExecution: 1 }, store, { rotation });
   assert.deepEqual(selected.map(r => r.id), ['b']);
   assert.equal(store.index, 0);
 });

@@ -666,6 +666,23 @@ test('validate still rejects a malformed GITHUB_TOKEN with requireToken: false',
   );
 });
 
+test('validate accepts every API token type, including GitHub App and Actions tokens', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+
+  for (const token of ['ghp_abc', 'github_pat_abc', 'gho_abc', 'ghs_abc', 'ghu_abc']) {
+    process.env.GITHUB_TOKEN = token;
+    assert.doesNotThrow(() => config.validate({ repositories: [baseRepo] }), token);
+  }
+
+  // A refresh token cannot call the API
+  process.env.GITHUB_TOKEN = 'ghr_abc';
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo] }),
+    /GITHUB_TOKEN appears to be invalid format \(must start with ghp_, github_pat_, gho_, ghs_, ghu_\)/
+  );
+});
+
 test('validate rejects a repository commitMessage that is not a string instead of failing every commit', () => {
   for (const commitMessage of [2024, ['docs: a'], { text: 'docs: a' }, true]) {
     assert.throws(
@@ -760,4 +777,35 @@ test('validate keeps boolean and unset randomization and schedule flags', () => 
   assert.equal(cfg.schedule.enabled, false);
   assert.equal(config.validate({ repositories: [baseRepo], schedule: { enabled: null } }).schedule.enabled, null);
   assert.equal(config.validate({ repositories: [baseRepo], schedule: { enabled: true, cron: '0 9 * * *' } }).schedule.enabled, true);
+});
+
+test('validate rejects top-level sections written as a scalar or list', () => {
+  const cases = [
+    [{ general: 'issue' }, /general must be a mapping/],
+    [{ randomization: true }, /randomization must be a mapping/],
+    [{ randomization: { enabled: true, timeVariations: 'daily' } }, /randomization\.timeVariations must be a mapping/],
+    [{ repositorySelection: 'random' }, /repositorySelection must be a mapping/],
+    [{ schedule: '0 9 * * *' }, /schedule must be a mapping/],
+    [{ schedule: ['0 9 * * *'] }, /schedule must be a mapping/]
+  ];
+  for (const [section, pattern] of cases) {
+    assert.throws(
+      () => config.validate({ repositories: [baseRepo], ...section }),
+      pattern,
+      `${JSON.stringify(section)} should be rejected`
+    );
+  }
+});
+
+test('validate accepts mapping or unset top-level sections', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    general: null,
+    randomization: { enabled: false, timeVariations: null },
+    repositorySelection: { strategy: 'random' },
+    schedule: { enabled: false }
+  });
+  assert.equal(cfg.general.mode, 'commit');
+  assert.equal(cfg.repositorySelection.strategy, 'random');
+  assert.equal(cfg.schedule.enabled, false);
 });
