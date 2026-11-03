@@ -5,7 +5,7 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
 ## How It Works
 
 - Per repository counters stored in `data/state.json`:
-  - hourly: `YYYY-MM-DDTHH`
+  - hourly: `YYYY-MM-DDTHH` (the local hour that repeats when clocks fall back carries its UTC offset, e.g. `2026-11-01T01-04:00` and `2026-11-01T01-05:00`, so each real hour gets its own window)
   - daily: `YYYY-MM-DD`
   - weekly: ISO week key `YYYY-Www`
 - Totals
@@ -16,13 +16,13 @@ sure-daily-github tracks activity per repository with hourly, daily, and weekly 
 
 ## Timezone
 
-All windows respect `general.timezone` from your configuration (default: `UTC`). This impacts boundary resets for hourly/daily/weekly periods.
+All windows respect `general.timezone` from your configuration (default: `UTC`). This impacts boundary resets for hourly/daily/weekly periods. On a daylight saving fall-back day the repeated local hour is two separate hourly windows, so an hourly cap applies to each real hour rather than to both together.
 
 ## Limits
 
 Limits are evaluated before each action:
 
-- When `randomization.timeVariations.enabled: true`, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps.
+- In issue mode with fixed targets (the simple issue handler), when `randomization.timeVariations.enabled: true`, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps. Commit mode and the advanced issue handler do not read them.
 - In issue mode with fixed targets (the simple issue handler) and `randomization.enabled: true`, the daily cap is `timeVariations.daily.max` when time variations are enabled, otherwise `randomization.issueCount.max`; the repository `dailyTarget` is not used.
 - Otherwise, the repository `dailyTarget` (number or range) determines the daily cap.
 - A dry run of the simple issue handler records nothing, so when one run rolls several issues it previews only as many as the hourly, daily, and weekly caps still allow, then reports the rest as `limit_reached`, the same as a real run.
@@ -36,7 +36,8 @@ Limits are evaluated before each action:
 - A state file that is valid JSON but not an object (for example `[]`) is treated the same way: it is copied to `.bak` before starting fresh. A `repositories` section that is not an object is reset to empty after the same `.bak` backup, and the rest of the file (such as the round-robin cursor `roundRobin`) is kept.
 - A repository entry, counter window, or total with the wrong shape (for example a hand edit that drops `count`) is reset to its default on its own; the rest of the state is kept. The same applies to the legacy fields: a `commitsToday` or `totalCommits` that is not a non-negative whole number resets to `0`, and a `lastCommitDate` that is not a string resets to `null`.
 - The same applies to `data/issue-state.json`: a file that is not a JSON object is backed up as `issue-state.json.corrupt-<time>` and started fresh, a `repositories` section that is not an object is replaced with an empty one, and a repository entry that is not an object or has a missing or invalid `issuesCreatedToday` starts from zero, so the daily target is still enforced.
-- The directory structure is created on demand; failures are logged without crashing the process.
+- The directory structure is created on demand.
+- If `data/state.json` cannot be written (read-only mount, permissions, full disk), the commit or issue is reported as failed with `Could not save state to <path>: <reason>`, so `run` exits `1`. The state file is written once before the GitHub API call, so an unwritable file stops the action before anything is created. Otherwise every later run would reload the old counts and create another commit or issue, never reaching the daily target. If the save after the API call fails anyway (for example, the disk fills in between), the action is reported as failed and its count is rolled back in memory, so a later save in the same run does not persist it. A failure to save a newly rolled `dailyTarget` range value is only logged, so `status` still works on a read-only state file; the next process rolls the value again.
 - Legacy methods `isCommitNeeded` and `recordCommit` are still supported and map to daily limits to preserve original behavior.
 
 ## Overriding State Path
@@ -55,7 +56,7 @@ The advanced issue handler keeps its own file, `data/issue-state.json`; set `SDG
 export SDG_ISSUE_STATE_FILE=/var/lib/sure-daily-github/issue-state.json
 ```
 
-The other commands' state files have their own overrides, documented with each command: `SDG_BABYSITTER_STATE_FILE` ([BABYSIT.md](BABYSIT.md)), `SDG_CONFLICT_FIXER_STATE_FILE` ([CONFLICT_FIXER.md](CONFLICT_FIXER.md)), and `SDG_PR_MAINT_STATE_FILE`, `SDG_PR_MAINT_LOCK_FILE` and `SDG_PR_MAINT_DECISIONS_FILE` ([PR_MAINTENANCE.md](PR_MAINTENANCE.md)).
+The other commands' state files have their own overrides, documented with each command: `SDG_BABYSITTER_STATE_FILE` ([BABYSIT.md](BABYSIT.md)), `SDG_CONFLICT_FIXER_STATE_FILE` ([CONFLICT_FIXER.md](CONFLICT_FIXER.md)), and `SDG_PR_MAINT_STATE_FILE`, `SDG_PR_MAINT_LOCK_FILE` and `SDG_PR_MAINT_DECISIONS_FILE` ([PR_MAINTENANCE.md](PR_MAINTENANCE.md)). The scheduler's heartbeat, `data/scheduler-heartbeat.json`, moves with `SDG_HEARTBEAT_FILE` ([SCHEDULER_SETUP.md](SCHEDULER_SETUP.md#hung-scheduler-detection)).
 
 ## Concurrent Runs
 

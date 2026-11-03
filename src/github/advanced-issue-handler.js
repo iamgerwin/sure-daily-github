@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
+import { DEFAULT_CONTENT_TEMPLATE } from '../config/loader.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -106,17 +107,16 @@ class AdvancedIssueHandler {
     return state.repositories[key];
   }
 
-  shouldResetDaily(state, timezone) {
+  shouldResetDaily(state, timezone, now = new Date()) {
     if (!state.lastDailyReset) return true;
-    
-    const now = new Date();
+
+    // An unparseable timestamp (hand edit) cannot be placed in a day; reset
+    // rather than let Intl throw a RangeError and abort the run
     const lastReset = new Date(state.lastDailyReset);
-    
+    if (!Number.isFinite(lastReset.getTime())) return true;
+
     // Check if we've crossed midnight in the specified timezone
-    const nowDate = this.getDateInTimezone(now, timezone);
-    const lastResetDate = this.getDateInTimezone(lastReset, timezone);
-    
-    return nowDate !== lastResetDate;
+    return this.getDateInTimezone(now, timezone) !== this.getDateInTimezone(lastReset, timezone);
   }
 
   // A new day clears counts and targets but keeps the issue timing, so an issue
@@ -130,8 +130,12 @@ class AdvancedIssueHandler {
     }]));
   }
 
+  // YYYY-MM-DD in the timezone, from the same Intl parts as state.js windows.
+  // Re-parsing a toLocaleString() result relies on implementation-defined Date
+  // parsing: where it yields Invalid Date (e.g. the U+202F before AM/PM in newer
+  // ICU), both sides compare equal and the daily reset never happens.
   getDateInTimezone(date, timezone) {
-    return new Date(date.toLocaleString('en-US', { timeZone: timezone })).toDateString();
+    return getTemplateDateParts(timezone, date).date;
   }
 
   getRandomInt(min, max) {
@@ -166,9 +170,17 @@ class AdvancedIssueHandler {
   generateIssueContent(repo, config, now = new Date()) {
     const randomization = config.randomization || {};
     const templates = config.contentTemplates || [];
-    
+    // Without a contentTemplates list, a configured contentTemplate (the one
+    // simple issue mode uses) still applies, so moving a repository to a range
+    // target or an interval does not silently drop it. The loader's built-in
+    // default does not count, so unconfigured titles keep the date and time.
+    // Only title and body are taken, as in simple issue mode (no labels).
+    const single = config.contentTemplate && config.contentTemplate !== DEFAULT_CONTENT_TEMPLATE
+      ? { title: config.contentTemplate.title, body: config.contentTemplate.body }
+      : {};
+
     // Pick a random template or use default
-    const template = templates.length > 0 ? this.getRandomElement(templates) : {};
+    const template = templates.length > 0 ? this.getRandomElement(templates) : single;
     // ${date} and ${time} follow general.timezone, not the host's locale and clock
     const { date, time, timestamp } = getTemplateDateParts(config.general?.timezone || 'UTC', now);
     // An empty list would otherwise put "null" into the issue
@@ -288,7 +300,9 @@ class AdvancedIssueHandler {
       
       // Check if enough time has passed since last issue
       if (repoState.nextIssueTime && now < repoState.nextIssueTime) {
-        const minutesRemaining = Math.round((repoState.nextIssueTime - now) / 60000);
+        // Rounded up: a wait under half a minute would otherwise read as
+        // "0 minutes remaining" while the repository is still held back
+        const minutesRemaining = Math.ceil((repoState.nextIssueTime - now) / 60000);
         results.push({
           success: true,
           skipped: true,
@@ -305,7 +319,7 @@ class AdvancedIssueHandler {
     // Apply repositorySelection (strategy, maxPerExecution) to the repositories
     // that can take an issue now, so selection slots are not spent on repos
     // that are done for the day or still waiting for their interval
-    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun });
+    const selected = randomizer.selectRepositories(ready, fullConfig.repositorySelection, this.cursorStore, { dryRun, rotation: repositories });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({

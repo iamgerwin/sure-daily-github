@@ -32,6 +32,23 @@ test('a missing, unparsable or non-object ledger loads as the empty state', (t) 
   }
 });
 
+test('an unreadable ledger is kept as .bak so its breaker and budget can be recovered', (t) => {
+  const { filePath, ledger } = tmpLedger(t);
+  const broken = '{"breaker": {"until": 99999}, "writes": [1, 2';
+  writeRaw(filePath, broken);
+  ledger.load();
+  ledger.save(emptyState());
+
+  assert.equal(fs.readFileSync(`${filePath}.bak`, 'utf8'), broken);
+});
+
+test('a readable ledger leaves no .bak behind', (t) => {
+  const { filePath, ledger } = tmpLedger(t);
+  ledger.save(emptyState());
+  ledger.load();
+  assert.equal(fs.existsSync(`${filePath}.bak`), false);
+});
+
 test('save then load round-trips and leaves no temp file behind', (t) => {
   const { filePath, ledger } = tmpLedger(t);
   const state = {

@@ -89,8 +89,10 @@ class Randomizer {
   /**
    * Select repositories based on strategy. A dry run previews the round-robin
    * pick without moving the persisted cursor, so the next real run is unchanged.
+   * `rotation` is the full configured repository list the round-robin cursor
+   * walks; `repositories` may be a subset of it (those that can act this run).
    */
-  selectRepositories(repositories, selectionConfig, cursorStore = state, { dryRun = false } = {}) {
+  selectRepositories(repositories, selectionConfig, cursorStore = state, { dryRun = false, rotation = null } = {}) {
     if (!repositories || repositories.length === 0) {
       return [];
     }
@@ -116,10 +118,12 @@ class Randomizer {
         break;
 
       case 'round-robin': {
-        const startIndex = cursorStore.getRoundRobinIndex() % enabledRepos.length;
-        selectedRepos = this.selectRoundRobinRepositories(enabledRepos, maxPerExecution, startIndex);
+        const { selected, nextIndex } = this.selectFromRotation(
+          enabledRepos, rotation, maxPerExecution, cursorStore.getRoundRobinIndex()
+        );
+        selectedRepos = selected;
         if (!dryRun) {
-          cursorStore.setRoundRobinIndex((startIndex + selectedRepos.length) % enabledRepos.length);
+          cursorStore.setRoundRobinIndex(nextIndex);
         }
         break;
       }
@@ -193,6 +197,34 @@ class Randomizer {
     }
 
     return selected;
+  }
+
+  /**
+   * Round-robin over the configured rotation, picking only the candidates.
+   * The cursor is a position in the rotation, not in the candidate list: a
+   * candidate list that shrinks (a repo met its target or waits for its
+   * interval) would otherwise shift every position and skip the next repo.
+   * Returns the picks in rotation order and the cursor for the next run.
+   */
+  selectFromRotation(candidates, rotation, maxCount, cursor = 0) {
+    const eligible = new Set(candidates);
+    const order = (rotation || []).filter(repo => eligible.has(repo));
+    // Without a rotation that covers every candidate, rotate the candidates alone
+    const ring = order.length === candidates.length ? (rotation || []).filter(repo => repo.enabled !== false) : candidates;
+    const count = maxCount && maxCount < candidates.length ? maxCount : candidates.length;
+    const start = cursor % ring.length;
+
+    const selected = [];
+    let lastPosition = start - 1;
+    for (let i = 0; i < ring.length && selected.length < count; i++) {
+      const position = (start + i) % ring.length;
+      if (eligible.has(ring[position])) {
+        selected.push(ring[position]);
+        lastPosition = position;
+      }
+    }
+
+    return { selected, nextIndex: (lastPosition + 1) % ring.length };
   }
 
   /**

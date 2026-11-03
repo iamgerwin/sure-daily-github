@@ -90,14 +90,18 @@ dashboard handler. Shadow mode also never creates labels, and never re-reads PRs
 `sha1(headSha, mergeable, mergeStateStatus, checks, thread ids + last comment ids, review ids, labels − managed labels)`
 changes, the mode changes, or its managed labels differ from what the ledger recorded after our own last writes (so a
 managed label someone else added or removed is reconciled). `checks` is computed from the check contexts *without*
-`sdg/merge-policy`, and the sticky comment isn't part of the snapshot, so none of our own writes wake a PR. An idle tick
+`sdg/merge-policy`, and the sticky comment isn't part of the snapshot, so none of our own writes wake a PR. `checks` is
+`SUCCESS` only when every context passes the way a required status check does (`SUCCESS`, `NEUTRAL` or `SKIPPED`); a
+failed one makes it `FAILURE`, and anything else (in progress, `STALE`, or a value GitHub adds later) `PENDING`. An idle tick
 costs one GraphQL query, one dashboard read, and no writes.
 
 **Idempotency.** GitHub is the source of truth. Labels are compared against the snapshot. The status is only posted when
 the head commit has no `sdg/merge-policy` context, and an existing one is never overwritten. The sticky and the dashboard
 are found by marker (and must be authored by the token's user), then edited only when their body changed. If you delete
 `data/pr-maint-state.json`, the next tick costs extra reads but makes no duplicate writes. The one exception is escalation
-records, which live only in the state file in this release.
+records, which live only in the state file in this release. A state file that cannot be parsed (or is not a JSON
+object) loads as empty, which also clears the breaker and the write budget; the unreadable file is first copied to
+`pr-maint-state.json.bak` and reported on stderr, since the next tick's save replaces it.
 
 **File locations.** Each pr-maint file has its own environment override:
 

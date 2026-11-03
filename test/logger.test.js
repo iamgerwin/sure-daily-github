@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import logger, { Logger, resolveLogLevel, shouldUseColor } from '../src/utils/logger.js';
+import logger, { Logger, resolveLogLevel, resolveRetentionDays, shouldUseColor } from '../src/utils/logger.js';
 
 function withLogLevel(value, fn) {
   const original = process.env.LOG_LEVEL;
@@ -172,6 +172,95 @@ test('color is detected per write so NO_COLOR set after construction applies', (
     else delete process.stdout.isTTY;
     if (originalNoColor === undefined) delete process.env.NO_COLOR;
     else process.env.NO_COLOR = originalNoColor;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRetentionDays accepts only positive whole numbers', () => {
+  assert.equal(resolveRetentionDays('7'), 7);
+  assert.equal(resolveRetentionDays(' 30 '), 30);
+  for (const value of [undefined, '', '0', '-3', '1.5', 'abc', '7d']) {
+    assert.equal(resolveRetentionDays(value), null, `${JSON.stringify(value)} should disable retention`);
+  }
+});
+
+function withRetention(value, fn) {
+  const original = process.env.LOG_RETENTION_DAYS;
+  if (value === undefined) delete process.env.LOG_RETENTION_DAYS;
+  else process.env.LOG_RETENTION_DAYS = value;
+  try {
+    fn();
+  } finally {
+    if (original === undefined) delete process.env.LOG_RETENTION_DAYS;
+    else process.env.LOG_RETENTION_DAYS = original;
+  }
+}
+
+function seedLogs(dir, names) {
+  for (const name of names) fs.writeFileSync(path.join(dir, name), 'old\n');
+}
+
+test('pruneOldLogs keeps the last N daily files and leaves other files alone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    seedLogs(dir, ['2026-10-20.log', '2026-10-27.log', '2026-10-28.log', '2026-10-30.log',
+      'systemd.log', 'cron.log', '2026-10-01.log.gz', 'notes-2026-10-01.log']);
+    const fileLogger = new Logger({ logDir: dir });
+    const removed = fileLogger.pruneOldLogs(3, new Date('2026-10-30T12:00:00Z'));
+    assert.deepEqual(removed.sort(), ['2026-10-20.log', '2026-10-27.log']);
+    assert.deepEqual(fs.readdirSync(dir).sort(), [
+      '2026-10-01.log.gz', '2026-10-28.log', '2026-10-30.log', 'cron.log', 'notes-2026-10-01.log', 'systemd.log'
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pruneOldLogs on a missing directory returns nothing without throwing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const fileLogger = new Logger({ logDir: dir });
+    fs.rmSync(dir, { recursive: true });
+    assert.deepEqual(fileLogger.pruneOldLogs(1), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writing a line prunes old daily logs only when LOG_RETENTION_DAYS is set', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    seedLogs(dir, ['2000-01-01.log']);
+    captureConsole(() => {
+      withRetention(undefined, () => new Logger({ logDir: dir, color: false }).error('kept'));
+    });
+    assert.ok(fs.existsSync(path.join(dir, '2000-01-01.log')), 'no retention keeps every file');
+
+    captureConsole(() => {
+      withRetention('2', () => new Logger({ logDir: dir, color: false }).error('pruned'));
+    });
+    assert.ok(!fs.existsSync(path.join(dir, '2000-01-01.log')), 'retention deletes the old file');
+    const today = `${new Date().toISOString().split('T')[0]}.log`;
+    assert.match(fs.readFileSync(path.join(dir, today), 'utf8'), /pruned/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pruning runs once per day, not on every line', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const fileLogger = new Logger({ logDir: dir });
+    let scans = 0;
+    fileLogger.pruneOldLogs = () => { scans++; return []; };
+    withRetention('7', () => {
+      fileLogger.pruneIfDue(new Date('2026-10-30T01:00:00Z'));
+      fileLogger.pruneIfDue(new Date('2026-10-30T23:00:00Z'));
+      assert.equal(scans, 1);
+      fileLogger.pruneIfDue(new Date('2026-10-31T00:00:01Z'));
+      assert.equal(scans, 2);
+    });
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

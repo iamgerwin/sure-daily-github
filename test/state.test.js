@@ -118,14 +118,46 @@ test('crash mid-write keeps the previous state file intact and cleans up the tem
     realWrite(file, String(data).slice(0, 10));
     throw new Error('simulated crash');
   });
-  t.mock.method(console, 'error', () => {});
 
-  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+  assert.throws(
+    () => sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' }),
+    /Could not save state to .*: simulated crash/
+  );
   fs.writeFileSync.mock.restore();
 
   assert.deepEqual(fs.readdirSync(path.dirname(filePath)), [path.basename(filePath)]);
   const reloaded = new StateManager({ filePath });
   assert.equal(reloaded.getRepoState('me', 'demo').totals.commits, 1);
+});
+
+test('an action whose save fails is not persisted by a later successful save', (t) => {
+  const filePath = tmpStateFile();
+  const sm = new StateManager({ filePath });
+  sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' });
+  const repoState = sm.getRepoState('me', 'demo');
+
+  t.mock.method(fs, 'renameSync', () => { throw new Error('disk full'); });
+  assert.throws(() => sm.recordAction('me', 'demo', { type: 'commit', timezone: 'UTC' }), /disk full/);
+  fs.renameSync.mock.restore();
+
+  assert.equal(sm.getCounts('me', 'demo').daily, 1);
+  assert.equal(repoState.totalCommits, 1);
+  sm.setRoundRobinIndex(1);
+  const saved = new StateManager({ filePath }).getRepoState('me', 'demo');
+  assert.equal(saved.counters.daily.count, 1);
+  assert.equal(saved.totals.commits, 1);
+  assert.equal(saved.commitsToday, 1);
+});
+
+test('getDailyTarget still returns the rolled target when the state cannot be saved', (t) => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  t.mock.method(fs, 'renameSync', () => { throw new Error('read-only file system'); });
+  const errors = [];
+  t.mock.method(console, 'error', (message) => errors.push(message));
+
+  const target = sm.getDailyTarget('me', 'demo', { min: 2, max: 3 }, 'UTC', new Date('2026-10-18T10:00:00Z'));
+  assert.ok(target === 2 || target === 3);
+  assert.match(errors[0], /Could not save state to .*: read-only file system/);
 });
 
 test('lastCommitDate tracks the last recorded commit, not the last window check', () => {
@@ -237,4 +269,44 @@ test('the default state instance honors SDG_STATE_FILE from .env, imported the w
   const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, env, encoding: 'utf8' });
 
   assert.equal(output, stateFile);
+});
+
+test('getPeriodKeys keeps the repeated fall-back hour as two hourly windows', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const tz = 'America/New_York';
+  // 2026-11-01: 01:00-02:00 local happens at 05:xxZ (EDT, -04:00) and again at 06:xxZ (EST, -05:00)
+  const first = sm.getPeriodKeys(tz, new Date('2026-11-01T05:10:00Z'));
+  const second = sm.getPeriodKeys(tz, new Date('2026-11-01T06:10:00Z'));
+  assert.equal(first.hourly, '2026-11-01T01-04:00');
+  assert.equal(second.hourly, '2026-11-01T01-05:00');
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T05:59:59Z')).hourly, '2026-11-01T01-04:00');
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T06:59:59Z')).hourly, '2026-11-01T01-05:00');
+  assert.equal(first.daily, second.daily);
+
+  // The hours around it keep the plain YYYY-MM-DDTHH key
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T04:59:59Z')).hourly, '2026-11-01T00');
+  assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T07:00:00Z')).hourly, '2026-11-01T02');
+});
+
+test('getPeriodKeys leaves spring-forward and offset-free hours unchanged', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  // 2026-03-08: 02:00 EST jumps to 03:00 EDT, no hour repeats
+  assert.equal(sm.getPeriodKeys('America/New_York', new Date('2026-03-08T06:30:00Z')).hourly, '2026-03-08T01');
+  assert.equal(sm.getPeriodKeys('America/New_York', new Date('2026-03-08T07:15:00Z')).hourly, '2026-03-08T03');
+  assert.equal(sm.getPeriodKeys('UTC', new Date('2026-11-01T05:10:00Z')).hourly, '2026-11-01T05');
+  assert.equal(sm.getPeriodKeys('Asia/Manila', new Date('2026-11-01T05:10:00Z')).hourly, '2026-11-01T13');
+});
+
+test('hourly cap applies to each real hour when clocks fall back', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const tz = 'America/New_York';
+  const firstPass = new Date('2026-11-01T05:30:00Z'); // 01:30 EDT
+  const secondPass = new Date('2026-11-01T06:30:00Z'); // 01:30 EST, one real hour later
+
+  sm.recordAction('me', 'demo', { timezone: tz, now: firstPass });
+  assert.equal(sm.isWithinLimits('me', 'demo', { hourlyMax: 1 }, tz, firstPass).allowed, false);
+
+  const later = sm.isWithinLimits('me', 'demo', { hourlyMax: 1 }, tz, secondPass);
+  assert.equal(later.allowed, true);
+  assert.deepEqual(later.counts, { hourly: 0, daily: 1, weekly: 1 });
 });

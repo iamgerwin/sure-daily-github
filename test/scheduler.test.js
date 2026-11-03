@@ -5,6 +5,14 @@ import scheduler from '../src/core/scheduler.js';
 import executor from '../src/core/executor.js';
 import babysitter from '../src/core/babysitter.js';
 import { createOctokit } from '../src/github/octokit.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// Ticks write a heartbeat; keep it out of the project's data/ directory
+const heartbeatDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-scheduler-'));
+process.env.SDG_HEARTBEAT_FILE = path.join(heartbeatDir, 'heartbeat.json');
+test.after(() => fs.rmSync(heartbeatDir, { recursive: true, force: true }));
 
 test('runScheduledTask skips a tick while the previous execution is in flight', async () => {
   const original = executor.execute;
@@ -131,6 +139,61 @@ test('handleShutdown leaves the exit to an in-flight babysit scan', (t) => {
   // A repeated signal still defers to the babysit scan
   assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), false);
   assert.deepEqual(exits, []);
+});
+
+test('handleShutdown waits for an in-flight execution and exits once it finishes', async (t) => {
+  const originalRunning = babysitter.isRunning;
+  const originalExecute = executor.execute;
+  const originalBabysit = babysitter.execute;
+  babysitter.isRunning = () => false;
+  let release;
+  executor.execute = () => new Promise(resolve => { release = () => resolve({ success: true }); });
+  let babysitCalls = 0;
+  babysitter.execute = async () => { babysitCalls++; return { success: true }; };
+  t.after(() => {
+    babysitter.isRunning = originalRunning;
+    executor.execute = originalExecute;
+    babysitter.execute = originalBabysit;
+  });
+
+  scheduler.task = { stop: () => {} };
+  scheduler.running = true;
+  const exits = [];
+
+  const tick = scheduler.runScheduledTask({ babysit: { enabled: true } });
+  assert.equal(scheduler.handleShutdown('SIGTERM', { exit: code => exits.push(code) }), false);
+  assert.equal(scheduler.isRunning(), false);
+  assert.deepEqual(exits, []);
+
+  release();
+  assert.deepEqual(await tick, { success: true });
+  assert.deepEqual(exits, [0]);
+  // The babysit scan that would follow the execution is skipped on shutdown
+  assert.equal(babysitCalls, 0);
+  assert.equal(scheduler.pendingExit, null);
+});
+
+test('a second signal exits at once while an execution is still in flight', async (t) => {
+  const originalRunning = babysitter.isRunning;
+  const originalExecute = executor.execute;
+  babysitter.isRunning = () => false;
+  let release;
+  executor.execute = () => new Promise(resolve => { release = () => resolve({ success: true }); });
+  t.after(() => {
+    babysitter.isRunning = originalRunning;
+    executor.execute = originalExecute;
+  });
+
+  const exits = [];
+  const tick = scheduler.runScheduledTask({});
+  assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), false);
+  assert.equal(scheduler.handleShutdown('SIGINT', { exit: code => exits.push(code) }), true);
+  assert.deepEqual(exits, [0]);
+
+  // The finished execution does not exit a second time
+  release();
+  await tick;
+  assert.deepEqual(exits, [0]);
 });
 
 test('installSignalHandlers handles SIGINT and SIGTERM until removed', (t) => {

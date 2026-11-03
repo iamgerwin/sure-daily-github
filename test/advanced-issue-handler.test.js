@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
 import { describeFailures } from '../src/core/executor.js';
+import loader, { DEFAULT_CONTENT_TEMPLATE } from '../src/config/loader.js';
 
 const config = { general: { timezone: 'UTC' }, randomization: {}, contentTemplates: [] };
 
@@ -370,6 +371,34 @@ test('the daily reset keeps a pending interval from the previous day', async () 
   assert.equal(saved.nextIssueTime, next);
 });
 
+for (const [label, remainingMs, minutes] of [
+  ['under half a minute', 20 * 1000, 1],
+  ['a minute and a half', 90 * 1000, 2],
+  ['exactly ten minutes', 10 * 60 * 1000, 10]
+]) {
+  test(`an interval with ${label} left reports ${minutes} minute(s) remaining`, async () => {
+    const { handler, created } = createHandler();
+    const realNow = Date.now;
+    const now = realNow();
+    Date.now = () => now;
+    try {
+      writeState(handler, {
+        lastDailyReset: new Date(now).toISOString(),
+        repositories: {
+          'me/demo': { issuesCreatedToday: 1, lastIssueTime: now - 1000, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: now + remainingMs }
+        }
+      });
+
+      const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 60, max: 60 } })], {}, false, config);
+
+      assert.equal(created.length, 0);
+      assert.equal(result.reason, `Waiting for interval (${minutes} minutes remaining)`);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+}
+
 test('the daily reset clears counts so a new day starts from zero', async () => {
   const { handler, created } = createHandler();
   const yesterday = Date.now() - 36 * 60 * 60 * 1000;
@@ -491,6 +520,27 @@ test('round-robin rotates through repositories across runs', async () => {
   assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c', 'a']);
 });
 
+test('round-robin does not skip the next repository when the previous one reached its target', async () => {
+  const { handler, created } = createHandler();
+  const cursor = { index: 0 };
+  handler.cursorStore = {
+    getRoundRobinIndex: () => cursor.index,
+    setRoundRobinIndex: (index) => { cursor.index = index; }
+  };
+  const repos = [
+    repo({ repo: 'a', dailyTarget: { min: 1, max: 1 } }),
+    repo({ repo: 'b' }),
+    repo({ repo: 'c' })
+  ];
+  const cfg = { ...config, repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+
+  for (let i = 0; i < 3; i++) {
+    await handler.processRepositories(repos, {}, false, cfg);
+  }
+
+  assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c']);
+});
+
 test('a dry run does not advance the round-robin rotation', async () => {
   const { handler, created } = createHandler();
   const cursor = { index: 1 };
@@ -586,6 +636,50 @@ test('falls back to the default random titles when a title list is empty', () =>
   assert.equal(body, 'General documentation|General performance');
 });
 
+test('uses the configured contentTemplate when no contentTemplates list is set', () => {
+  const { handler } = createHandler();
+  const now = new Date('2026-10-15T00:05:00Z');
+  const contentTemplate = { title: 'Progress ${date} for ${repo}', body: 'Logged at ${time}', labels: ['ignored'] };
+
+  for (const contentTemplates of [undefined, []]) {
+    const issue = handler.generateIssueContent(repo({ repo: 'shop' }), { contentTemplate, contentTemplates }, now);
+    assert.equal(issue.title, 'Progress 2026-10-15 for shop');
+    assert.equal(issue.body, 'Logged at 00:05:00');
+    // Like simple issue mode, contentTemplate does not add labels
+    assert.deepEqual(issue.labels, ['automated']);
+  }
+});
+
+test('contentTemplates takes precedence over contentTemplate', () => {
+  const { handler } = createHandler();
+  const issue = handler.generateIssueContent(repo(), {
+    contentTemplate: { title: 'Single', body: 'Single body' },
+    contentTemplates: [{ title: 'From list', body: 'List body' }]
+  });
+
+  assert.equal(issue.title, 'From list');
+  assert.equal(issue.body, 'List body');
+});
+
+test('fills a field the contentTemplate leaves out with the advanced default', () => {
+  const { handler } = createHandler();
+  const issue = handler.generateIssueContent(repo(), { contentTemplate: { body: 'Only a body' } }, new Date('2026-10-15T00:05:00Z'));
+
+  assert.equal(issue.title, 'Automated Issue - 2026-10-15 00:05:00');
+  assert.equal(issue.body, 'Only a body');
+});
+
+test('keeps the dated default title when the config has no contentTemplate', () => {
+  const { handler } = createHandler();
+  const cfg = loader.validate({ repositories: [{ owner: 'me', repo: 'demo' }] }, { requireToken: false });
+  assert.equal(cfg.contentTemplate, DEFAULT_CONTENT_TEMPLATE);
+
+  const issue = handler.generateIssueContent(repo(), cfg, new Date('2026-10-15T00:05:00Z'));
+
+  assert.equal(issue.title, 'Automated Issue - 2026-10-15 00:05:00');
+  assert.match(issue.body, /^# Automated Issue/);
+});
+
 test('leaves unknown placeholders as written', () => {
   const { handler } = createHandler();
   const config = { contentTemplates: [{ title: '${unknown} ${repo}', body: '${constructor} ${toString}' }] };
@@ -636,4 +730,30 @@ test('does not wait between repositories in a dry run or for skipped repositorie
   ], {}, false, config);
   assert.equal(created.length, 1);
   assert.deepEqual(delays, []);
+});
+
+test('daily reset follows the calendar day in general.timezone', () => {
+  const { handler } = createHandler();
+  // 23:30 UTC on Oct 29 is already Oct 30 in Manila (UTC+8)
+  const state = { lastDailyReset: '2026-10-29T15:30:00.000Z' };
+  const now = new Date('2026-10-29T23:30:00.000Z');
+  assert.equal(handler.shouldResetDaily(state, 'UTC', now), false);
+  assert.equal(handler.shouldResetDaily(state, 'Asia/Manila', now), true);
+  // Same Manila day on both sides of UTC midnight
+  assert.equal(handler.shouldResetDaily({ lastDailyReset: '2026-10-29T17:00:00.000Z' }, 'Asia/Manila', new Date('2026-10-30T01:00:00.000Z')), false);
+});
+
+test('daily reset does not depend on re-parsing toLocaleString output', (t) => {
+  const { handler } = createHandler();
+  // Some ICU/V8 pairings render text Date cannot parse back (Invalid Date on both
+  // sides compared equal, so the day never rolled over)
+  t.mock.method(Date.prototype, 'toLocaleString', () => 'unparseable');
+  const state = { lastDailyReset: '2026-10-29T12:00:00.000Z' };
+  assert.equal(handler.shouldResetDaily(state, 'UTC', new Date('2026-10-30T12:00:00.000Z')), true);
+  assert.equal(handler.shouldResetDaily(state, 'UTC', new Date('2026-10-29T18:00:00.000Z')), false);
+});
+
+test('an unparseable lastDailyReset triggers a reset instead of throwing', () => {
+  const { handler } = createHandler();
+  assert.equal(handler.shouldResetDaily({ lastDailyReset: 'not a date' }, 'UTC'), true);
 });

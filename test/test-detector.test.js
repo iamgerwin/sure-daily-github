@@ -158,6 +158,29 @@ test('detectTestCommand reads only the makefile that make itself would use', (t)
   assert.deepEqual(detectTestCommand(gnu), { install: null, test: 'make test' });
 });
 
+test('detectTestCommand runs go test for a Go module and cargo test for a Cargo package', (t) => {
+  const go = repoDir(t, { 'go.mod': 'module example.com/x\n\ngo 1.22\n' });
+  assert.deepEqual(detectTestCommand(go), { install: null, test: 'go test ./...' });
+
+  const cargo = repoDir(t, { 'Cargo.toml': '[package]\nname = "x"\n' });
+  assert.deepEqual(detectTestCommand(cargo), { install: null, test: 'cargo test' });
+});
+
+test('detectTestCommand prefers testCommand, npm test and make test over Go and Cargo', (t) => {
+  const configured = repoDir(t, { 'go.mod': 'module x\n' });
+  assert.deepEqual(detectTestCommand(configured, { testCommand: 'go test -short ./...' }), { install: null, test: 'go test -short ./...' });
+
+  const npm = repoDir(t, { 'go.mod': 'module x\n', 'package.json': pkg({ test: 'node --test' }) });
+  assert.deepEqual(detectTestCommand(npm), { install: null, test: 'npm test' });
+
+  const make = repoDir(t, { 'Cargo.toml': '[package]\n', Makefile: 'test:\n\tcargo test --all\n' });
+  assert.deepEqual(detectTestCommand(make), { install: null, test: 'make test' });
+
+  // A makefile without a test rule does not hide the manifest
+  const noRule = repoDir(t, { 'go.mod': 'module x\n', Makefile: 'build:\n\tgo build\n' });
+  assert.deepEqual(detectTestCommand(noRule), { install: null, test: 'go test ./...' });
+});
+
 test('detectTestCommand returns null without a runnable suite', (t) => {
   assert.equal(detectTestCommand(repoDir(t, { Makefile: 'build:\n\tcc x.c\n' })), null);
   assert.equal(detectTestCommand(repoDir(t)), null);
