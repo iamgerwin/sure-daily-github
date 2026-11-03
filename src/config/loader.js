@@ -75,6 +75,16 @@ function validateLabels(labels, label, errors) {
   }
 }
 
+const isMissing = (value) => value === undefined || value === null || value === '';
+
+// An unquoted all-digit owner or repo (`repo: 2024`) reads from YAML as a
+// number; it is used as its string form, like a numeric branch. Anything else
+// that is not a string (list, mapping, boolean) is not a name: null.
+function repoNameText(value) {
+  if (typeof value === 'string') return value;
+  return Number.isSafeInteger(value) && value >= 0 ? String(value) : null;
+}
+
 // The commit path is checked by normalizeRepoPath only when a commit is made,
 // so "./updates" or "../x" would pass `validate` and then fail every commit
 function validateRepoPath(repoPath, label, errors) {
@@ -286,17 +296,22 @@ class ConfigLoader {
           errors.push(`Repository ${idx}: must be a mapping with owner and repo`);
           return;
         }
-        if (!repo.owner) errors.push(`Repository ${idx}: owner is required`);
-        if (!repo.repo) errors.push(`Repository ${idx}: repo is required`);
-        validateBooleanFlag(repo.enabled, `Repository ${idx}: enabled`, errors);
-        if (repo.owner && !/^[a-zA-Z0-9-]+$/.test(repo.owner)) {
+        const owner = repoNameText(repo.owner);
+        const name = repoNameText(repo.repo);
+        if (isMissing(repo.owner)) {
+          errors.push(`Repository ${idx}: owner is required`);
+        } else if (owner === null || !/^[a-zA-Z0-9-]+$/.test(owner)) {
           errors.push(`Repository ${idx}: invalid owner format`);
         }
-        if (repo.repo && !/^[a-zA-Z0-9._-]+$/.test(repo.repo)) {
+        // "." and ".." are not repository names and would resolve to another API path
+        if (isMissing(repo.repo)) {
+          errors.push(`Repository ${idx}: repo is required`);
+        } else if (name === null || !/^[a-zA-Z0-9._-]+$/.test(name) || /^\.\.?$/.test(name)) {
           errors.push(`Repository ${idx}: invalid repo format`);
         }
-        if (typeof repo.owner === 'string' && typeof repo.repo === 'string') {
-          const key = `${repo.owner}/${repo.repo}`.toLowerCase();
+        validateBooleanFlag(repo.enabled, `Repository ${idx}: enabled`, errors);
+        if (owner !== null && name !== null) {
+          const key = `${owner}/${name}`.toLowerCase();
           if (seenRepos.has(key)) {
             errors.push(`Repository ${idx}: duplicate of repository ${seenRepos.get(key)} (${repo.owner}/${repo.repo})`);
           } else {
@@ -546,8 +561,8 @@ class ConfigLoader {
       repositories: config.repositories.map(repo => {
         const repoTarget = repo.dailyTarget || generalTarget;
         return {
-          owner: repo.owner,
-          repo: repo.repo,
+          owner: repoNameText(repo.owner),
+          repo: repoNameText(repo.repo),
           enabled: repo.enabled !== false,
           // Unset means the repository's default branch, resolved by GitHub
           branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch),
