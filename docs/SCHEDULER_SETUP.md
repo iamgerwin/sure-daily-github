@@ -57,6 +57,8 @@ The restarted scheduler writes a fresh heartbeat on start, so a heartbeat that i
 /opt/sure-daily-github/scripts/verify-status.sh
 ```
 
+The script reads the install it lives in (the directory above `scripts/`), so it works from any checkout. It shows the newest daily `logs/YYYY-MM-DD.log` (not `health-check.log`) and honors `CONFIG_PATH` and `SDG_ISSUE_STATE_FILE` when the config or issue state file has been moved.
+
 ### Manual Service Commands
 ```bash
 # Check service status
