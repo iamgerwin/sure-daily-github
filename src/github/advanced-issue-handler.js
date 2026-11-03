@@ -15,6 +15,20 @@ const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isCount = (value) => Number.isInteger(value) && value >= 0;
 
+// Template labels are added to the repository's labels (default ["automated"]),
+// so a template that also lists "automated" would send it twice. GitHub label
+// names are case-insensitive ("Bug" and "bug" are one label); the first spelling
+// is kept, so the request and the dry-run preview list each label once.
+export function uniqueLabels(labels) {
+  const seen = new Set();
+  return labels.filter(name => {
+    const key = String(name).trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 class AdvancedIssueHandler {
   constructor(token) {
     this.token = token;
@@ -233,7 +247,7 @@ class AdvancedIssueHandler {
     return {
       title,
       body,
-      labels: [...(template.labels || []), ...(repo.labels || [])]
+      labels: uniqueLabels([...(template.labels || []), ...(repo.labels || [])])
     };
   }
 
