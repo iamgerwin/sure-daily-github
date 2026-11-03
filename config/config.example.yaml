@@ -141,7 +141,7 @@ repositories:
   - owner: "yourusername"
     repo: "your-repo"
     enabled: true
-    branch: "main"
+    # branch: "main"  # Omit to use the repository's default branch
     dailyTarget: 1
     path: "daily-updates"  # For commit mode
     commitMessage: "docs: daily update ${date}"  # Also ${time}, ${timestamp}, ${repo}

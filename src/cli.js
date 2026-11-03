@@ -464,7 +464,7 @@ repositories:
   - owner: "yourusername"
     repo: "your-repo"
     enabled: true
-    branch: "main"
+    # branch: "main"  # Omit to use the repository's default branch
     commitMessage: "docs: daily update \${date}"
 
 contentTemplate:

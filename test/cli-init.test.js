@@ -61,3 +61,22 @@ test('init template uses the contentTemplate keys the handlers read', () => {
   assert.match(written.contentTemplate.body, /\$\{date\}/);
   assert.match(written.repositories[0].commitMessage, /\$\{date\}/);
 });
+
+test('init template leaves branch unset so commits go to the repository default branch', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-init-'));
+  const configFile = path.join(dir, 'config.yaml');
+  execFileSync(process.execPath, [cliPath, 'init', '--config', configFile], {
+    env: { ...process.env, LOG_LEVEL: 'error' },
+    encoding: 'utf8'
+  });
+
+  // A hardcoded "main" fails every commit on a repository whose default is
+  // "master" (or anything else); unset resolves to the default on GitHub
+  const written = yaml.load(fs.readFileSync(configFile, 'utf8'));
+  assert.equal('branch' in written.repositories[0], false);
+
+  process.env.GITHUB_TOKEN ??= 'ghp_test';
+  const { default: config } = await import('../src/config/loader.js');
+  const cfg = config.validate(written);
+  assert.equal(cfg.repositories[0].branch, null);
+});
