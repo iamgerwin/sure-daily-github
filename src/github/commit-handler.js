@@ -89,6 +89,9 @@ class CommitHandler {
       const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
       const filePath = this.generateFilePath(basePath, repo, timezone, now);
 
+      // Fail before the API call: an uncounted commit would be repeated every run
+      state.assertWritable();
+
       // Create commit
       const result = await this.client.createOrUpdateFile(
         owner,
@@ -138,7 +141,7 @@ class CommitHandler {
       }
     }
 
-    const selected = randomizer.selectRepositories(ready, config?.repositorySelection, state, { dryRun });
+    const selected = randomizer.selectRepositories(ready, config?.repositorySelection, state, { dryRun, rotation: enabled });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });

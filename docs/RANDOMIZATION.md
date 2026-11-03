@@ -7,6 +7,7 @@ This guide explains the advanced randomization and multi-repository selection fe
 - [Overview](#overview)
 - [Range-Based Issue Counts](#range-based-issue-counts)
 - [Randomization Configuration](#randomization-configuration)
+- [Issue Content Templates](#issue-content-templates)
 - [Repository Selection Strategies](#repository-selection-strategies)
 - [Time-Based Variations](#time-based-variations)
 - [Configuration Examples](#configuration-examples)
@@ -73,7 +74,9 @@ randomization:
     max: 50
 ```
 
-When randomization is enabled, it overrides individual repository `dailyTarget` ranges and uses the global `issueCount` range instead. If `issueCount` is omitted, it defaults to `general.dailyTarget` (or 1 when that is unset).
+When randomization is enabled in issue mode with fixed targets (the simple issue handler), it overrides each repository's `dailyTarget` and uses the global `issueCount` range instead. If `issueCount` is omitted, it defaults to `general.dailyTarget` (or 1 when that is unset).
+
+> `issueCount` and `timeVariations` are only used by the simple issue handler. Commit mode, and issue mode with a `dailyTarget` range or `intervalMinutes` on any enabled repository (the advanced issue handler), follow each repository's `dailyTarget` and ignore them; the advanced issue handler still uses the `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` lists. `validate` prints a warning when randomization is enabled but its counts will not be used.
 
 ### Time-Based Variations
 
@@ -107,6 +110,52 @@ The system automatically selects the appropriate time period based on your sched
 > When randomization is enabled, `issueCount` and each configured `timeVariations` period (when `timeVariations.enabled` is true) must have whole-number `min` and `max` values of at least 1, with `min` not greater than `max`. Invalid ranges are rejected when the configuration loads instead of failing partway through a run.
 
 > If `timeVariations.enabled` is true but no `daily` range is set, the per-run issue count and the daily cap both fall back to `issueCount`.
+
+## Issue Content Templates
+
+The advanced issue handler (issue mode with range targets or `intervalMinutes`) does not use the single `contentTemplate` block. Each issue instead uses one entry picked at random from the top-level `contentTemplates` list:
+
+```yaml
+contentTemplates:
+  - title: "Bug: ${randomBugTitle}"
+    body: |
+      Found in ${repo} on ${date} at ${time}.
+
+      Priority: ${priority}
+    labels: ["bug"]
+  - title: "Docs: ${randomDocTitle}"
+    body: "${proposedChanges} (${reason})"
+
+randomization:
+  enabled: true
+  bugTitles: ["Login form rejects valid emails", "Cache not cleared on logout"]
+  featureTitles: ["Export to CSV"]
+  docTitles: ["Document the retry settings"]
+  perfTitles: ["Slow dashboard query"]
+```
+
+- `title` and `body` are optional strings. Without a list (or for a missing field), the issue is titled `Automated Issue - <date> <time>` and gets a short default body naming the repository.
+- `labels` are added to the issue together with the repository's `labels` (default `["automated"]`).
+- `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` feed the `${randomBug…}` style placeholders below. A missing or empty list falls back to `General bug`, `General feature`, `General documentation` and `General performance`.
+
+Placeholders filled in `title` and `body`:
+
+| Placeholder | Value |
+|-------------|-------|
+| `${date}`, `${time}` | Creation date and time in `general.timezone` |
+| `${timestamp}` | Creation instant as a UTC ISO string |
+| `${repo}` | Repository name |
+| `${randomBugTitle}`, `${randomFeatureTitle}`, `${randomDocTitle}`, `${randomPerfTitle}` | A random entry from `bugTitles`, `featureTitles`, `docTitles`, `perfTitles` |
+| `${priority}` | `Low`, `Medium` or `High`, picked at random |
+| `${randomBugDescription}`, `${randomFeatureDescription}` | Fixed generic descriptions |
+| `${step1}`, `${step2}`, `${step3}`, `${expectedBehavior}`, `${actualBehavior}` | Fixed bug-report filler text |
+| `${useCase}`, `${proposedSolution}`, `${alternatives}` | Fixed feature-request filler text |
+| `${section}`, `${currentState}`, `${proposedChanges}`, `${reason}` | Fixed documentation filler text |
+| `${area}`, `${currentPerf}`, `${targetPerf}`, `${approach}` | Fixed performance filler text |
+
+Values are inserted literally, and any other `${name}` is left as written.
+
+The simple issue handler (fixed targets) and commit mode use `contentTemplate` instead, which supports only `${date}`, `${time}`, `${timestamp}` and `${repo}`.
 
 ## Repository Selection Strategies
 
@@ -154,16 +203,22 @@ repositorySelection:
 repositories:
   - owner: "yourusername"
     repo: "high-priority"
-    weight: 50  # 50% chance of selection
+    weight: 50  # 50% chance to be the first pick
 
   - owner: "yourusername"
     repo: "medium-priority"
-    weight: 30  # 30% chance
+    weight: 30  # 30% chance to be the first pick
 
   - owner: "yourusername"
     repo: "low-priority"
-    weight: 20  # 20% chance
+    weight: 20  # 20% chance to be the first pick
 ```
+
+Weights are relative and do not need to add up to 100 (a repository without a `weight` counts as `1`). Each run draws `maxPerExecution` repositories one at a time without replacement: a repository's chance of each draw is its weight divided by the total weight of the repositories not yet drawn. A weight is therefore the chance of being the *first* pick, not the chance of being selected at all. In the example above, two of three repositories run each time, so `high-priority` is selected in about 84% of runs, `medium-priority` in about 68%, and `low-priority` in about 49%.
+
+> Without `maxPerExecution` (or with a value at or above the number of ready repositories), every repository is selected on every run and the weights only decide the processing order.
+
+> `randomizeOrder` only affects the `sequential` strategy. `random` always shuffles, `weighted` orders repositories by its weighted draws, and `round-robin` keeps the rotation order, so setting `randomizeOrder` with those strategies has no effect.
 
 ### Round-Robin
 
@@ -175,7 +230,7 @@ repositorySelection:
   maxPerExecution: 1  # Process one repo at a time
 ```
 
-The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories. A dry run (`general.dryRun` or `--dry-run`) shows which repositories would be picked but leaves the stored position alone, so the next real run picks the same ones.
+The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. The position counts through all enabled repositories in configured order, so a repository that is passed over this run (its target is already met, or it is waiting for its interval) does not shift the rotation: the next run still starts with the repository after the last one picked. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories. A dry run (`general.dryRun` or `--dry-run`) shows which repositories would be picked but leaves the stored position alone, so the next real run picks the same ones.
 
 ## Configuration Examples
 
@@ -379,13 +434,13 @@ These tests cover:
 1. **Start Conservative**: Begin with smaller ranges and adjust based on results
 2. **Use Dry Run**: Always test new configurations with `--dry-run` first
 3. **Monitor Logs**: Check logs to understand selection patterns
-4. **Balance Weights**: Ensure repository weights add up sensibly
+4. **Balance Weights**: Weights are relative (they need not sum to 100) and only limit how often a repository runs when `maxPerExecution` is set
 5. **Consider Rate Limits**: Factor in GitHub API rate limits when setting high ranges
 6. **Time Variations**: Use time variations to match your actual work patterns
 
 ## Limits Enforcement
 
-When `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When disabled, the repository `dailyTarget` (fixed or range) acts as the daily cap. See docs/STATE.md for details.
+In issue mode with fixed targets (the simple issue handler), when `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When disabled, the repository `dailyTarget` (fixed or range) acts as the daily cap, as it always does in commit mode and in the advanced issue handler. See docs/STATE.md for details.
 
 ## Troubleshooting
 
@@ -397,8 +452,9 @@ When `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, a
 
 ### Same Repositories Always Selected
 
-- Verify `randomizeOrder: true` is set
+- With `strategy: "sequential"`, verify `randomizeOrder: true` is set (other strategies ignore it)
 - Check if `strategy: "random"` or `"weighted"` is properly configured
+- Set `maxPerExecution` below the number of enabled repositories; without it, every strategy selects all of them
 - Ensure multiple repositories are `enabled: true`
 
 ### Too Many API Calls
