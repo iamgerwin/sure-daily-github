@@ -124,11 +124,11 @@ the highest one.
 | # | From | To | Routine | Trigger | Guards | Side effects |
 |---|---|---|---|---|---|---|
 | T1 | (new PR) | `status/awaiting-ai-review` | Creation | A due slot of the daily plan; the engine opens the PR | Daily plan (3 to 10), 40-minute cooldown, window until 22:30, backlog gate (30 open), circuit breaker (3 failures), run lock and repo lock | `quality/low` stamped by the engine as instructed in the creation prompt; the script does not verify the labels |
-| T2 | `status/awaiting-ai-review` | `status/ai-reviewed` | Review | Pass: score at least 8 | Kill switch `review-off`, run lock, 10 reviews per day, 2 per tick, diff within the tier line cap, diff truncated to the tier input cap, no ledger entry for the current head SHA | Scorecard comment, score appended to `rounds-<pr>`, `findings-<pr>.json` deleted, ledger `<date> <verdict> <score> <sha>` |
+| T2 | `status/awaiting-ai-review` | `status/ai-reviewed` | Review | Pass: score at least 8 | Kill switch `review-off`, run lock, 20 reviews per day (`SDG_REVIEW_MAX_DAY`), 2 per tick, PR carries none of `status/conflict`, `status/conflict-resolved`, `status/fix-round`, diff within the tier line cap, diff truncated to the tier input cap, no ledger entry for the current head SHA | Scorecard comment, score appended to `rounds-<pr>`, `findings-<pr>.json` deleted, ledger `<date> <verdict> <score> <sha>` |
 | T3 | `status/awaiting-ai-review` | `status/fix-round` | Review | Fix: score below 8 and round below 10 | As T2 | Scorecard comment ("automated fix round queued"), round appended, `findings-<pr>.json` written with findings, score, summary, round, threshold, and reviewed head SHA, ledger written |
 | T4 | `status/awaiting-ai-review` | `status/ai-reviewed` | Review | Cap: score below 8 at round 10 or later | As T2 | Scorecard comment, plus a second comment "score-gate cap reached after N rounds ... human review required"; round appended, findings file deleted, ledger written |
-| T5a | `status/awaiting-ai-review` | `status/ai-reviewed` (oversize hand-off) | Review | Diff (additions plus deletions) over the line cap of the PR's quality tier: 4,000 for `quality/high`, 1,600 for `quality/mid`, 800 otherwise | Kill switch, run lock, no ledger entry for the current head SHA. Runs only while the tick and day budgets have room, but the hand-off spends no engine run and is not counted against them. | No engine run, no scorecard. PR comment: "Automated review skipped: N diff lines exceeds the size cap for its quality tier (CAP). No scorecard — human review required; the label is now `status/ai-reviewed` as your cue." Label changed as for a pass (removes `status/awaiting-ai-review` and `status/fix-round`). Ledger `<date> skipped-size`, with no SHA. No round consumed. Push detection skips the PR from then on (no SHA), so later pushes are not re-queued. Neither the comment nor the relabel result is checked: if the relabel fails, the ledger entry is still written and the PR stays at `status/awaiting-ai-review` in manual review, as under T5b. |
-| T5b | `status/awaiting-ai-review` | unchanged (manual review) | Review | No engine (fallback included) returned a parsable findings list | As T2 | Ledger `<date> failed`, with no SHA. No relabel, no scorecard, no round consumed. One "auto-review failed ... review manually" channel line. The cron reviewer and push detection leave the PR alone from then on; the owner reviews it by hand. Unparseable output never counts as a pass. |
+| T5a | `status/awaiting-ai-review` | `status/ai-reviewed` (oversize hand-off) | Review | Diff (additions plus deletions) over the line cap of the PR's quality tier: 4,000 for `quality/high`, 1,600 for `quality/mid`, 800 otherwise | Kill switch, run lock, no ledger entry for the current head SHA. Runs only while the tick and day budgets have room, but the hand-off spends no engine run and is not counted against them. | No engine run, no scorecard. PR comment: "Automated review skipped: N diff lines exceeds the size cap for its quality tier (CAP). No scorecard — human review required; the label is now `status/ai-reviewed` as your cue." Label changed as for a pass (removes `status/awaiting-ai-review` and `status/fix-round`). Ledger `<date> skipped-size`, with no SHA. No round consumed. Push detection skips the PR from then on (no SHA), so later pushes are not re-queued. Neither the comment nor the relabel result is checked: if the relabel fails, the ledger entry is still written and the PR stays at `status/awaiting-ai-review` in manual review (the reviewer skips ledger entries without a SHA). The same holds for the failure hand-off (T5b). |
+| T5b | `status/awaiting-ai-review` | unchanged (attempts 1 and 2), then `status/ai-reviewed` (failure hand-off at attempt 3) | Review | No engine (fallback included) returned a parsable findings list | As T2. A failed attempt is not counted against the day or tick budget. | Every failure: `failcount-<pr>` incremented, no scorecard, no round consumed. Attempts 1 and 2: `done-<pr>` deleted, label unchanged, one "auto-review failed (engine output unusable, attempt N/3) — retrying next tick" channel line; the next tick retries. Attempt 3: PR comment "Automated review failed 3 times (engine output unusable each time). No scorecard — human review required; label moved to `status/ai-reviewed` as your cue.", label changed as for a pass (removes `status/awaiting-ai-review` and `status/fix-round`), ledger `<date> failed-final` with no SHA, `failcount-<pr>` deleted, one "handed to human" channel line. Push detection skips the PR from then on (no SHA). A successful review deletes `failcount-<pr>`. Neither the comment nor the relabel result is checked (as T5a). Unparseable output never counts as a pass. |
 | T6 | `status/awaiting-ai-review` | outcome of T2, T3, or T4 | Review | The ledger already records the current head SHA: a tick died after the ledger write but before the label change | Same tick budgets | Label transition re-applied from the ledger score and `rounds-<pr>`. No second review, no new round. |
 | T7 | `status/fix-round` | `status/awaiting-ai-review` | Fix rounds | Findings were recorded for the current head SHA, and the engine's fixes pass verification | Kill switch `fixround-off`, repo lock, 4 engine runs per day (counted at dispatch), 2 attempts per PR per day, 1 engine run per tick, mergeability neither `UNKNOWN` nor `CONFLICTING`, remote branch at the PR head. Verification: worktree on the branch, history not rewritten, no git operation in progress, no unmerged paths or conflict markers, leftovers committed by the script, clean tree, at least one new commit, no attribution in the message, author, or committer of any new commit, the orchestrator's own `npm test` passes, the PR is still open and still labeled `status/fix-round`, and the push is visible on the remote | Commits pushed by the script (the engine cannot push). Label changed first, then `done-<pr>` deleted. `rounds-<pr>` kept. |
 | T8 | `status/fix-round` | `status/awaiting-ai-review` | Fix rounds | Stale findings: the reviewed head SHA in `findings-<pr>.json` differs from the PR head (a human push, or a tick that died after pushing) | Kill switch, repo lock. No engine run, so no budget is spent. | Label changed first, then `done-<pr>` deleted |
@@ -156,7 +156,6 @@ stateDiagram-v2
     state "status/fix-round" as fixround
     state "status/conflict" as conflict
     state "status/conflict-resolved" as resolved
-    state "Manual review - label unchanged, ledger without SHA" as manual
     state "No status label - manual edit or lost label" as unlabeled
     state "Merged" as merged
     state gate <<choice>>
@@ -167,8 +166,8 @@ stateDiagram-v2
     gate --> fixround : fix - score below 8, round below 10, findings saved
     gate --> reviewed : cap - score below 8 at round 10 or later, human review required
     awaiting --> reviewed : over tier size cap - hand-off comment, no scorecard, ledger skipped-size
-    awaiting --> manual : no parsable findings list, fallback included
-    manual --> merged : human owner reviews by hand and merges, label unchanged
+    awaiting --> awaiting : no parsable findings list, fallback included - retry next tick, attempts 1 and 2
+    awaiting --> reviewed : review failed 3 times - hand-off comment, no scorecard, ledger failed-final
     unlabeled --> awaiting : phase 3 reconciler - no findings file, re-enters pipeline
     unlabeled --> fixround : phase 3 reconciler - findings file exists, label restored
     fixround --> awaiting : fix-round job pushes verified fixes, ledger cleared
@@ -201,7 +200,7 @@ label their target state excludes, so after them a PR carries exactly one
 
 | Transition | Removes | Adds |
 |---|---|---|
-| Review, pass, cap, or oversize hand-off (T2, T4, T5a, T6) | `status/awaiting-ai-review`, `status/fix-round` | `status/ai-reviewed` |
+| Review, pass, cap, oversize hand-off, or failure hand-off (T2, T4, T5a, T5b at attempt 3, T6) | `status/awaiting-ai-review`, `status/fix-round` | `status/ai-reviewed` |
 | Review, fix (T3, T6) | `status/awaiting-ai-review`, `status/ai-reviewed` | `status/fix-round` |
 | Push detection (T10) | `status/ai-reviewed` | `status/awaiting-ai-review` |
 | Fix round, verified or stale (T7, T8) | `status/fix-round` | `status/awaiting-ai-review` |
@@ -218,11 +217,13 @@ precedence, which matches the exclusion filters the routines apply:
 conflict > conflict-resolved > awaiting-ai-review > fix-round > ai-reviewed
 ```
 
-For example, `status/fix-round` together with `status/awaiting-ai-review`
-means "queued for review": the fix-round job skips the PR and the reviewer
-picks it up. The reviewer does not exclude PRs that also carry
-`status/conflict`, so a PR that starts conflicting while queued may be
-reviewed once on its pre-merge code and again after Phase 2.
+The reviewer skips PRs that also carry `status/conflict`,
+`status/conflict-resolved`, or `status/fix-round`, so a PR that starts
+conflicting while queued is reviewed only after Phase 2. One consequence:
+`status/fix-round` together with `status/awaiting-ai-review` (left by
+Phase 2 on a PR that conflicted mid fix loop) is skipped by both the
+fix-round job and the reviewer, and stays until a human removes one of
+the two labels.
 
 ## 7. Budgets that bound the label loops
 
@@ -231,7 +232,8 @@ reviewed once on its pre-merge code and again after Phase 2.
 | Review and fix (T3, T7, back to T2 to T4) | `rounds-<pr>`: every scored review is one round. Below the gate at round 10 or later, the PR goes to the human (T4) instead of another fix round. At most 9 review-triggered fix rounds per PR, ever. Failed fix-run attempts (T9) consume no round; they are bounded only per day (next row). | Never by automation: not by a fix push, a conflict repair, or push detection. A human grants a fresh budget by deleting `rounds-<pr>`. |
 | Fix-round attempts (T9) | 2 per PR per day, 4 engine runs per day, 1 per tick | Daily. A round that never verifies is retried every day until a human acts; this is bounded per day, not per lifetime. |
 | Conflict repair (T12, T14) | 2 attempts per PR per day | Daily |
-| Reviews (T2 to T6) | 10 per day, 2 per tick. An oversize hand-off (T5a) is not counted. | Daily |
+| Reviews (T2 to T6) | 20 per day (`SDG_REVIEW_MAX_DAY`), 2 per tick. An oversize hand-off (T5a) and failed attempts (T5b) are not counted. | Daily |
+| Failed reviews (T5b) | `failcount-<pr>`: 3 consecutive failures, then the failure hand-off. | Deleted by a successful review and by the hand-off. |
 | Reconciler (T17, T18) | None needed: it only adds a label to a PR that has none, so it cannot loop on its own output. T19 is an alert with no budget and repeats every patrol tick. | — |
 
 Kill switches: `touch $H/.autopr-sdg/review-off` stops review, including

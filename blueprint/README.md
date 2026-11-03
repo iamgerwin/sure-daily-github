@@ -122,7 +122,7 @@ standard output to the configured destination.
 | `0,30 * * * *` | `sdg-autopr.sh` | Creates one PR per due slot. Claude Code plans, codes, tests, branches, commits, pushes, and opens the PR with labels `status/awaiting-ai-review` and `quality/low`. The script then checks the result and posts the notification. | Claude Code, `claude-opus-5-5`, under `headroom wrap` | Deterministic daily plan (3 to 10 PRs), 40-minute cooldown, catch-up window closes at 22:30, backlog gate (more than 30 open `auto-pr/*` PRs pauses creation), circuit breaker (3 consecutive failed cycles stops creation for the day), 60 turns, 30-minute timeout, run lock and repo lock, attribution audit after the cycle | Review channel |
 | `5,35 * * * *` | `sdg-conflict-patrol.sh` | Phases 0 to 3. Phase 0 labels conflicting PRs. Phase 1 resolves them. Phase 2 sends resolved PRs back for review. Phase 3, the label reconciler, gives every open `auto-pr/*` PR without a `status/*` label one back (`status/fix-round` if a findings file exists, otherwise `status/awaiting-ai-review`) and posts an alert for a `status/fix-round` PR without a findings file. | `git merge` when the merge is clean. Otherwise Claude Code, `claude-opus-5-5`, under `headroom wrap`. | 2 attempts per PR per day, `UNKNOWN` mergeability deferred to the next tick, repo lock, orchestrator verification, 40 turns, 25-minute timeout | Review channel |
 | `10,40 * * * *` | `sdg-fixround.sh` | Takes at most one `status/fix-round` PR per tick. Claude Code addresses every finding in `findings-<pr>.json` in a dedicated worktree, one commit per finding, and does not push. The script verifies the result, runs `npm test` itself, pushes only if the tests pass, then changes the label to `status/awaiting-ai-review` and clears the review ledger. Findings whose reviewed head SHA no longer matches the PR head are stale: the PR is re-queued for review without an engine run. | Claude Code, `claude-opus-5-5`, called directly (no `headroom wrap`). `git push` is disallowed for the engine. | 4 engine runs per day (counted at dispatch), 2 attempts per PR per day, 1 engine run per tick, repo lock, `UNKNOWN` mergeability deferred, `CONFLICTING` PRs left to conflict repair, PRs also carrying another in-flight `status/*` label skipped, 40 turns, 25-minute timeout, 10-minute orchestrator test run, kill switch | Review channel |
-| `20,50 * * * *` | `sdg-autoreview.sh` | Phase 0 (push detection) re-queues `status/ai-reviewed` PRs whose head moved since their review. Then reviews each PR labeled `status/awaiting-ai-review` on an `auto-pr/*` branch, posts one scorecard comment, and applies the score gate: 8 or more goes to `status/ai-reviewed`; below 8 goes to `status/fix-round` with the findings saved; below 8 at round 10 goes to `status/ai-reviewed` with a "human review required" comment. A PR over the size cap of its quality tier is not reviewed: it gets a hand-off comment and `status/ai-reviewed` as the owner's cue. | Routed by quality tier, then size: `quality/high` gets `openai/gpt-6.1-sol#xhigh` (OpenCode); `quality/mid` gets `openai/gpt-6.1-sol` whatever the size; otherwise `claude-haiku-5-5` (`claude -p`) for 400 lines or fewer and `openai/gpt-6.1-sol` above. | One review per code state (the ledger records the reviewed head SHA), 10 reviews per day, 2 per tick, tier line cap (800 default, 1,600 mid, 4,000 high), tier input cap (60,000, 100,000, 200,000 characters), per-PR lifetime round budget, kill switch, run lock | Review channel |
+| `20,50 * * * *` | `sdg-autoreview.sh` | Phase 0 (push detection) re-queues `status/ai-reviewed` PRs whose head moved since their review. Then reviews each PR labeled `status/awaiting-ai-review` on an `auto-pr/*` branch, posts one scorecard comment, and applies the score gate: 8 or more goes to `status/ai-reviewed`; below 8 goes to `status/fix-round` with the findings saved; below 8 at round 10 goes to `status/ai-reviewed` with a "human review required" comment. A PR over the size cap of its quality tier is not reviewed: it gets a hand-off comment and `status/ai-reviewed` as the owner's cue. An unusable engine output is retried on later ticks; after 3 failures the PR is handed to the owner the same way. | Routed by quality tier, then size: `quality/high` gets `openai/gpt-6.1-sol#xhigh` (OpenCode); `quality/mid` gets `openai/gpt-6.1-sol` whatever the size; otherwise `claude-haiku-5-5` (`claude -p`) for 400 lines or fewer and `openai/gpt-6.1-sol` above. | One review per code state (the ledger records the reviewed head SHA), 20 reviews per day (`SDG_REVIEW_MAX_DAY`), 2 per tick, tier line cap (800 default, 1,600 mid, 4,000 high), tier input cap (60,000, 100,000, 200,000 characters), per-PR lifetime round budget, kill switch, run lock | Review channel |
 | `25,55 * * * *` | `claude-watchdog.sh` | Repairs the toolchain: the node symlink, the `claude` CLI (reinstall, plus an update check at most every 20 hours), `headroom` with its proxy extras and launcher, and the `opencode` symlink. | None. Uses no tokens. | Silent when healthy | Owner's direct messages |
 
 The jobs are staggered so that they rarely overlap. The watchdog runs five
@@ -147,8 +147,10 @@ round number of a review is the count of earlier scored reviews plus one.
 | Cap | Score below 8 at round 10 or later | `status/ai-reviewed` | A second comment: "score-gate cap reached ... human review required" |
 
 An engine output without a parsable findings list is a failed review, not a
-pass. It takes the manual-review path (section 3). An earlier version scored
-such output as "approve, 10/10".
+pass. It is retried on later ticks, and after 3 failures the PR is handed to
+the owner with a "human review required" comment (section 3, failed
+reviews). An earlier version scored such output as "approve, 10/10"; a later
+one parked it in manual review with no further alert.
 
 The round budget is a per-PR lifetime budget. Automation never resets
 `rounds-<pr>`: not on a fix-round push (the fix rounds are the loop being
@@ -197,7 +199,7 @@ The routing follows from where open-ended reasoning is needed:
   4 characters per token, 60,000 characters of diff plus a 3,000-character
   description is roughly 16,000 input tokens, or about $0.03. A typical
   output is a JSON findings list of a few thousand tokens, or a few cents.
-  Ten such reviews a day come to well under $1. Higher tiers cost more: a
+  A full budget of 20 such reviews a day comes to roughly $1. Higher tiers cost more: a
   `quality/high` review can send 200,000 characters (about 50,000 input
   tokens, about $0.10) and, at `#xhigh` effort, spends more output tokens on
   reasoning. This is an estimate, not a
@@ -206,7 +208,7 @@ The routing follows from where open-ended reasoning is needed:
   caps the engine's output tokens. A hard daily bound would require counting
   attempts rather than successes against the budget, and capping output
   tokens or spend on the metered engine. The score gate does not raise this
-  estimate: fix-round re-reviews draw on the same 10-per-day budget.
+  estimate: fix-round re-reviews draw on the same 20-per-day budget.
 - **Fixing is unbounded again.** Addressing a finding means reading code
   beyond the diff, editing, and getting the tests to pass, so fix rounds use
   the implementation model with repository access, not the review models.
@@ -280,7 +282,8 @@ Worktree isolation:
 | `daydone-<date>` | The daily summary has been posted for this date. |
 | `fail_streak`, `fail_day`, `circuit-<date>` | Circuit breaker state. |
 | `claude-<date>-<idx>.txt`, `fixconf-<pr>-<ts>.txt` | Engine transcripts for each cycle. Deleted after 14 days. |
-| `autoreview/done-<pr>` | Review ledger: `<date> <verdict> <score> <head SHA>`. One review per code state: the reviewer skips the PR while the recorded SHA equals the PR head, and push detection re-queues it when they differ. Two-word verdicts are stored hyphenated (`request-changes`). Entries without a SHA (`<date> failed`, `<date> skipped-size` after an oversize hand-off, and legacy three-field entries) mean "manual from here": they are never re-queued by push detection. A legacy entry is upgraded on the PR's next review. |
+| `autoreview/done-<pr>` | Review ledger: `<date> <verdict> <score> <head SHA>`. One review per code state: the reviewer skips the PR while the recorded SHA equals the PR head, and push detection re-queues it when they differ. Two-word verdicts are stored hyphenated (`request-changes`). Entries without a SHA (`<date> failed-final` after a failure hand-off, `<date> skipped-size` after an oversize hand-off, `<date> failed` written by earlier versions, and legacy three-field entries) mean "manual from here": the cron reviewer skips the PR and push detection never re-queues it. A legacy entry is upgraded on the PR's next review. A failed attempt below the retry limit deletes the entry instead, so the PR is retried. |
+| `autoreview/failcount-<pr>` | Consecutive failed reviews of the PR (no parsable findings list). Incremented on each failure, deleted on a successful review and on the hand-off at the third failure. |
 | `autoreview/rounds-<pr>` | One score per line, one line per scored review. The per-PR lifetime round budget. Never deleted by automation. |
 | `autoreview/findings-<pr>.json` | Findings, score, summary, round, threshold, and reviewed head SHA of the last below-gate review. Written on a fix outcome, deleted on a pass or cap. Read by the fix-round job. |
 | `autoreview/count-<date>` | Number of successful reviews that day. |
@@ -297,8 +300,9 @@ Hermes delivers whatever a `no_agent` script prints to standard output, and
 delivers nothing when the output is empty. The pipeline builds on that:
 
 - **One message per unit of work.** Units of work are: a PR created, a PR
-  reviewed (including its score-gate outcome), a PR handed to the owner
-  for being over its size cap, a PR re-queued by push detection, a fix
+  reviewed (including its score-gate outcome), a failed review attempt, a
+  PR handed to the owner for being over its size cap or after 3 failed
+  reviews, a PR re-queued by push detection, a fix
   round pushed or failed, a conflict-label transition, a label repaired by
   the reconciler, a failed cycle, a toolchain repair, and the daily
   summary. One exception: the reconciler's alert for a `status/fix-round`
@@ -332,8 +336,8 @@ be merged.
 
 | State (label) | Set by | Entry condition | Exit transitions | Guards |
 |---|---|---|---|---|
-| `status/awaiting-ai-review` | Creation, fix rounds, push detection, conflict repair Phase 2, the reconciler (patrol Phase 3) | Creation opens the PR with this label. A fix round re-queues the PR after a verified push, or when its findings are stale. Push detection re-queues a reviewed PR whose head moved. Phase 2 re-queues a PR after a conflict repair. Every re-queue clears the review ledger `done-<pr>`. The reconciler gives this label to an `auto-pr/*` PR that has lost every `status/*` label and has no findings file; it does not touch the ledger. | The cron review posts a scorecard and applies the score gate (section 2): pass goes to `status/ai-reviewed`, fix goes to `status/fix-round`, cap goes to `status/ai-reviewed` with a "human review required" comment. A diff over the line cap of its quality tier is handed to the owner: a comment, `status/ai-reviewed`, and a `skipped-size` ledger entry without a SHA. An engine output without a parsable findings list (`failed`) leaves the label in place with a ledger entry and no SHA: manual review. If the ledger already records the current head SHA (a tick died after writing it), the label transition is re-applied from the ledger and the PR is not reviewed again. Phase 0 of conflict repair adds `status/conflict`. | Ledger `done-<pr>`, 10 per day, 2 per tick, tier line cap and input cap, kill switch. Only `auto-pr/*` head branches are picked up. The reviewer does not exclude PRs that also carry `status/conflict`. |
-| `status/ai-reviewed` | Review | The review posted its scorecard, and the score passed the gate or the round budget was exhausted. Or the diff was over its tier's size cap and the PR was handed to the owner without a scorecard. | Human merges, which ends the lifecycle. Push detection (review Phase 0) sees a head SHA different from the one in the ledger and moves the PR to `status/awaiting-ai-review`, clearing the ledger. Phase 0 of conflict repair sees `CONFLICTING` and adds `status/conflict`. | Human merge gate. No automated exit to merged. Push detection skips PRs that also carry `status/fix-round`, `status/conflict`, `status/conflict-resolved`, or `status/awaiting-ai-review`, and PRs whose ledger entry has no SHA, which includes every handed-off PR. |
+| `status/awaiting-ai-review` | Creation, fix rounds, push detection, conflict repair Phase 2, the reconciler (patrol Phase 3) | Creation opens the PR with this label. A fix round re-queues the PR after a verified push, or when its findings are stale. Push detection re-queues a reviewed PR whose head moved. Phase 2 re-queues a PR after a conflict repair. Every re-queue clears the review ledger `done-<pr>`. The reconciler gives this label to an `auto-pr/*` PR that has lost every `status/*` label and has no findings file; it does not touch the ledger. | The cron review posts a scorecard and applies the score gate (section 2): pass goes to `status/ai-reviewed`, fix goes to `status/fix-round`, cap goes to `status/ai-reviewed` with a "human review required" comment. A diff over the line cap of its quality tier is handed to the owner: a comment, `status/ai-reviewed`, and a `skipped-size` ledger entry without a SHA. An engine output without a parsable findings list is a failed review: the first and second failures leave the label in place, increment `failcount-<pr>`, and delete the ledger entry so the next tick retries; the third hands the PR to the owner (a "human review required" comment, `status/ai-reviewed`, and a `failed-final` ledger entry without a SHA). If the ledger already records the current head SHA (a tick died after writing it), the label transition is re-applied from the ledger and the PR is not reviewed again. Phase 0 of conflict repair adds `status/conflict`. | Ledger `done-<pr>`, 20 per day, 2 per tick, tier line cap and input cap, 3 failed attempts per PR, kill switch. Only `auto-pr/*` head branches are picked up. The reviewer skips PRs that also carry `status/conflict`, `status/conflict-resolved`, or `status/fix-round`. |
+| `status/ai-reviewed` | Review | The review posted its scorecard, and the score passed the gate or the round budget was exhausted. Or the PR was handed to the owner without a scorecard: its diff was over its tier's size cap, or its review failed 3 times. | Human merges, which ends the lifecycle. Push detection (review Phase 0) sees a head SHA different from the one in the ledger and moves the PR to `status/awaiting-ai-review`, clearing the ledger. Phase 0 of conflict repair sees `CONFLICTING` and adds `status/conflict`. | Human merge gate. No automated exit to merged. Push detection skips PRs that also carry `status/fix-round`, `status/conflict`, `status/conflict-resolved`, or `status/awaiting-ai-review`, and PRs whose ledger entry has no SHA, which includes every handed-off PR. |
 | `status/fix-round` | Review (score gate, fix outcome), the reconciler (restore) | The review scored the PR below 8 at a round below 10 and saved the findings to `findings-<pr>.json`. The reconciler restores the label on an `auto-pr/*` PR that lost every `status/*` label while its findings file still exists. | The fix-round job addresses the findings, passes verification, pushes, and moves the PR to `status/awaiting-ai-review`, clearing the ledger. If the findings were recorded for a head SHA that is no longer the PR head, the job re-queues the PR the same way without an engine run. When verification fails, the label stays and the job retries on a later tick. Phase 0 of conflict repair adds `status/conflict`. | 4 engine runs per day, 2 attempts per PR per day, 1 per tick, repo lock, kill switch. Skips PRs that also carry `status/conflict`, `status/conflict-resolved`, or `status/awaiting-ai-review`, PRs whose mergeability is `UNKNOWN` or `CONFLICTING`, and PRs with no findings file. Verification before the push: branch and history intact, no merge or rebase in progress, clean tree, no conflict markers, no attribution in any new commit, the orchestrator's own `npm test` passes, and the PR is still open and still labeled `status/fix-round`. |
 | `status/conflict` | Conflict repair | Phase 0: the PR is open, assigned to the owner, `mergeable` is `CONFLICTING`, and it has neither `status/conflict` nor `status/conflict-resolved`. Phase 0 adds the label without removing the PR's other lifecycle label. | Becomes `status/conflict-resolved` once a repair passes verification, or once the PR is found to be no longer `CONFLICTING`. Stays when verification fails, until the next tick. Stays when the attempt cap is reached, until the next day or a human acts. | 2 attempts per PR per day (clean merges count as attempts), `UNKNOWN` deferred, repo lock, verification: push landed, no attribution in the last commit, no conflict markers, GitHub reports neither `CONFLICTING` nor `UNKNOWN`. |
 | `status/conflict-resolved` | Conflict repair | Phase 1 succeeded: the branch was merged with its base and passed the mechanical checks listed above, or the PR stopped conflicting on its own. The label does not mean the tests passed. | Phase 2 replaces it with `status/awaiting-ai-review` and deletes `autoreview/done-<pr>`, so the merged result gets reviewed again. Phase 2 does not remove a lifecycle label left over from before the conflict; the next review transition does. | Phase 0 skips PRs with this label, so they cannot be relabeled in a loop. The round budget is not reset. |
@@ -354,9 +358,9 @@ Conflict repair is the exception: Phase 0 adds `status/conflict` next to the
 existing lifecycle label, and Phase 2 adds `status/awaiting-ai-review`
 without removing it. A PR can therefore carry two `status/*` labels during
 and just after a conflict repair, for example `status/ai-reviewed` and
-`status/conflict`. Because the reviewer does not exclude PRs that carry
-`status/conflict`, a review can also leave `status/conflict` next to
-`status/ai-reviewed` or `status/fix-round`. Read the current state with this precedence, which matches
+`status/conflict`. The reviewer skips PRs that carry `status/conflict`,
+`status/conflict-resolved`, or `status/fix-round`, so it never reviews a PR
+mid conflict repair. Read the current state with this precedence, which matches
 the exclusion filters the jobs apply:
 
 ```
@@ -384,16 +388,24 @@ re-queue the PR after later pushes; the owner reviews it by hand. If the
 PR later conflicts, conflict repair Phase 2 deletes the entry and the
 reviewer hands it off again, unless the merged diff now fits the cap.
 
-**Manual review.** When no engine, fallback included, returns a parsable
-findings list, the cron reviewer writes `<date> failed` to the ledger,
-without a SHA, posts one "auto-review failed ... review manually" line to
-the channel, and leaves the label at `status/awaiting-ai-review`. There is
-no relabel and no scorecard. The owner reviews the PR by hand and merges
-it, or not, without changing the label. The ledger entry blocks only the
-cron reviewer and push detection from picking the PR up again. Nothing
-else reads it: conflict repair, merging, and manual sessions ignore it. If
-the PR later conflicts, conflict repair Phase 2 deletes the entry as usual,
-and the cron reviewer tries again on the merged result.
+**Failed reviews.** When no engine, fallback included, returns a parsable
+findings list, the review has failed. The cron reviewer increments
+`failcount-<pr>`, deletes `done-<pr>`, posts one "auto-review failed ...
+attempt N/3 — retrying next tick" line to the channel, and leaves the label
+at `status/awaiting-ai-review`, so a later tick tries again. A failed
+attempt writes no scorecard, consumes no round, and is not counted against
+the daily or per-tick review budget. At the third failure the PR is handed
+to the owner: a PR comment ("Automated review failed 3 times ... human
+review required"), the label moves to `status/ai-reviewed` as for a pass,
+`<date> failed-final` is written to the ledger without a SHA, the counter
+is deleted, and one "handed to human" line goes to the channel. A
+successful review deletes the counter. As after an oversize hand-off, push
+detection does not re-queue the PR after later pushes, and if the PR later
+conflicts, conflict repair Phase 2 deletes the entry and the cron reviewer
+tries again on the merged result. An earlier version wrote `<date> failed`
+after the first failure and left the label at `status/awaiting-ai-review`,
+where the PR looked queued while the reviewer skipped it forever, with a
+single channel line as the only signal.
 
 **Further changes on a reviewed PR.** When the owner wants more changes on a
 `status/ai-reviewed` PR, the owner or a manually started session pushes
@@ -426,7 +438,6 @@ stateDiagram-v2
     state "status/fix-round" as fixround
     state "status/conflict" as conflict
     state "status/conflict-resolved" as resolved
-    state "Manual review - label unchanged, ledger without SHA" as manual
     state "No status label - manual edit or lost label" as unlabeled
     state "Merged" as merged
     state gate <<choice>>
@@ -437,8 +448,8 @@ stateDiagram-v2
     gate --> fixround : fix - score below 8, round below 10, findings saved
     gate --> reviewed : cap - score below 8 at round 10 or later, human review required
     awaiting --> reviewed : over tier size cap - hand-off comment, no scorecard, ledger skipped-size
-    awaiting --> manual : no parsable findings list, fallback included
-    manual --> merged : human owner reviews by hand and merges, label unchanged
+    awaiting --> awaiting : no parsable findings list, fallback included - retry next tick, attempts 1 and 2
+    awaiting --> reviewed : review failed 3 times - hand-off comment, no scorecard, ledger failed-final
     unlabeled --> awaiting : phase 3 reconciler - no findings file, re-enters pipeline
     unlabeled --> fixround : phase 3 reconciler - findings file exists, label restored
     fixround --> awaiting : fix-round job pushes verified fixes, ledger cleared
@@ -486,14 +497,16 @@ flowchart TD
     R2 -->|quality/mid, any size| R4["GPT Sol via OpenCode, diff only"]
     R2 -->|default, at most 400 lines| R3["Haiku via claude -p, diff only"]
     R2 -->|default, over 400 lines| R4
-    R5["Manual review: label stays status/awaiting-ai-review, ledger entry without SHA"]
+    R5["Failed review: failcount-pr incremented, ledger cleared, label stays status/awaiting-ai-review"]
     R3 --> R6["Keep findings in changed files, score them, post one scorecard"]
     R4 --> R6
     R7 --> R6
     R3 -->|no parsable findings list, fallback included| R5
     R4 -->|no parsable findings list, fallback included| R5
     R7 -->|no parsable findings list, fallback included| R5
-    R5 -->|human owner reviews by hand and merges at any time| M
+    R5 -->|attempt 1 or 2, retry next tick| F
+    R5 -->|third failure| RF["Failure hand-off: comment, no scorecard, ledger failed-final without SHA"]
+    RF --> G
     R6 --> GT{"Score gate"}
     GT -->|score 8 or more| G["status/ai-reviewed"]
     GT -->|below 8 at round 10 or later| GC["Cap comment: human review required"]
@@ -556,8 +569,8 @@ a way to be stopped.
 | Input cap | Review | Diff truncated to 60,000 characters (100,000 for `quality/mid`, 200,000 for `quality/high`). Null bytes stripped. | Bounds the input of a single review. The tier buys a larger bound. |
 | Line cap | Review | Diffs over 800 lines (1,600 for `quality/mid`, 4,000 for `quality/high`) are not reviewed: hand-off comment, `status/ai-reviewed`. | The most expensive reviews go to the human, with an explicit cue. |
 | Model routing | Review | By tier first: `quality/high` Sol at `#xhigh`, `quality/mid` standard Sol. Default tier: Haiku (subscription) for 400 lines or fewer, standard Sol (metered) above. Never a speed tier. | Default-tier reviews mostly have no per-token cost. Higher tiers pay for strength by explicit choice. |
-| One review per code state | Review | `done-<pr>` records the reviewed head SHA. It is written after a review, an oversize hand-off, or an engine failure. It is cleared by a fix-round push, a stale-findings re-queue, push detection, or a conflict repair. | The cron reviewer reviews each code state of a PR once, not once per tick. A size skip or engine failure writes no SHA, so that PR is never re-reviewed automatically until a conflict repair clears the entry. |
-| Daily and tick budgets | Review | 10 successful reviews per day, 2 per tick. | Limits successful reviews per day and per tick. Failed attempts are not counted (see known gaps). Fix-round re-reviews draw on the same budget. |
+| One review per code state | Review | `done-<pr>` records the reviewed head SHA. It is written after a review, an oversize hand-off, or a failure hand-off (the third failed review). It is cleared by a fix-round push, a stale-findings re-queue, push detection, or a conflict repair. | The cron reviewer reviews each code state of a PR once, not once per tick. A size skip or failure hand-off writes no SHA, so that PR is never re-reviewed automatically until a conflict repair clears the entry. A failed attempt below the limit clears the entry, so the next tick retries. |
+| Daily and tick budgets | Review | 20 successful reviews per day (`SDG_REVIEW_MAX_DAY`), 2 per tick. | Limits successful reviews per day and per tick. Failed attempts are not counted (see known gaps). Fix-round re-reviews draw on the same budget. |
 | Per-PR lifetime round budget | Review, fix rounds | Every scored review appends to `rounds-<pr>`. Below the gate at round 10 or later, the PR goes to the human instead of another fix round. Automation never resets the file. | At most 9 review-triggered fix rounds per PR, ever. Fix-run attempts that fail verification consume no round: they are bounded per day (2 per PR), not per lifetime; see known gaps. |
 | Kill switch | Review | `touch $H/.autopr-sdg/review-off` disables review. `rm` re-enables it. | Immediate stop without editing cron. |
 | Fix-round budgets | Fix rounds | 4 engine runs per day, counted at dispatch so failed runs count. 2 attempts per PR per day. 1 engine run per tick. | At most 4 Opus fix runs a day, and a single PR cannot take more than 2 of them. |
@@ -575,10 +588,11 @@ a way to be stopped.
 
 Known gaps:
 
-- The daily and per-tick review counters count only successful reviews. An
-  engine failure is recorded in the ledger, so it never repeats, but one tick
-  can attempt more than two PRs if earlier attempts in that tick failed, and
-  a failed metered attempt is billed without consuming the budget.
+- The daily and per-tick review counters count only successful reviews. A
+  failing PR is retried at most 3 times before the hand-off, but one tick
+  can attempt more than two PRs if earlier attempts in that tick failed,
+  and each failed metered attempt is billed without consuming the budget:
+  up to 3 billed attempts (plus fallbacks) per failing PR.
 - The metered review engine has no output-token or spend cap. Review cost
   estimates (section 2) are illustrative, not bounds.
 - Creation and conflict repair have no marker-file kill switch. They are
@@ -589,7 +603,7 @@ Known gaps:
   message, so the loop is visible but not self-terminating.
 - The score gate adds review spend: a PR that enters the fix loop gets one
   extra review per fix round. With at most 4 fix rounds a day, that is at
-  most 4 extra reviews a day, inside the existing 10-review budget. Fix-round
+  most 4 extra reviews a day, inside the existing 20-review budget. Fix-round
   re-reviews can therefore crowd out first reviews of new PRs on a busy day.
 - Tier routing is a price lever anyone with label access can pull: putting
   `quality/high` on a PR sends its review to Sol at `#xhigh` with a
@@ -766,7 +780,7 @@ invariants in section 6.
 | Backlog gate and breaker | 30 open PRs, 3 failures | `SDG_AUTOPR_MAX_OPEN`, `SDG_AUTOPR_MAX_FAILS` |
 | Implementation model | `claude-opus-5-5` | `SDG_AUTOPR_MODEL`. The conflict-repair and fix-round models are literals. |
 | Review engines and models | `quality/high`: Sol `#xhigh`, Opus fallback. `quality/mid`: Sol. Default: Haiku up to 400 lines, Sol above. | `SDG_REVIEW_ENGINE`, `SDG_REVIEW_MODEL` (override the tier routing for every PR). The tier models and the 400-line threshold are literals. |
-| Review budgets | 10 per day, 2 per tick. Line caps 800 / 1,600 / 4,000 and character caps 60,000 / 100,000 / 200,000 (default / mid / high). | `SDG_REVIEW_MAX_DAY`, `SDG_REVIEW_MAX_LINES`, `SDG_REVIEW_MAX_LINES_MID`, `SDG_REVIEW_MAX_LINES_HIGH`. Tick and character caps are literals. |
+| Review budgets | 20 per day, 2 per tick. Line caps 800 / 1,600 / 4,000 and character caps 60,000 / 100,000 / 200,000 (default / mid / high). | `SDG_REVIEW_MAX_DAY`, `SDG_REVIEW_MAX_LINES`, `SDG_REVIEW_MAX_LINES_MID`, `SDG_REVIEW_MAX_LINES_HIGH`. Tick and character caps are literals. |
 | Score gate and round budget | Pass at 8, cap at round 10 | `SDG_REVIEW_PASS_SCORE`, `SDG_REVIEW_MAX_ROUNDS` |
 | Fix-round budgets | 4 per day, 2 per PR per day, 1 per tick | `SDG_FIXROUND_MAX_DAY`. The per-PR and per-tick caps are literals. |
 | Kill switches | `review-off`, `fixround-off` in the state root | Literal paths in `sdg-autoreview.sh` and `sdg-fixround.sh` |
@@ -912,7 +926,7 @@ Current implementation of this law:
 
 Where the law is not met yet, honestly:
 
-- A PR handed off for size, or whose review failed, has a ledger entry
+- A PR handed off for size, or after 3 failed reviews, has a ledger entry
   without a SHA. Pushes to it are not re-queued, and after the one
   announcement nothing further is said.
 - A transition that GitHub keeps deferring (5.8) is visible only in the
@@ -920,6 +934,9 @@ Where the law is not met yet, honestly:
 - Stacked `status/*` labels from conflict repair converge only at the next
   review transition, and the reconciler does not resolve contradictory
   labels, only missing ones.
+- `status/fix-round` next to `status/awaiting-ai-review` (left by Phase 2
+  on a PR that conflicted mid fix loop) is skipped by both the fix-round
+  job and the reviewer, so it neither converges nor announces itself.
 
 A new automated path is not finished until its human-error states are
 listed and each one either converges or announces.
