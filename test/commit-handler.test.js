@@ -253,6 +253,20 @@ test('processRepositories rotates repos across runs with round-robin in commit m
   assert.deepEqual(calls, ['rr-sel-a', 'rr-sel-b', 'rr-sel-c']);
 });
 
+test('round-robin in commit mode moves to the next repo when the previous one met its target', async () => {
+  const { handler, calls } = stubbedHandler();
+  // a has a daily target of 1, so after its commit it is no longer a candidate
+  const repos = selectionRepos.map(r => ({ ...r, repo: `rr-met-${r.repo}`, dailyTarget: { min: r.repo === 'sel-a' ? 1 : 5, max: r.repo === 'sel-a' ? 1 : 5 } }));
+  const config = { repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+  state.setRoundRobinIndex(0);
+
+  await handler.processRepositories(repos, {}, false, config);
+  await handler.processRepositories(repos, {}, false, config);
+  await handler.processRepositories(repos, {}, false, config);
+
+  assert.deepEqual(calls, ['rr-met-sel-a', 'rr-met-sel-b', 'rr-met-sel-c']);
+});
+
 test('a commit-mode dry run does not advance the round-robin rotation', async () => {
   const { handler, calls } = stubbedHandler();
   const repos = selectionRepos.map(r => ({ ...r, repo: `rr-dry-${r.repo}`, dailyTarget: { min: 5, max: 5 } }));

@@ -224,7 +224,7 @@ repositorySelection:
   maxPerExecution: 1  # Process one repo at a time
 ```
 
-The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories. A dry run (`general.dryRun` or `--dry-run`) shows which repositories would be picked but leaves the stored position alone, so the next real run picks the same ones.
+The rotation position is stored in the state file (`data/state.json`, key `roundRobin.index`), so each run continues where the previous one stopped. The position counts through all enabled repositories in configured order, so a repository that is passed over this run (its target is already met, or it is waiting for its interval) does not shift the rotation: the next run still starts with the repository after the last one picked. A repository is selected at most once per run, even when `maxPerExecution` exceeds the number of enabled repositories. A dry run (`general.dryRun` or `--dry-run`) shows which repositories would be picked but leaves the stored position alone, so the next real run picks the same ones.
 
 ## Configuration Examples
 

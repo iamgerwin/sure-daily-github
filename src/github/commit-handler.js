@@ -141,7 +141,7 @@ class CommitHandler {
       }
     }
 
-    const selected = randomizer.selectRepositories(ready, config?.repositorySelection, state, { dryRun });
+    const selected = randomizer.selectRepositories(ready, config?.repositorySelection, state, { dryRun, rotation: enabled });
     for (const repo of ready) {
       if (!selected.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });

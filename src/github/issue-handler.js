@@ -210,7 +210,7 @@ class IssueHandler {
       }
     }
 
-    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun });
+    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun, rotation: repositories });
     for (const repo of ready) {
       if (!selectedRepos.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });

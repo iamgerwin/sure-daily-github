@@ -492,6 +492,27 @@ test('round-robin rotates through repositories across runs', async () => {
   assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c', 'a']);
 });
 
+test('round-robin does not skip the next repository when the previous one reached its target', async () => {
+  const { handler, created } = createHandler();
+  const cursor = { index: 0 };
+  handler.cursorStore = {
+    getRoundRobinIndex: () => cursor.index,
+    setRoundRobinIndex: (index) => { cursor.index = index; }
+  };
+  const repos = [
+    repo({ repo: 'a', dailyTarget: { min: 1, max: 1 } }),
+    repo({ repo: 'b' }),
+    repo({ repo: 'c' })
+  ];
+  const cfg = { ...config, repositorySelection: { strategy: 'round-robin', maxPerExecution: 1 } };
+
+  for (let i = 0; i < 3; i++) {
+    await handler.processRepositories(repos, {}, false, cfg);
+  }
+
+  assert.deepEqual(created.map(c => c.repo), ['a', 'b', 'c']);
+});
+
 test('a dry run does not advance the round-robin rotation', async () => {
   const { handler, created } = createHandler();
   const cursor = { index: 1 };
