@@ -135,7 +135,7 @@ randomization:
 ```
 
 - `title` and `body` are optional strings. Without a list (or for a missing field), the issue is titled `Automated Issue - <date> <time>` and gets a short default body naming the repository.
-- `labels` are added to the issue together with the repository's `labels` (default `["automated"]`).
+- `labels` are added to the issue together with the repository's `labels` (default `["automated"]`). A label listed in both is sent once (names compare case-insensitively, as on GitHub; the first spelling wins).
 - `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` feed the `${randomBug…}` style placeholders below. A missing or empty list falls back to `General bug`, `General feature`, `General documentation` and `General performance`.
 
 Placeholders filled in `title` and `body`:

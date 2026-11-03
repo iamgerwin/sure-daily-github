@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
+import AdvancedIssueHandler, { uniqueLabels } from '../src/github/advanced-issue-handler.js';
 import { describeFailures } from '../src/core/executor.js';
 import loader, { DEFAULT_CONTENT_TEMPLATE } from '../src/config/loader.js';
 
@@ -788,4 +788,24 @@ test('daily reset does not depend on re-parsing toLocaleString output', (t) => {
 test('an unparseable lastDailyReset triggers a reset instead of throwing', () => {
   const { handler } = createHandler();
   assert.equal(handler.shouldResetDaily({ lastDailyReset: 'not a date' }, 'UTC'), true);
+});
+
+test('uniqueLabels drops repeated labels case-insensitively and keeps the first spelling', () => {
+  assert.deepEqual(uniqueLabels(['Bug', 'automated', 'bug', 'automated', 'docs']), ['Bug', 'automated', 'docs']);
+  assert.deepEqual(uniqueLabels([]), []);
+});
+
+test('a template label that repeats a repository label is sent once', async () => {
+  const { handler, created } = createHandler();
+  const cfg = {
+    ...config,
+    contentTemplates: [{ title: 'T', body: 'B', labels: ['Automated', 'bug'] }]
+  };
+
+  const preview = handler.generateIssueContent(repo({ labels: ['automated', 'main'] }), cfg);
+  assert.deepEqual(preview.labels, ['Automated', 'bug', 'main']);
+
+  await handler.processRepositories([repo({ labels: ['automated', 'BUG'] })], null, false, cfg);
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].labels, ['Automated', 'bug']);
 });
