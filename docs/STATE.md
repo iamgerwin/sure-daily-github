@@ -55,7 +55,7 @@ The advanced issue handler keeps its own file, `data/issue-state.json`; set `SDG
 export SDG_ISSUE_STATE_FILE=/var/lib/sure-daily-github/issue-state.json
 ```
 
-The other commands' state files have their own overrides, documented with each command: `SDG_BABYSITTER_STATE_FILE` ([BABYSIT.md](BABYSIT.md)), `SDG_CONFLICT_FIXER_STATE_FILE` ([CONFLICT_FIXER.md](CONFLICT_FIXER.md)), and `SDG_PR_MAINT_STATE_FILE`, `SDG_PR_MAINT_LOCK_FILE` and `SDG_PR_MAINT_DECISIONS_FILE` ([PR_MAINTENANCE.md](PR_MAINTENANCE.md)).
+The other commands' state files have their own overrides, documented with each command: `SDG_BABYSITTER_STATE_FILE` ([BABYSIT.md](BABYSIT.md)), `SDG_CONFLICT_FIXER_STATE_FILE` ([CONFLICT_FIXER.md](CONFLICT_FIXER.md)), and `SDG_PR_MAINT_STATE_FILE`, `SDG_PR_MAINT_LOCK_FILE` and `SDG_PR_MAINT_DECISIONS_FILE` ([PR_MAINTENANCE.md](PR_MAINTENANCE.md)). The scheduler's heartbeat, `data/scheduler-heartbeat.json`, moves with `SDG_HEARTBEAT_FILE` ([SCHEDULER_SETUP.md](SCHEDULER_SETUP.md#hung-scheduler-detection)).
 
 ## Concurrent Runs
 

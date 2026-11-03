@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import executor from './executor.js';
 import babysitter from './babysitter.js';
+import { writeHeartbeat, maxExecutionMs } from '../utils/heartbeat.js';
 
 const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 
@@ -17,11 +18,20 @@ class Scheduler {
   // still in flight so concurrent runs cannot race on the state files
   async runScheduledTask(config) {
     if (this.executing) {
-      logger.warn('Previous execution still in progress, skipping this run', {
-        startedAt: new Date(this.executionStartedAt).toISOString()
-      });
+      const startedAt = new Date(this.executionStartedAt).toISOString();
+      const limitMs = maxExecutionMs();
+      if (limitMs > 0 && Date.now() - this.executionStartedAt > limitMs) {
+        // A hung execution: withhold the heartbeat so the health check restarts us
+        logger.error('Previous execution exceeded SDG_MAX_EXECUTION_MINUTES, not refreshing the heartbeat', { startedAt });
+      } else {
+        // A skipped tick still proves the timer fires
+        writeHeartbeat();
+        logger.warn('Previous execution still in progress, skipping this run', { startedAt });
+      }
       return { skipped: true };
     }
+
+    writeHeartbeat();
 
     this.executing = true;
     this.executionStartedAt = Date.now();
@@ -86,6 +96,9 @@ class Scheduler {
     });
 
     this.running = true;
+    // A fresh heartbeat on start, so a health check right after a restart does
+    // not read the hung process's old one and restart again before the first tick
+    writeHeartbeat();
     logger.info('Scheduler started', {
       cron: cronExpression,
       timezone: config.schedule.timezone || config.general.timezone || 'UTC'

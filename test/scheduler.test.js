@@ -5,6 +5,14 @@ import scheduler from '../src/core/scheduler.js';
 import executor from '../src/core/executor.js';
 import babysitter from '../src/core/babysitter.js';
 import { createOctokit } from '../src/github/octokit.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// Ticks write a heartbeat; keep it out of the project's data/ directory
+const heartbeatDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-scheduler-'));
+process.env.SDG_HEARTBEAT_FILE = path.join(heartbeatDir, 'heartbeat.json');
+test.after(() => fs.rmSync(heartbeatDir, { recursive: true, force: true }));
 
 test('runScheduledTask skips a tick while the previous execution is in flight', async () => {
   const original = executor.execute;
