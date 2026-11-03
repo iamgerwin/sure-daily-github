@@ -203,7 +203,7 @@ sure-daily-github fix-conflicts --scan-timeout 300
 | `would-fix` | Same as `fixed`, but a dry run, so nothing was pushed | 0 |
 | `conflicted` | Listed by `--scan-only` | 0 |
 | `needs-manual-review` | Tie, non-text conflict, test hunk that changes existing lines, test-count drop, source hunk under `sourceHunks: escalate`/`claude`, unlocatable hunk, leftover markers, no test command, install or test failure, timeout, or tests that moved `HEAD` or changed tracked files | 0 |
-| `skipped` | Reasons: `disabled-per-repo`, `denylisted`, `not-allowlisted`, `fork pull request`, `already-in-progress`, `already-attempted` | 0 |
+| `skipped` | Reasons: `disabled-per-repo`, `denylisted`, `not-allowlisted`, `fork pull request`, `already-in-progress`, `already-attempted`; with `--pr`, also `not an open pull request` (closed, merged, or never existed) and `not conflicted (<mergeable>)` | 0 |
 | `stale-status` | Merges cleanly locally; GitHub's mergeability was out of date | 0 |
 | `head-moved` | Branch changed after the scan or before the push; nothing was pushed | 0 |
 | `scan-timeout` | Repo not fully listed within the scan budget | 0 |
