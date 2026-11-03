@@ -332,6 +332,13 @@ class AdvancedIssueHandler {
       }
     }
 
+    // Fail before the first API call, as the simple handlers do: once an issue
+    // exists on GitHub a failed save cannot undo it, and every later run would
+    // reload the old count and create the same issue again
+    if (!dryRun && selected.length > 0) {
+      await this.saveState(state);
+    }
+
     for (const [index, repo] of selected.entries()) {
       const repoState = this.getRepoState(state, repo);
       let issueCreated = false;

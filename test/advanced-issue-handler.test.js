@@ -211,13 +211,45 @@ test('an exact-case entry wins over a differently cased one', async () => {
 
 test('aborts the run when state cannot be persisted after creating an issue', async () => {
   const { handler, created } = createHandler();
-  handler.saveState = async () => { throw new Error('disk full'); };
+  // The pre-flight save succeeds; the disk fills up after the first issue
+  const save = handler.saveState.bind(handler);
+  let saves = 0;
+  handler.saveState = async (state) => {
+    if (++saves > 1) throw new Error('disk full');
+    return save(state);
+  };
 
   await assert.rejects(
     handler.processRepositories([repo({ repo: 'one' }), repo({ repo: 'two' })], {}, false, config),
     /disk full/
   );
   assert.equal(created.length, 1);
+});
+
+test('creates no issue when the state file cannot be written', async () => {
+  const { handler, created } = createHandler();
+  // A regular file where the data directory should be: mkdir and write both fail
+  const dataDir = path.dirname(handler.stateFile);
+  fs.writeFileSync(dataDir, '');
+
+  for (let run = 0; run < 2; run++) {
+    await assert.rejects(handler.processRepositories([repo()], {}, false, config));
+  }
+  assert.equal(created.length, 0);
+});
+
+test('does not write state before a dry run or a run with nothing selected', async () => {
+  const { handler, created } = createHandler();
+  let saves = 0;
+  handler.saveState = async () => { saves++; };
+
+  await handler.processRepositories([repo()], {}, true, config);
+  assert.equal(saves, 0);
+
+  await handler.processRepositories([repo({ enabled: false })], {}, false, config);
+  // Only the end-of-run save, no pre-flight save
+  assert.equal(saves, 1);
+  assert.equal(created.length, 0);
 });
 
 test('backs up a corrupt state file instead of silently discarding it', async () => {
