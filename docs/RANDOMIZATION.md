@@ -203,16 +203,22 @@ repositorySelection:
 repositories:
   - owner: "yourusername"
     repo: "high-priority"
-    weight: 50  # 50% chance of selection
+    weight: 50  # 50% chance to be the first pick
 
   - owner: "yourusername"
     repo: "medium-priority"
-    weight: 30  # 30% chance
+    weight: 30  # 30% chance to be the first pick
 
   - owner: "yourusername"
     repo: "low-priority"
-    weight: 20  # 20% chance
+    weight: 20  # 20% chance to be the first pick
 ```
+
+Weights are relative and do not need to add up to 100 (a repository without a `weight` counts as `1`). Each run draws `maxPerExecution` repositories one at a time without replacement: a repository's chance of each draw is its weight divided by the total weight of the repositories not yet drawn. A weight is therefore the chance of being the *first* pick, not the chance of being selected at all. In the example above, two of three repositories run each time, so `high-priority` is selected in about 84% of runs, `medium-priority` in about 68%, and `low-priority` in about 49%.
+
+> Without `maxPerExecution` (or with a value at or above the number of ready repositories), every repository is selected on every run and the weights only decide the processing order.
+
+> `randomizeOrder` only affects the `sequential` strategy. `random` always shuffles, `weighted` orders repositories by its weighted draws, and `round-robin` keeps the rotation order, so setting `randomizeOrder` with those strategies has no effect.
 
 ### Round-Robin
 
@@ -428,7 +434,7 @@ These tests cover:
 1. **Start Conservative**: Begin with smaller ranges and adjust based on results
 2. **Use Dry Run**: Always test new configurations with `--dry-run` first
 3. **Monitor Logs**: Check logs to understand selection patterns
-4. **Balance Weights**: Ensure repository weights add up sensibly
+4. **Balance Weights**: Weights are relative (they need not sum to 100) and only limit how often a repository runs when `maxPerExecution` is set
 5. **Consider Rate Limits**: Factor in GitHub API rate limits when setting high ranges
 6. **Time Variations**: Use time variations to match your actual work patterns
 
@@ -446,8 +452,9 @@ In issue mode with fixed targets (the simple issue handler), when `timeVariation
 
 ### Same Repositories Always Selected
 
-- Verify `randomizeOrder: true` is set
+- With `strategy: "sequential"`, verify `randomizeOrder: true` is set (other strategies ignore it)
 - Check if `strategy: "random"` or `"weighted"` is properly configured
+- Set `maxPerExecution` below the number of enabled repositories; without it, every strategy selects all of them
 - Ensure multiple repositories are `enabled: true`
 
 ### Too Many API Calls
