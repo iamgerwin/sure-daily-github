@@ -19,7 +19,11 @@ export const LABEL_DEFINITIONS = [
 ];
 
 const FAILED_CONCLUSIONS = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
-const PENDING_STATES = new Set(['PENDING', 'EXPECTED']);
+// The conclusions a required status check accepts as passing. STALE (GitHub
+// gave up on a check run) does not pass and needs a re-run, so it is pending,
+// as is any conclusion or state this list does not know: an unknown value must
+// never mark a PR ready or clear needs-human.
+const PASSING_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
 // Paused issues are fetched with every page, but only the first page's are read
 const SNAPSHOT_QUERY = `
@@ -125,12 +129,11 @@ export function rollupState(contexts = []) {
   const states = contexts
     .filter(c => c && c.context !== MERGE_POLICY_CONTEXT)
     .map(c => {
-      if (c.__typename === 'CheckRun') {
-        if (c.status !== 'COMPLETED') return 'PENDING';
-        return FAILED_CONCLUSIONS.has(c.conclusion) ? 'FAILURE' : 'SUCCESS';
-      }
-      if (PENDING_STATES.has(c.state)) return 'PENDING';
-      return FAILED_CONCLUSIONS.has(c.state) ? 'FAILURE' : 'SUCCESS';
+      const outcome = c.__typename === 'CheckRun'
+        ? (c.status === 'COMPLETED' ? c.conclusion : null)
+        : c.state;
+      if (FAILED_CONCLUSIONS.has(outcome)) return 'FAILURE';
+      return PASSING_CONCLUSIONS.has(outcome) ? 'SUCCESS' : 'PENDING';
     });
   if (states.length === 0) return null;
   if (states.includes('FAILURE')) return 'FAILURE';

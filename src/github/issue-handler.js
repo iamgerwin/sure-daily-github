@@ -130,6 +130,9 @@ class IssueHandler {
       const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
       const labels = repoConfig.labels || ['automated'];
 
+      // Fail before the API call: an uncounted issue would be repeated every run
+      state.assertWritable();
+
       // Create issue
       const result = await this.createIssue(owner, repo, title, body, labels);
 
@@ -207,7 +210,7 @@ class IssueHandler {
       }
     }
 
-    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun });
+    const selectedRepos = randomizer.selectRepositories(ready, selectionConfig, state, { dryRun, rotation: repositories });
     for (const repo of ready) {
       if (!selectedRepos.includes(repo)) {
         results.push({ owner: repo.owner, repo: repo.repo, success: true, skipped: true, reason: 'not_selected' });

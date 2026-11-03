@@ -2,7 +2,6 @@
   "name": "sure-daily-github",
   "version": "1.5.1",
   "description": "Lean automation for daily GitHub commits - VPS optimized",
-  "main": "src/index.js",
   "type": "module",
   "bin": {
     "sure-daily-github": "./src/cli.js"

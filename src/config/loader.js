@@ -61,6 +61,11 @@ function validateCountRange(range, label, errors) {
   }
 }
 
+// Prefixes of tokens that authenticate API calls: classic and fine-grained PATs,
+// OAuth app tokens, and GitHub App tokens (ghs_ is what GitHub Actions provides
+// as GITHUB_TOKEN, ghu_ a user-to-server token). ghr_ refresh tokens cannot.
+export const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
+
 // GitHub expects a list of label names; a bare string such as `labels: bug`
 // would be spread into one label per character ("b", "u", "g")
 function validateLabels(labels, label, errors) {
@@ -115,6 +120,13 @@ export function defaultConfigPath() {
   return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
 }
 
+// Used when the config has no contentTemplate. Shared by identity so advanced
+// issue mode can tell it apart from a configured one and keep its own default.
+export const DEFAULT_CONTENT_TEMPLATE = Object.freeze({
+  title: 'Daily Update',
+  body: 'Progress update for ${date}'
+});
+
 export const BABYSIT_ENGINES = ['opencode', 'claude'];
 
 export const BABYSIT_DEFAULTS = {
@@ -128,6 +140,7 @@ export const BABYSIT_DEFAULTS = {
   engineTimeoutMinutes: 30
 };
 
+const isMapping = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isPositiveInt = (value) => Number.isInteger(value) && value >= 1;
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
 
@@ -264,8 +277,8 @@ class ConfigLoader {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
       if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
-    } else if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_')) {
-      errors.push('GITHUB_TOKEN appears to be invalid format (must start with ghp_, gho_, or github_pat_)');
+    } else if (!GITHUB_TOKEN_PREFIXES.some(prefix => token.startsWith(prefix))) {
+      errors.push(`GITHUB_TOKEN appears to be invalid format (must start with ${GITHUB_TOKEN_PREFIXES.join(', ')})`);
     }
 
     // Validate repositories
@@ -401,6 +414,22 @@ class ConfigLoader {
       });
     }
     validateContentTemplate(config.contentTemplate, 'contentTemplate', errors);
+
+    // A section written as a scalar or list (e.g. `schedule: "0 9 * * *"` or
+    // `repositorySelection: random`) has none of the keys read below, so it
+    // would pass and its settings would be silently ignored
+    const sections = {
+      general: config.general,
+      randomization: config.randomization,
+      'randomization.timeVariations': isMapping(config.randomization) ? config.randomization.timeVariations : undefined,
+      repositorySelection: config.repositorySelection,
+      schedule: config.schedule
+    };
+    for (const [label, value] of Object.entries(sections)) {
+      if (value !== undefined && value !== null && !isMapping(value)) {
+        errors.push(`${label} must be a mapping`);
+      }
+    }
 
     // Validate general settings
     const general = config.general || {};
@@ -571,10 +600,7 @@ class ConfigLoader {
         rateLimits: { ...PR_MAINT_DEFAULTS.rateLimits, ...(config.prMaint?.rateLimits || {}) },
         budgets: { ...PR_MAINT_DEFAULTS.budgets, ...(config.prMaint?.budgets || {}) }
       },
-      contentTemplate: config.contentTemplate || {
-        title: 'Daily Update',
-        body: 'Progress update for ${date}'
-      },
+      contentTemplate: config.contentTemplate || DEFAULT_CONTENT_TEMPLATE,
       // Randomly picked per issue by AdvancedIssueHandler
       contentTemplates: config.contentTemplates || []
     };

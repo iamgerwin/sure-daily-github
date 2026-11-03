@@ -125,6 +125,25 @@ test('a corrupted ledger is treated as empty', (t) => {
   assert.deepEqual(ledger.load(), {});
 });
 
+test('a corrupted ledger is kept as .bak before the next save replaces it', (t) => {
+  const { ledger } = tmpLedger(t);
+  fs.mkdirSync(path.dirname(ledger.filePath), { recursive: true });
+  for (const content of ['{"me/demo#7": ', '[]']) {
+    fs.writeFileSync(ledger.filePath, content);
+    ledger.start(KEY, 'sha1', 0);
+
+    assert.equal(fs.readFileSync(`${ledger.filePath}.bak`, 'utf8'), content, content);
+    assert.equal(ledger.load()[KEY].headSha, 'sha1');
+  }
+});
+
+test('a missing or valid ledger leaves no .bak behind', (t) => {
+  const { ledger } = tmpLedger(t);
+  ledger.start(KEY, 'sha1', 0);
+  ledger.finish(KEY, 'fixed', 1);
+  assert.equal(fs.existsSync(`${ledger.filePath}.bak`), false);
+});
+
 test('a failed save removes its temp file and rethrows', (t) => {
   const { ledger } = tmpLedger(t);
   // A directory at the ledger path makes the rename fail after the temp file is written

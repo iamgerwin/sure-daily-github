@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import executor from './executor.js';
 import babysitter from './babysitter.js';
+import { writeHeartbeat, maxExecutionMs } from '../utils/heartbeat.js';
 
 const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 
@@ -11,17 +12,28 @@ class Scheduler {
     this.running = false;
     this.executing = false;
     this.executionStartedAt = null;
+    // Set by a shutdown signal that arrived mid-execution; called once it ends
+    this.pendingExit = null;
   }
 
   // Runs one scheduled execution, skipping the tick if the previous one is
   // still in flight so concurrent runs cannot race on the state files
   async runScheduledTask(config) {
     if (this.executing) {
-      logger.warn('Previous execution still in progress, skipping this run', {
-        startedAt: new Date(this.executionStartedAt).toISOString()
-      });
+      const startedAt = new Date(this.executionStartedAt).toISOString();
+      const limitMs = maxExecutionMs();
+      if (limitMs > 0 && Date.now() - this.executionStartedAt > limitMs) {
+        // A hung execution: withhold the heartbeat so the health check restarts us
+        logger.error('Previous execution exceeded SDG_MAX_EXECUTION_MINUTES, not refreshing the heartbeat', { startedAt });
+      } else {
+        // A skipped tick still proves the timer fires
+        writeHeartbeat();
+        logger.warn('Previous execution still in progress, skipping this run', { startedAt });
+      }
       return { skipped: true };
     }
+
+    writeHeartbeat();
 
     this.executing = true;
     this.executionStartedAt = Date.now();
@@ -33,7 +45,8 @@ class Scheduler {
       } else if (!result?.success) {
         logger.error('Scheduled task failed', { error: result?.error });
       }
-      await this.runScheduledBabysit(config);
+      // A shutdown requested during the execution skips the babysit scan
+      if (!this.pendingExit) await this.runScheduledBabysit(config);
       return result;
     } catch (error) {
       logger.error('Scheduled task failed', { error: error.message });
@@ -41,6 +54,12 @@ class Scheduler {
     } finally {
       this.executing = false;
       this.executionStartedAt = null;
+      if (this.pendingExit) {
+        const exit = this.pendingExit;
+        this.pendingExit = null;
+        logger.info('Scheduled execution finished, exiting');
+        exit(0);
+      }
     }
   }
 
@@ -86,6 +105,9 @@ class Scheduler {
     });
 
     this.running = true;
+    // A fresh heartbeat on start, so a health check right after a restart does
+    // not read the hung process's old one and restart again before the first tick
+    writeHeartbeat();
     logger.info('Scheduler started', {
       cron: cronExpression,
       timezone: config.schedule.timezone || config.general.timezone || 'UTC'
@@ -114,6 +136,9 @@ class Scheduler {
   // Ctrl+C or a service stop (SIGTERM from systemd or pm2). A babysit scan in
   // flight has its own handlers that kill its detached engine and test process
   // groups, clean up and exit; exiting here first would orphan them.
+  // An execution in flight is allowed to finish: exiting between creating an
+  // issue or commit and recording it in the state file would repeat it on the
+  // next run. A second signal while waiting exits at once.
   handleShutdown(signal, { exit = (code) => process.exit(code) } = {}) {
     if (this.running) {
       logger.info('Stopping scheduler', { signal });
@@ -123,6 +148,12 @@ class Scheduler {
       logger.info('Waiting for the babysit scan to stop', { signal });
       return false;
     }
+    if (this.executing && !this.pendingExit) {
+      logger.info('Waiting for the scheduled execution to finish', { signal });
+      this.pendingExit = exit;
+      return false;
+    }
+    this.pendingExit = null;
     exit(0);
     return true;
   }

@@ -51,6 +51,9 @@ export class StateManager {
     console.error(message);
   }
 
+  // Throws on failure: a commit or issue whose count cannot be persisted would
+  // be repeated by every later run (each `cli.js run` reloads the file), so the
+  // daily target would never be reached
   save() {
     const tmpFile = `${this.filePath}.${process.pid}.tmp`;
     try {
@@ -64,8 +67,14 @@ export class StateManager {
       fs.renameSync(tmpFile, this.filePath);
     } catch (error) {
       try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
-      console.error('Error saving state:', error.message);
+      throw new Error(`Could not save state to ${this.filePath}: ${error.message}`);
     }
+  }
+
+  // Call before creating a commit or issue: once the action exists on GitHub, a
+  // failed save cannot undo it, so an unwritable state file must stop the run first
+  assertWritable() {
+    this.save();
   }
 
   getRepoState(owner, repo) {
@@ -119,11 +128,40 @@ export class StateManager {
     const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
     const weekKey = `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 
+    const hourKey = `${y}-${m}-${d}T${H}`;
     return {
-      hourly: `${y}-${m}-${d}T${H}`,
+      hourly: this.isRepeatedHour(hourKey, timezone, now)
+        ? `${hourKey}${this.getUtcOffset(timezone, now)}`
+        : hourKey,
       daily: `${y}-${m}-${d}`,
       weekly: weekKey
     };
+  }
+
+  // "-04:00" style UTC offset of the timezone at `now`
+  getUtcOffset(timezone, now) {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'longOffset' })
+      .formatToParts(now).find(p => p.type === 'timeZoneName')?.value || '';
+    return name.replace(/^GMT/, '');
+  }
+
+  // When clocks fall back (e.g. 01:00-02:00 in America/New_York on the first
+  // Sunday of November), the same local hour happens twice. Keyed by the wall
+  // clock alone, both real hours would share one hourly window and its cap.
+  // Only that repeated hour carries the UTC offset in its key, so every other
+  // key keeps the YYYY-MM-DDTHH format (and existing counters stay valid).
+  isRepeatedHour(hourKey, timezone, now) {
+    const offset = this.getUtcOffset(timezone, now);
+    // Offsets shift by 30 or 60 minutes, so a repeat lies within an hour of now
+    for (const deltaMin of [-60, -30, 30, 60]) {
+      const other = new Date(now.getTime() + deltaMin * 60 * 1000);
+      if (this.getUtcOffset(timezone, other) === offset) continue;
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
+      }).formatToParts(other).map(p => [p.type, p.value]));
+      if (`${parts.year}-${parts.month}-${parts.day}T${parts.hour}` === hourKey) return true;
+    }
+    return false;
   }
 
   ensureWindows(owner, repo, timezone = 'UTC', now = new Date()) {
@@ -192,6 +230,9 @@ export class StateManager {
   recordAction(owner, repo, { type = 'issue', timezone = 'UTC', now = new Date() } = {}) {
     const repoState = this.getRepoState(owner, repo);
     const counters = this.ensureWindows(owner, repo, timezone, now);
+    // A failed save reports the action as failed, so it must not stay counted in
+    // memory for a later save (next repo or issue) to persist
+    const before = structuredClone(repoState);
 
     counters.hourly.count += 1;
     counters.daily.count += 1;
@@ -207,7 +248,13 @@ export class StateManager {
       repoState.totals.issues += 1;
     }
 
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      for (const key of Object.keys(repoState)) delete repoState[key];
+      Object.assign(repoState, before);
+      throw error;
+    }
   }
 
   getCounts(owner, repo, timezone = 'UTC', now = new Date()) {
@@ -227,7 +274,13 @@ export class StateManager {
     }
     const value = crypto.randomInt(min, max + 1);
     repoState.dailyTarget = { day, min, max, value };
-    this.save();
+    // `status` rolls the target too and must not fail on read-only state; a run
+    // still fails when it records the action. Unsaved, the next process re-rolls.
+    try {
+      this.save();
+    } catch (error) {
+      console.error(error.message);
+    }
     return value;
   }
 

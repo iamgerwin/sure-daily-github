@@ -272,6 +272,17 @@ class ConflictFixer {
             results.push(prResult(repoConfig, pull, 'unknown', { reason: 'GitHub has not computed mergeability yet' }));
           }
         }
+        // With --pr, say why nothing was done instead of reporting an empty run
+        // as "no conflicted pull requests". A timed-out listing may simply not
+        // have reached the PR yet, so only a complete listing proves it is not open.
+        if (prNumber !== null) {
+          const target = data.find(pull => pull.number === prNumber);
+          if (!target && !timedOut) {
+            results.push(prResult(repoConfig, { number: prNumber }, 'skipped', { reason: 'not an open pull request' }));
+          } else if (target && !isConflicted(target) && target.mergeable !== 'UNKNOWN') {
+            results.push(prResult(repoConfig, target, 'skipped', { reason: `not conflicted (${target.mergeable})` }));
+          }
+        }
         if (timedOut) {
           results.push({ owner, repo, status: 'scan-timeout', success: true, skipped: true, reason: 'scan budget exhausted' });
         }
