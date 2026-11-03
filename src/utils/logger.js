@@ -24,6 +24,20 @@ export function shouldUseColor(stream = process.stdout, env = process.env) {
   return Boolean(stream?.isTTY) && !env.NO_COLOR;
 }
 
+// Daily log files kept by LOG_RETENTION_DAYS (today included). Unset, zero or
+// anything but a whole number keeps every file, as before.
+export function resolveRetentionDays(value) {
+  const text = String(value ?? '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  const days = Number(text);
+  return days >= 1 ? days : null;
+}
+
+// Only the logger's own YYYY-MM-DD.log files; systemd.log, cron.log and other
+// files sharing the directory are never touched
+const DAILY_LOG_FILE = /^(\d{4}-\d{2}-\d{2})\.log$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 // Logging is called from inside catch blocks, so it must never throw: an
 // unwritable log directory (read-only mount, permissions, full disk) or
 // unserializable meta falls back to console-only output instead of crashing
@@ -33,7 +47,40 @@ export class Logger {
     this.logDir = logDir;
     this.color = color;
     this.fileErrorReported = false;
+    this.lastPrunedDay = null;
     this.ensureLogDir();
+  }
+
+  // Deletes daily log files more than `days` days old. File names (and today)
+  // are UTC dates, matching the names write() gives them. Never throws.
+  pruneOldLogs(days, now = new Date()) {
+    const cutoff = new Date(now.getTime() - (days - 1) * DAY_MS).toISOString().split('T')[0];
+    let entries;
+    try {
+      entries = fs.readdirSync(this.logDir);
+    } catch (_) {
+      return [];
+    }
+    const removed = [];
+    for (const name of entries) {
+      const match = DAILY_LOG_FILE.exec(name);
+      if (!match || match[1] >= cutoff) continue;
+      try {
+        fs.rmSync(path.join(this.logDir, name), { force: true });
+        removed.push(name);
+      } catch (_) {}
+    }
+    return removed;
+  }
+
+  // Once per day of writing, so a long-running scheduler keeps pruning without
+  // scanning the directory on every line. Read like LOG_LEVEL, after dotenv.
+  pruneIfDue(now = new Date()) {
+    const days = resolveRetentionDays(process.env.LOG_RETENTION_DAYS);
+    const today = now.toISOString().split('T')[0];
+    if (days === null || this.lastPrunedDay === today) return;
+    this.lastPrunedDay = today;
+    this.pruneOldLogs(days, now);
   }
 
   ensureLogDir() {
@@ -94,7 +141,9 @@ export class Logger {
     console.log(color ? `${colors[level]}${formatted}${reset}` : formatted);
 
     // File output
-    const logFile = path.join(this.logDir, `${new Date().toISOString().split('T')[0]}.log`);
+    const now = new Date();
+    this.pruneIfDue(now);
+    const logFile = path.join(this.logDir, `${now.toISOString().split('T')[0]}.log`);
     try {
       fs.appendFileSync(logFile, formatted + '\n');
     } catch (error) {
