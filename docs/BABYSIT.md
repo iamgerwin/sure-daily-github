@@ -17,6 +17,11 @@ sure-daily-github babysit --repo me/app --pr 42   # only this pull request
 sure-daily-github babysit --dry-run               # triage and print the plan; change nothing
 ```
 
+With `--pr`, a pull request the scan would not pick up is reported as skipped
+with the reason instead of an empty scan: `not an open pull request labeled
+<label>` when it is closed or lacks the babysit label, or `not authored by
+<login> (babysit.ownPRsOnly)` when `ownPRsOnly` filters it out.
+
 `--once` is accepted and is the default: each invocation is a single scan.
 The command exits `1` when the scan errored or any comment failed during this
 run. Otherwise it exits `0`, including when another run held the lock and the
