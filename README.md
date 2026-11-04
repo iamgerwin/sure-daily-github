@@ -335,7 +335,8 @@ Existing configurations continue to work without changes. Optional blocks like `
 echo $GITHUB_TOKEN
 
 # Should start with ghp_ or github_pat_ (personal access tokens),
-# gho_ (OAuth app), or ghs_ / ghu_ (GitHub App, e.g. the GitHub Actions GITHUB_TOKEN)
+# gho_ (OAuth app), or ghs_ / ghu_ (GitHub App, e.g. the GitHub Actions GITHUB_TOKEN).
+# Spaces or a newline around the token are ignored; a blank value counts as unset.
 
 # Test authentication (validate only checks the config file and never calls GitHub;
 # a dry run signs in and then makes no changes)

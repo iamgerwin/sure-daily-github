@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import yaml from 'js-yaml';
-import config from '../src/config/loader.js';
+import config, { readGitHubToken } from '../src/config/loader.js';
 
 process.env.GITHUB_TOKEN = 'ghp_test';
 
@@ -681,6 +681,33 @@ test('validate accepts every API token type, including GitHub App and Actions to
     () => config.validate({ repositories: [baseRepo] }),
     /GITHUB_TOKEN appears to be invalid format \(must start with ghp_, github_pat_, gho_, ghs_, ghu_\)/
   );
+});
+
+test('validate and getGitHubToken trim whitespace around GITHUB_TOKEN', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+
+  for (const token of [' ghp_abc', 'ghp_abc\n', '\tghp_abc \r\n']) {
+    process.env.GITHUB_TOKEN = token;
+    assert.doesNotThrow(() => config.validate({ repositories: [baseRepo] }), JSON.stringify(token));
+    assert.equal(config.getGitHubToken(), 'ghp_abc');
+  }
+});
+
+test('a blank GITHUB_TOKEN counts as unset', (t) => {
+  const saved = process.env.GITHUB_TOKEN;
+  t.after(() => { process.env.GITHUB_TOKEN = saved; });
+  process.env.GITHUB_TOKEN = '  \n';
+
+  assert.throws(() => config.validate({ repositories: [baseRepo] }), /GITHUB_TOKEN environment variable is required/);
+  assert.doesNotThrow(() => config.validate({ repositories: [baseRepo] }, { requireToken: false }));
+  assert.throws(() => config.getGitHubToken(), /GITHUB_TOKEN environment variable not set/);
+});
+
+test('readGitHubToken returns the trimmed token or an empty string', () => {
+  assert.equal(readGitHubToken({ GITHUB_TOKEN: ' ghp_abc\n' }), 'ghp_abc');
+  assert.equal(readGitHubToken({ GITHUB_TOKEN: '   ' }), '');
+  assert.equal(readGitHubToken({}), '');
 });
 
 test('validate rejects a repository commitMessage that is not a string instead of failing every commit', () => {
