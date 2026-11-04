@@ -6,6 +6,7 @@
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${CONFIG_PATH:-$APP_DIR/config/config.yaml}"
 STATE_FILE="${SDG_ISSUE_STATE_FILE:-$APP_DIR/data/issue-state.json}"
+HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
 LOG_DIR="$APP_DIR/logs"
 
 echo "=========================================="
@@ -58,6 +59,20 @@ if [ -f "$STATE_FILE" ]; then
   echo "   Last reset: $(grep 'lastDailyReset' "$STATE_FILE" | sed 's/^[[:space:]]*//; s/[",]//g' | sed 's/lastDailyReset: //')"
 else
   echo "   ❌ State file not found: $STATE_FILE"
+fi
+echo ""
+
+# Check the scheduler heartbeat. The service can stay "active" while its cron
+# ticks stop firing; the heartbeat's age (the same file mtime health-check.sh
+# reads) shows whether the scheduler is still ticking.
+echo "6️⃣  Scheduler Heartbeat:"
+if [ -f "$HEARTBEAT_FILE" ]; then
+  LAST_TICK=$(sed -n 's/.*"lastTickAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HEARTBEAT_FILE")
+  AGE_SECONDS=$(( $(date +%s) - $(stat -c %Y "$HEARTBEAT_FILE") ))
+  [ "$AGE_SECONDS" -lt 0 ] && AGE_SECONDS=0
+  echo "   Last tick: ${LAST_TICK:-unknown} ($(( AGE_SECONDS / 60 )) minutes ago)"
+else
+  echo "   ❌ No scheduler heartbeat at $HEARTBEAT_FILE (the scheduler writes it on start and on every tick)"
 fi
 echo ""
 

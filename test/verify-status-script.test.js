@@ -21,6 +21,7 @@ function run(appDir, env = {}) {
   const baseEnv = { ...process.env };
   delete baseEnv.CONFIG_PATH;
   delete baseEnv.SDG_ISSUE_STATE_FILE;
+  delete baseEnv.SDG_HEARTBEAT_FILE;
   return execFileSync('bash', [path.join(appDir, 'scripts/verify-status.sh')], {
     encoding: 'utf8',
     // systemctl and pgrep complaints on hosts without systemd are not under test
@@ -95,4 +96,36 @@ test('verify-status names the paths it looked at when files are missing', (t) =>
   assert.match(output, new RegExp(`No logs found in ${appDir}/logs`));
   assert.match(output, new RegExp(`Config file not found: ${appDir}/config/config\\.yaml`));
   assert.match(output, new RegExp(`State file not found: ${appDir}/data/issue-state\\.json`));
+  assert.match(output, new RegExp(`No scheduler heartbeat at ${appDir}/data/scheduler-heartbeat\\.json`));
+});
+
+test('verify-status shows the last scheduler tick and the heartbeat age', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+
+  // Written by the scheduler as one line of JSON; 45 minutes old
+  const mtime = Math.floor(Date.now() / 1000) - 45 * 60;
+  touch(path.join(appDir, 'data/scheduler-heartbeat.json'),
+    JSON.stringify({ lastTickAt: '2026-11-04T01:30:00.000Z', pid: 4242 }), mtime);
+
+  const output = run(appDir);
+
+  assert.match(output, /Last tick: 2026-11-04T01:30:00\.000Z \(4[56] minutes ago\)/);
+  assert.doesNotMatch(output, /No scheduler heartbeat/);
+});
+
+test('verify-status honors SDG_HEARTBEAT_FILE', (t) => {
+  const appDir = makeAppDir();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-verify-hb-'));
+  t.after(() => {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  const heartbeatFile = path.join(elsewhere, 'heartbeat.json');
+  fs.writeFileSync(heartbeatFile, JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+
+  const output = run(appDir, { SDG_HEARTBEAT_FILE: heartbeatFile });
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z \(0 minutes ago\)/);
 });
