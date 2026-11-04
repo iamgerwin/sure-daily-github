@@ -66,6 +66,16 @@ function validateCountRange(range, label, errors) {
 // as GITHUB_TOKEN, ghu_ a user-to-server token). ghr_ refresh tokens cannot.
 export const GITHUB_TOKEN_PREFIXES = ['ghp_', 'github_pat_', 'gho_', 'ghs_', 'ghu_'];
 
+// GITHUB_TOKEN without surrounding whitespace, or '' when unset or blank. A
+// quoted .env value or a secret file can carry a stray space or newline: API
+// calls still work (fetch trims header values), but the git auth header that
+// fix-conflicts and babysit pass to git embeds the raw token, so their fetch
+// and push would fail with an auth error, and a leading space failed the
+// prefix check above with a misleading "invalid format".
+export function readGitHubToken(env = process.env) {
+  return String(env.GITHUB_TOKEN ?? '').trim();
+}
+
 // GitHub expects a list of label names; a bare string such as `labels: bug`
 // would be spread into one label per character ("b", "u", "g")
 function validateLabels(labels, label, errors) {
@@ -274,7 +284,7 @@ class ConfigLoader {
 
     // Validate GitHub token; a token that is set must be well-formed even when
     // the command does not need one
-    const token = process.env.GITHUB_TOKEN;
+    const token = readGitHubToken();
     if (!token) {
       if (requireToken) errors.push('GITHUB_TOKEN environment variable is required');
     } else if (!GITHUB_TOKEN_PREFIXES.some(prefix => token.startsWith(prefix))) {
@@ -614,7 +624,7 @@ class ConfigLoader {
   }
 
   getGitHubToken() {
-    const token = process.env.GITHUB_TOKEN;
+    const token = readGitHubToken();
     if (!token) {
       throw new Error('GITHUB_TOKEN environment variable not set');
     }
