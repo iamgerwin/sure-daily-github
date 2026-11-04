@@ -314,3 +314,24 @@ test('an unwritable state file fails the run before any issue is created', async
   assert.match(describeFailures(results)[0], /Could not save state to .*: read-only file system/);
   assert.equal(getRunExitCode({ success: true, summary: summarize(results) }), 1);
 });
+
+test('a simple issue-mode dry run previews the rendered title and labels', async () => {
+  const { handler, calls } = createHandler();
+  const now = new Date('2026-03-10T08:00:00Z');
+  const result = await handler.createDailyIssue(
+    { ...repoConfig('preview'), labels: ['daily', 'bot'] },
+    { title: '${repo} log ${date}' }, true, null, {}, now
+  );
+
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.preview, { title: 'preview log 2026-03-10', labels: ['daily', 'bot'] });
+  assert.equal(calls.length, 0);
+});
+
+test('a simple issue-mode dry run previews the default labels when none are configured', async () => {
+  const { handler } = createHandler();
+  const result = await handler.createDailyIssue(repoConfig('preview-default'), {}, true);
+
+  assert.match(result.preview.title, /^Daily Update - \d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(result.preview.labels, ['automated']);
+});
