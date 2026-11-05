@@ -77,6 +77,34 @@ test('acquireRunLock reclaims unreadable or expired locks', (t) => {
   result.release();
 });
 
+test('acquireRunLock reclaims a live-PID lock without a usable start time', (t) => {
+  const filePath = useTmpLockFile(t);
+
+  for (const startedAt of [null, '2026-01-01T00:00:00Z', 'soon']) {
+    writeForeignLock(filePath, { startedAt });
+    const result = acquireRunLock();
+    assert.equal(result.acquired, true, `startedAt ${JSON.stringify(startedAt)}`);
+    result.release();
+  }
+});
+
+test('acquireRunLock ages a lock dated ahead of the clock by its distance', (t) => {
+  const filePath = useTmpLockFile(t);
+  process.env.SDG_RUN_LOCK_STALE_MS = '1000';
+
+  // Slightly ahead (clock nudged back a little): still held
+  writeForeignLock(filePath, { startedAt: Date.now() + 500 });
+  let result = acquireRunLock();
+  assert.equal(result.acquired, false);
+
+  // Far ahead (clock stepped back past the limit): reclaimed, not held until
+  // the clock catches up
+  writeForeignLock(filePath, { startedAt: Date.now() + 60 * 60 * 1000 });
+  result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  result.release();
+});
+
 test('release does not remove a lock that now belongs to someone else', (t) => {
   const filePath = useTmpLockFile(t);
 

@@ -47,10 +47,16 @@ function readLock(filePath) {
   return parseLock(readRaw(filePath));
 }
 
+// The age fallback covers a reused PID, so it must not depend on startedAt
+// being sane: a missing or non-numeric value has no age (stale), and a value
+// further ahead than the limit (the clock was stepped back, e.g. a reboot
+// before NTP sync) is measured as distance, otherwise the lock would block
+// every run until the clock caught up with it
 function isStale(holder, now) {
   if (!holder || !Number.isInteger(holder.pid)) return true;
   if (!isProcessAlive(holder.pid)) return true;
-  return now - (holder.startedAt || 0) > staleMs();
+  if (!Number.isFinite(holder.startedAt)) return true;
+  return Math.abs(now - holder.startedAt) > staleMs();
 }
 
 // Filesystems without hard links; fall back to a plain exclusive create there
