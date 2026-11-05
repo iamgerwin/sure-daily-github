@@ -753,6 +753,11 @@ test('validate rejects a repository branch that is not a branch name', () => {
   }
 });
 
+test('validate trims whitespace around a quoted branch name', () => {
+  const cfg = config.validate(yaml.load('repositories:\n  - owner: me\n    repo: demo\n    branch: " develop\\t"\n'));
+  assert.equal(cfg.repositories[0].branch, 'develop');
+});
+
 test('validate stringifies a branch that YAML read as a number', () => {
   const cfg = config.validate(yaml.load('repositories:\n  - owner: me\n    repo: demo\n    branch: 2024\n'));
   assert.equal(cfg.repositories[0].branch, '2024');
