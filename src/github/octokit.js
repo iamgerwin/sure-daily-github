@@ -77,8 +77,11 @@ export function graphqlRateLimitError(response) {
 // safe to retry. 5xx and network/timeout failures may have been applied server
 // side, so only idempotent reads are retried to avoid duplicate issues/commits.
 // `request` is the request options (or just its method).
+// The exponential backoff is capped at MAX_RETRY_DELAY_MS: with a large
+// GITHUB_REQUEST_RETRIES it would otherwise grow to hours, and past the timer
+// limit (~24.8 days) Node fires it after 1ms, retrying in a tight loop.
 export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS) {
-  const backoff = baseDelayMs * 2 ** attempt;
+  const backoff = Math.min(baseDelayMs * 2 ** attempt, MAX_RETRY_DELAY_MS);
 
   if (isRateLimited(error)) {
     const headers = error.response?.headers || {};

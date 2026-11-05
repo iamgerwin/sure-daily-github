@@ -330,3 +330,19 @@ test('a very long GITHUB_REQUEST_TIMEOUT_MS does not abort requests at once', as
     delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
   }
 });
+
+test('getRetryDelayMs caps the exponential backoff at the maximum retry delay', () => {
+  const transient = { status: 502, response: { headers: {} } };
+  assert.equal(getRetryDelayMs(transient, 'GET', 0), 1000);
+  assert.equal(getRetryDelayMs(transient, 'GET', 5), 32000);
+  assert.equal(getRetryDelayMs(transient, 'GET', 6), MAX_RETRY_DELAY_MS);
+  assert.equal(getRetryDelayMs(transient, 'GET', 40), MAX_RETRY_DELAY_MS);
+  assert.equal(getRetryDelayMs(transient, 'GET', 2000), MAX_RETRY_DELAY_MS);
+  // A rate limit without headers falls back to the same capped backoff
+  // instead of giving up once the uncapped value passes the maximum
+  const limited = { status: 429, response: { headers: {} } };
+  assert.equal(getRetryDelayMs(limited, 'POST', 1), 2000);
+  assert.equal(getRetryDelayMs(limited, 'POST', 10), MAX_RETRY_DELAY_MS);
+  // Non-retryable failures stay non-retryable at any attempt
+  assert.equal(getRetryDelayMs(transient, 'POST', 40), null);
+});
