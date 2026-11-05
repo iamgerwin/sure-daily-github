@@ -68,3 +68,17 @@ test('validate does not warn when simple issue mode uses randomized counts', () 
   assert.match(output, /^ {3}Randomization: enabled$/m);
   assert.doesNotMatch(output, UNUSED);
 });
+
+const UNMATCHED = /conflictFixer\.\w+ entry "[^"]+" matches no configured repository/;
+
+test('validate warns about conflictFixer list entries that match no configured repository', () => {
+  const output = validate('1', ['conflictFixer:', '  allowlist: ["me/demo", "me/dem0"]', '  denylist: ["other/repo"]']);
+  assert.match(output, /^ {3}⚠️ {2}conflictFixer\.allowlist entry "me\/dem0" matches no configured repository$/m);
+  assert.match(output, /^ {3}⚠️ {2}conflictFixer\.denylist entry "other\/repo" matches no configured repository$/m);
+  assert.doesNotMatch(output, /entry "me\/demo"/);
+});
+
+test('validate does not warn when conflictFixer list entries match configured repositories', () => {
+  assert.doesNotMatch(validate('1', ['conflictFixer:', '  allowlist: ["ME/Demo"]']), UNMATCHED);
+  assert.doesNotMatch(validate('1'), UNMATCHED);
+});

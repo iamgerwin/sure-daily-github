@@ -9,7 +9,7 @@ process.env.SDG_RUN_LOCK_FILE = path.join(lockDir, 'run.lock');
 process.env.SDG_CONFLICT_FIXER_STATE_FILE = path.join(lockDir, 'conflict-fixer-state.json');
 
 const {
-  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout, gateReason
+  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout, gateReason, unmatchedGateEntries
 } = await import('../src/core/conflict-fixer.js');
 const { FixerLedger, ledgerKey } = await import('../src/utils/fixer-ledger.js');
 const { default: GitHubClient } = await import('../src/github/client.js');
@@ -872,6 +872,20 @@ test('gateReason skips everything when the conflictFixer block is absent', () =>
   assert.equal(gateReason({ owner: 'me', repo: 'api' }), 'not-allowlisted');
   assert.equal(gateReason({ owner: 'me', repo: 'api' }, {}), 'not-allowlisted');
   assert.equal(gateReason({ owner: 'me', repo: 'api' }, { allowlist: [] }), 'not-allowlisted');
+});
+
+test('unmatchedGateEntries reports list entries that name no configured repository', () => {
+  const repos = [{ owner: 'me', repo: 'api' }, { owner: 'me', repo: 'web', enabled: false }];
+  assert.deepEqual(unmatchedGateEntries(repos, {
+    allowlist: ['me/api', 'me/webapp', 'ME/Web'],
+    denylist: ['me/apl']
+  }), [
+    { field: 'allowlist', entry: 'me/webapp' },
+    { field: 'denylist', entry: 'me/apl' }
+  ]);
+  assert.deepEqual(unmatchedGateEntries(repos, { allowlist: ['Me/API'], denylist: [] }), []);
+  assert.deepEqual(unmatchedGateEntries(repos), []);
+  assert.deepEqual(unmatchedGateEntries(repos, undefined), []);
 });
 
 test('gateReason matches list entries case-insensitively', () => {

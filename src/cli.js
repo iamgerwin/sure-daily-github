@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import executor, { describeFailures, describeRunMode, getRunExitCode, randomizationCountsIgnoredReason } from './core/executor.js';
 import scheduler from './core/scheduler.js';
-import ConflictFixer, { parseScanTimeout } from './core/conflict-fixer.js';
+import ConflictFixer, { parseScanTimeout, unmatchedGateEntries } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
 import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
@@ -423,6 +423,12 @@ program
       
       if (cfg.repositorySelection?.strategy) {
         console.log(`   Strategy: ${cfg.repositorySelection.strategy}`);
+      }
+
+      // A mistyped entry validates but never matches, so fix-conflicts would
+      // silently skip the intended repository (or fix a denylisted one)
+      for (const { field, entry } of unmatchedGateEntries(cfg.repositories, cfg.conflictFixer)) {
+        console.log(`   ⚠️  conflictFixer.${field} entry "${entry}" matches no configured repository`);
       }
     } catch (error) {
       console.error('❌ Configuration validation failed:', error.message);
