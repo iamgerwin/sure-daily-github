@@ -45,3 +45,11 @@ test('pr-maint rejects --pr without exactly one --repo, and a malformed --pr or 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--repo must be owner\/repo/);
 });
+
+test('pr-maint rejects a --pr beyond the safe integer range and a zero --pr', () => {
+  for (const value of ['99999999999999999999', '9007199254740993', '0']) {
+    const result = cli('pr-maint', '--pr', value, '--repo', 'me/a');
+    assert.equal(result.status, 1, `--pr ${value} should be rejected`);
+    assert.match(result.stderr, /--pr must be a positive pull request number/);
+  }
+});
