@@ -784,6 +784,27 @@ test('validate rejects contentTemplates entries with non-string text or no mappi
   );
 });
 
+test('validate rejects a whitespace-only template title that GitHub would refuse', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplate: { title: '   ', body: 'b' } }),
+    /contentTemplate\.title must not be blank/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplates: [{ title: 'a' }, { title: '\n\t' }] }),
+    /contentTemplates\[1\]\.title must not be blank/
+  );
+});
+
+test('validate still accepts an empty template title, which falls back to the default', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    contentTemplate: { title: '', body: 'b' },
+    contentTemplates: [{ title: '', body: 'x' }, { title: ' Bug ${date} ' }]
+  });
+  assert.equal(cfg.contentTemplate.title, '');
+  assert.equal(cfg.contentTemplates[1].title, ' Bug ${date} ');
+});
+
 test('validate accepts string templates and keeps the default contentTemplate', () => {
   const cfg = config.validate({
     repositories: [baseRepo],

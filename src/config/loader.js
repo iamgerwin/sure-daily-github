@@ -122,6 +122,11 @@ function validateContentTemplate(template, label, errors) {
     return;
   }
   validateTemplateText(template.title, `${label}.title`, errors);
+  // An empty title falls back to the default one, but a whitespace-only title
+  // is sent as is and GitHub rejects every issue with a blank title
+  if (typeof template.title === 'string' && template.title !== '' && !template.title.trim()) {
+    errors.push(`${label}.title must not be blank`);
+  }
   validateTemplateText(template.body, `${label}.body`, errors);
 }
 
