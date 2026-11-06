@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import yaml from 'js-yaml';
-import config, { readGitHubToken } from '../src/config/loader.js';
+import config, { readGitHubToken, MAX_LABEL_NAME_LENGTH } from '../src/config/loader.js';
 
 process.env.GITHUB_TOKEN = 'ghp_test';
 
@@ -877,4 +877,26 @@ test('validate accepts mapping or unset top-level sections', () => {
   assert.equal(cfg.general.mode, 'commit');
   assert.equal(cfg.repositorySelection.strategy, 'random');
   assert.equal(cfg.schedule.enabled, false);
+});
+
+test('validate rejects label names longer than GitHub allows', () => {
+  const long = 'x'.repeat(MAX_LABEL_NAME_LENGTH + 1);
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, labels: ['bug', long] }] }),
+    new RegExp(`Repository 0: labels must be at most 50 characters each \\(too long: "${long}"\\)`)
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplates: [{ title: 'a', labels: [long] }] }),
+    /contentTemplates\[0\]\.labels must be at most 50 characters each/
+  );
+});
+
+test('validate accepts label names at the GitHub length limit', () => {
+  const atLimit = 'x'.repeat(MAX_LABEL_NAME_LENGTH);
+  // Characters, not UTF-16 units: 50 emoji are 100 code units but 50 characters
+  const emoji = '🚀'.repeat(MAX_LABEL_NAME_LENGTH);
+  // Surrounding whitespace is not part of the name GitHub stores
+  const padded = ` ${atLimit} `;
+  const cfg = config.validate({ repositories: [{ ...baseRepo, labels: [atLimit, emoji, padded] }] });
+  assert.deepEqual(cfg.repositories[0].labels, [atLimit, emoji, padded]);
 });
