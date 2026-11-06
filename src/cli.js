@@ -68,6 +68,16 @@ program
 // Babysit command - address review comments on labeled pull requests
 const collect = (value, previous) => previous.concat([value]);
 
+// Plain digits within the safe integer range, as fix-conflicts accepts: past
+// 2^53 Number() rounds the digits to another pull request number (or 1e+20)
+function parsePrNumber(value) {
+  const pr = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(pr) || pr < 1) {
+    throw new Error('--pr must be a positive pull request number');
+  }
+  return pr;
+}
+
 program
   .command('babysit')
   .description('Address review comments on pull requests labeled for babysitting (never merges)')
@@ -80,10 +90,7 @@ program
     try {
       let pr = null;
       if (options.pr !== undefined) {
-        pr = Number(options.pr);
-        if (!/^\d+$/.test(options.pr) || pr < 1) {
-          throw new Error('--pr must be a positive pull request number');
-        }
+        pr = parsePrNumber(options.pr);
         if (options.repo.length !== 1) {
           throw new Error('--pr requires exactly one --repo <owner/repo>');
         }
@@ -151,10 +158,7 @@ program
       }
       let pr = null;
       if (options.pr !== undefined) {
-        pr = Number(options.pr);
-        if (!/^\d+$/.test(options.pr) || pr < 1) {
-          throw new Error('--pr must be a positive pull request number');
-        }
+        pr = parsePrNumber(options.pr);
         if (options.repo.length !== 1) {
           throw new Error('--pr requires exactly one --repo <owner/repo>');
         }
