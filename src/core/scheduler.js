@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import executor from './executor.js';
 import babysitter from './babysitter.js';
-import { writeHeartbeat, maxExecutionMs } from '../utils/heartbeat.js';
+import { writeHeartbeat, maxExecutionMs, invalidMaxExecutionMinutes } from '../utils/heartbeat.js';
 
 const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 
@@ -110,8 +110,14 @@ class Scheduler {
     writeHeartbeat();
     logger.info('Scheduler started', {
       cron: cronExpression,
-      timezone: config.schedule.timezone || config.general.timezone || 'UTC'
+      timezone: config.schedule.timezone || config.general.timezone || 'UTC',
+      maxExecutionMinutes: maxExecutionMs() / 60000 || 'off'
     });
+    // A typo here silently turns off hung-execution detection; say so once
+    const invalidLimit = invalidMaxExecutionMinutes();
+    if (invalidLimit !== null) {
+      logger.warn('Ignoring SDG_MAX_EXECUTION_MINUTES (expected whole minutes); hung executions will not be detected', { value: invalidLimit });
+    }
 
     return true;
   }
