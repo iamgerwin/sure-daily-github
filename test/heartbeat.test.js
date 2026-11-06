@@ -5,7 +5,8 @@ import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { writeHeartbeat, heartbeatFilePath, maxExecutionMs } from '../src/utils/heartbeat.js';
+import { writeHeartbeat, heartbeatFilePath, maxExecutionMs, invalidMaxExecutionMinutes } from '../src/utils/heartbeat.js';
+import logger from '../src/utils/logger.js';
 import scheduler from '../src/core/scheduler.js';
 import executor from '../src/core/executor.js';
 
@@ -105,6 +106,64 @@ test('maxExecutionMs is off unless SDG_MAX_EXECUTION_MINUTES is whole minutes', 
   assert.equal(maxExecutionMs(), 0);
   process.env.SDG_MAX_EXECUTION_MINUTES = '090';
   assert.equal(maxExecutionMs(), 90 * 60 * 1000);
+});
+
+test('maxExecutionMs ignores whitespace around SDG_MAX_EXECUTION_MINUTES', (t) => {
+  useMaxExecutionMinutes(t, ' 45 ');
+  assert.equal(maxExecutionMs(), 45 * 60 * 1000);
+  process.env.SDG_MAX_EXECUTION_MINUTES = '30\n';
+  assert.equal(maxExecutionMs(), 30 * 60 * 1000);
+  assert.equal(invalidMaxExecutionMinutes(), null);
+});
+
+test('invalidMaxExecutionMinutes reports only a set value that is not whole minutes', (t) => {
+  useMaxExecutionMinutes(t, '1h');
+  assert.equal(invalidMaxExecutionMinutes(), '1h');
+  process.env.SDG_MAX_EXECUTION_MINUTES = '-5';
+  assert.equal(invalidMaxExecutionMinutes(), '-5');
+  process.env.SDG_MAX_EXECUTION_MINUTES = '2.5';
+  assert.equal(invalidMaxExecutionMinutes(), '2.5');
+  for (const value of ['', '   ', '0', '90']) {
+    process.env.SDG_MAX_EXECUTION_MINUTES = value;
+    assert.equal(invalidMaxExecutionMinutes(), null, `"${value}" is valid or unset`);
+  }
+  delete process.env.SDG_MAX_EXECUTION_MINUTES;
+  assert.equal(invalidMaxExecutionMinutes(), null);
+});
+
+function captureLogs(t) {
+  const calls = [];
+  for (const level of ['info', 'warn']) {
+    const original = logger[level];
+    logger[level] = (message, meta) => calls.push({ level, message, meta });
+    t.after(() => { logger[level] = original; });
+  }
+  return calls;
+}
+
+test('start warns when SDG_MAX_EXECUTION_MINUTES is set but not whole minutes', (t) => {
+  useHeartbeatFile(t, path.join(tmpDir(t), 'heartbeat.json'));
+  useMaxExecutionMinutes(t, '2h');
+  const calls = captureLogs(t);
+  t.after(() => scheduler.stop());
+
+  assert.equal(scheduler.start({ schedule: { enabled: true, cron: '0 0 1 1 *' }, general: {} }), true);
+  const started = calls.find(c => c.message === 'Scheduler started');
+  assert.equal(started.meta.maxExecutionMinutes, 'off');
+  const warning = calls.find(c => c.level === 'warn' && /SDG_MAX_EXECUTION_MINUTES/.test(c.message));
+  assert.ok(warning, 'an invalid limit is reported');
+  assert.equal(warning.meta.value, '2h');
+});
+
+test('start logs the active execution limit without a warning', (t) => {
+  useHeartbeatFile(t, path.join(tmpDir(t), 'heartbeat.json'));
+  useMaxExecutionMinutes(t, '120');
+  const calls = captureLogs(t);
+  t.after(() => scheduler.stop());
+
+  assert.equal(scheduler.start({ schedule: { enabled: true, cron: '0 0 1 1 *' }, general: {} }), true);
+  assert.equal(calls.find(c => c.message === 'Scheduler started').meta.maxExecutionMinutes, 120);
+  assert.equal(calls.filter(c => c.level === 'warn').length, 0);
 });
 
 test('start writes a heartbeat before the first tick', (t) => {

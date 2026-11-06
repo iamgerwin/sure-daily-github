@@ -13,11 +13,21 @@ export function heartbeatFilePath() {
 
 // Minutes an execution may stay in flight before skipped ticks stop refreshing
 // the heartbeat, so the health check restarts a process stuck in one run.
-// 0 or unset disables the limit.
+// 0 or unset disables the limit. Surrounding whitespace (a systemd
+// Environment= or env-file line) is ignored; any other value disables the
+// limit and is reported by invalidMaxExecutionMinutes.
 export function maxExecutionMs() {
+  const text = String(process.env.SDG_MAX_EXECUTION_MINUTES ?? '').trim();
+  if (!/^[0-9]+$/.test(text)) return 0;
+  return Number(text) * 60 * 1000;
+}
+
+// The raw SDG_MAX_EXECUTION_MINUTES when it is set but not whole minutes, so
+// the scheduler can warn that hung executions will go undetected; else null.
+export function invalidMaxExecutionMinutes() {
   const raw = process.env.SDG_MAX_EXECUTION_MINUTES;
-  if (!raw || !/^[0-9]+$/.test(raw)) return 0;
-  return Number(raw) * 60 * 1000;
+  const text = String(raw ?? '').trim();
+  return text === '' || /^[0-9]+$/.test(text) ? null : raw;
 }
 
 // Records that the scheduler is alive and its cron ticks still fire. A process
