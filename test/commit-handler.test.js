@@ -346,3 +346,19 @@ test('an unwritable state file fails the run before any commit is created', asyn
   assert.equal(result.success, false);
   assert.match(result.error, /Could not save state to .*: read-only file system/);
 });
+
+test('a commit-mode dry run previews the file path and message a real run would use', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const now = new Date('2026-03-10T08:00:00Z');
+  const result = await handler.createDailyCommit(
+    { ...repoConfig, repo: 'preview', path: 'notes/', commitMessage: 'docs: ${repo} update ${date}' },
+    {}, true, 'UTC', now
+  );
+
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.preview, {
+    path: `notes/2026-03-10-${now.getTime()}.md`,
+    message: 'docs: preview update 2026-03-10'
+  });
+  assert.equal(state.getCounts('me', 'preview', 'UTC', now).daily, 0);
+});

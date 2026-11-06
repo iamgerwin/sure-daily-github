@@ -121,14 +121,17 @@ class IssueHandler {
         return { success: true, skipped: true, reason: 'limit_reached' };
       }
 
-      if (dryRun) {
-        logger.info('[DRY RUN] Would create issue', { owner, repo });
-        return { success: true, dryRun: true };
-      }
-
       // Generate issue content
       const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
       const labels = repoConfig.labels || ['automated'];
+
+      // Rendered like a real run, so a dry run shows the title and labels an
+      // issue would get (as advanced issue mode does)
+      if (dryRun) {
+        const preview = { title, labels };
+        logger.info('[DRY RUN] Would create issue', { owner, repo, ...preview });
+        return { success: true, dryRun: true, preview };
+      }
 
       // Fail before the API call: an uncounted issue would be repeated every run
       state.assertWritable();

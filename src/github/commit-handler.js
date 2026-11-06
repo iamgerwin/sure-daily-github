@@ -1,4 +1,4 @@
-import GitHubClient from './client.js';
+import GitHubClient, { normalizeRepoPath } from './client.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
@@ -80,14 +80,19 @@ class CommitHandler {
         return { success: true, skipped: true, reason: 'target_met' };
       }
 
-      if (dryRun) {
-        logger.info('[DRY RUN] Would create commit', { owner, repo, branch, basePath });
-        return { success: true, dryRun: true };
-      }
-
       const content = this.generateContent(contentTemplate, timezone, now, repo);
       const message = this.generateCommitMessage(commitMessage, repo, timezone, now);
       const filePath = this.generateFilePath(basePath, repo, timezone, now);
+
+      // Rendered like a real run, so a dry run shows the file and message a
+      // commit would get (as advanced issue mode shows its title and labels).
+      // The path is normalized as the contents API call does, so a path a real
+      // run would reject fails the dry run too.
+      if (dryRun) {
+        const preview = { path: normalizeRepoPath(filePath), message };
+        logger.info('[DRY RUN] Would create commit', { owner, repo, branch, ...preview });
+        return { success: true, dryRun: true, preview };
+      }
 
       // Fail before the API call: an uncounted commit would be repeated every run
       state.assertWritable();

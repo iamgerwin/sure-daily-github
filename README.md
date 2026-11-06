@@ -104,7 +104,8 @@ echo "GITHUB_TOKEN=ghp_your_token_here" > .env
 # Validate configuration (pretty prints mode, ranges/randomization)
 node src/cli.js validate
 
-# Test with dry-run (no actual writes)
+# Test with dry-run (no actual writes; logs the issue title and labels, or the
+# commit file path and message, each action would use)
 node src/cli.js run --dry-run
 
 # Run unit tests
