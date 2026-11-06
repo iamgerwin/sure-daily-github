@@ -76,12 +76,22 @@ export function readGitHubToken(env = process.env) {
   return String(env.GITHUB_TOKEN ?? '').trim();
 }
 
+// GitHub rejects a label name longer than this with a 422 ("name is too long"),
+// so an issue that carries one fails on every run
+export const MAX_LABEL_NAME_LENGTH = 50;
+
 // GitHub expects a list of label names; a bare string such as `labels: bug`
 // would be spread into one label per character ("b", "u", "g")
 function validateLabels(labels, label, errors) {
   if (labels === undefined || labels === null) return;
   if (!Array.isArray(labels) || labels.some(name => typeof name !== 'string' || !name.trim())) {
     errors.push(`${label} must be a list of non-empty label names`);
+    return;
+  }
+  // Counted in characters (code points), not UTF-16 units, so an emoji counts once
+  const tooLong = labels.filter(name => [...name.trim()].length > MAX_LABEL_NAME_LENGTH);
+  if (tooLong.length > 0) {
+    errors.push(`${label} must be at most ${MAX_LABEL_NAME_LENGTH} characters each (too long: ${tooLong.map(name => `"${name}"`).join(', ')})`);
   }
 }
 
