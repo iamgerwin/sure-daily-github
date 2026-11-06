@@ -36,8 +36,13 @@ export function readLedgerObject(filePath, label) {
 function backupUnreadable(filePath, raw, label, reason) {
   if (backedUp.has(filePath) && backedUp.get(filePath) === raw) return;
   backedUp.set(filePath, raw);
+  // A file that cannot be read (permissions) cannot be copied either; saying it
+  // was kept would hide that the next save replaces the only copy
+  let kept = `the original is kept at ${filePath}.bak`;
   try {
     fs.copyFileSync(filePath, `${filePath}.bak`);
-  } catch (_) {}
-  console.error(`Error loading ${label} (${reason}), starting fresh; the original is kept at ${filePath}.bak`);
+  } catch (error) {
+    kept = `the original could not be copied to ${filePath}.bak (${error.message}) and the next save replaces it`;
+  }
+  console.error(`Error loading ${label} (${reason}), starting fresh; ${kept}`);
 }
