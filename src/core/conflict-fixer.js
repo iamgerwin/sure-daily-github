@@ -76,6 +76,21 @@ export function gateReason(repoConfig, conflictFixer = {}) {
   return null;
 }
 
+// allowlist/denylist entries that name no configured repository. The gate
+// matches names exactly (case-insensitive), so a typo validates fine and then
+// silently fixes nothing (allowlist) or fails to block a repository (denylist).
+// Returns [{ field, entry }] in list order.
+export function unmatchedGateEntries(repositories = [], conflictFixer = {}) {
+  const names = new Set((repositories || []).map(r => `${r.owner}/${r.repo}`.toLowerCase()));
+  const unmatched = [];
+  for (const field of ['allowlist', 'denylist']) {
+    for (const entry of conflictFixer?.[field] || []) {
+      if (!names.has(String(entry).toLowerCase())) unmatched.push({ field, entry });
+    }
+  }
+  return unmatched;
+}
+
 export function summarize(results) {
   return {
     total: results.length,

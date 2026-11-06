@@ -88,6 +88,8 @@ repositories:
 
 With no `conflictFixer` block at all, the mode is `allowlist` and the allowlist is empty, so **nothing is fixed**.
 
+List entries must name a configured repository (`owner/repo`, case-insensitive). `node src/cli.js validate` warns about any `allowlist` or `denylist` entry that matches none, since a mistyped entry would otherwise skip the intended repository or fail to block it.
+
 ## How a PR is fixed
 
 1. List open PRs through GraphQL, including `mergeable` and `mergeStateStatus`. A PR is conflicted when it is `CONFLICTING` or `DIRTY`.
