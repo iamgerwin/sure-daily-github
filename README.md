@@ -345,11 +345,19 @@ node src/cli.js run --dry-run
 
 ### Rate Limit Issues
 
-The tool includes automatic rate limiting and retry logic. If you hit rate limits:
+Every GitHub API call goes through a shared retry layer (`src/github/octokit.js`):
 
-- Reduce `dailyTarget` values
-- Increase time between scheduled runs
-- Check remaining rate limit: logs will show current limits
+- Rate-limited requests (HTTP 429, a 403 with `retry-after` or `x-ratelimit-remaining: 0`, a secondary rate limit, or a GraphQL `RATE_LIMITED` error) are retried for any method, after the wait GitHub asks for (`retry-after`, or `x-ratelimit-reset` once the primary limit is spent). A secondary rate limit without either header waits at least 60 seconds.
+- A required wait longer than 60 seconds is not slept through: the request fails and the run reports it, so a spent hourly quota cannot stall a scheduled execution.
+- Server errors (5xx), network failures and timeouts are retried with exponential backoff (1s, 2s, ...) only for reads (`GET`, `HEAD` and read-only GraphQL queries); a create that may already have been applied is never repeated.
+- `GITHUB_REQUEST_RETRIES` sets how many retries follow the first attempt (default `2`, `0` disables them) and `GITHUB_REQUEST_TIMEOUT_MS` aborts each attempt after that many milliseconds (default `30000`).
+- Handlers also pause between write requests: 1 second between repositories, and 2 seconds between issues for the same repository in simple issue mode.
+
+Each retry is logged as a `GitHub request failed, retrying` warning with the method, URL, status, attempt and `delayMs`. The tool does not log the remaining quota; check it with `gh api rate_limit` (or `curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/rate_limit`). If runs keep failing on rate limits:
+
+- Reduce `dailyTarget` values or `repositorySelection.maxPerExecution`
+- Increase the time between scheduled runs
+- Make sure no other tool spends the same token's quota
 
 ### Permission Errors
 
