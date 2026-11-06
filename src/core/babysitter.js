@@ -400,11 +400,18 @@ export class Babysitter {
             await client.listLabeledPullRequests(owner, repo, settings.label),
             `List ${settings.label} pull requests for ${owner}/${repo}`
           );
-          issues
-            .filter(issue => pr === null || issue.number === pr)
-            .filter(issue => !settings.ownPRsOnly || sameLogin(issue.user?.login, me.login))
+          const requested = issues.filter(issue => pr === null || issue.number === pr);
+          const eligible = requested.filter(issue => !settings.ownPRsOnly || sameLogin(issue.user?.login, me.login));
+          eligible
             .sort((a, b) => a.number - b.number)
             .forEach(issue => candidates.push({ repoCfg, repoIndex, number: issue.number }));
+          // With --pr, say why nothing was done instead of reporting an empty scan
+          if (pr !== null && eligible.length === 0) {
+            const reason = requested.length === 0
+              ? `not an open pull request labeled ${settings.label}`
+              : `not authored by ${me.login} (babysit.ownPRsOnly)`;
+            results.push({ owner, repo, number: pr, success: true, skipped: true, reason, counts: emptyCounts() });
+          }
         } catch (error) {
           results.push({ owner, repo, success: false, error: error.message, counts: emptyCounts() });
         }

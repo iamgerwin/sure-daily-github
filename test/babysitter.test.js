@@ -233,6 +233,38 @@ test('scan only queries enabled repos with the configured label and honors ownPR
   assert.deepEqual(calls.getPullRequest, [8]);
 });
 
+test('--pr reports why a pull request outside the scan was not processed', async (t) => {
+  useTmpState(t);
+  const remote = setupRemote();
+  const issues = [
+    { number: 7, user: { login: 'me' }, pull_request: {} },
+    { number: 8, user: { login: 'stranger' }, pull_request: {} }
+  ];
+  const pulls = { 7: pull(remote.headSha, { state: 'closed' }) };
+
+  let { client, calls } = stubClient({ issues, pulls });
+  let result = await babysitter(remote, client, stubEngine().engine).execute(makeConfig({ label: 'please-babysit' }), { repos: ['me/demo'], pr: 42 });
+  assert.equal(result.success, true);
+  assert.deepEqual(calls.getPullRequest, []);
+  assert.deepEqual(result.results.map(r => ({ number: r.number, skipped: r.skipped, reason: r.reason })), [
+    { number: 42, skipped: true, reason: 'not an open pull request labeled please-babysit' }
+  ]);
+  assert.equal(result.summary.skipped, 1);
+  assert.equal(result.summary.failed, 0);
+
+  ({ client, calls } = stubClient({ issues, pulls }));
+  result = await babysitter(remote, client, stubEngine().engine).execute(makeConfig(), { repos: ['me/demo'], pr: 8 });
+  assert.deepEqual(calls.getPullRequest, []);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].reason, 'not authored by me (babysit.ownPRsOnly)');
+
+  // A PR that is in the scan is processed as before, with no extra skip row
+  ({ client, calls } = stubClient({ issues, pulls }));
+  result = await babysitter(remote, client, stubEngine().engine).execute(makeConfig(), { repos: ['me/demo'], pr: 7 });
+  assert.deepEqual(calls.getPullRequest, [7]);
+  assert.deepEqual(result.results.map(r => r.reason), ['pull request is not open']);
+});
+
 test('--repo restrictions never query unconfigured or disabled repositories', async (t) => {
   useTmpState(t);
   const remote = setupRemote();
