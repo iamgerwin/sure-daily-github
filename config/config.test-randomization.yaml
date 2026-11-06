@@ -39,13 +39,16 @@ randomization:
 # Use weighted repository selection
 repositorySelection:
   strategy: "weighted"
-  randomizeOrder: true
+  # randomizeOrder only affects the "sequential" strategy; weighted already
+  # orders repositories by its weighted draws
   maxPerExecution: 2  # Process only 2 repos per run
 
 schedule:
   enabled: false  # Manual testing
 
-# Multiple repositories with different weights
+# Multiple repositories with different weights. A weight is the chance of
+# being the first pick; with maxPerExecution: 2 of these 3 repositories, each
+# is selected in roughly 75% / 70% / 55% of runs (see docs/RANDOMIZATION.md)
 repositories:
   - owner: "iamgerwin"
     repo: "laravel-api-scaffold"
@@ -54,7 +57,7 @@ repositories:
     dailyTarget:
       min: 5
       max: 10
-    weight: 40  # 40% chance
+    weight: 40  # 40% chance of the first pick
     labels: ["automated", "test-randomization"]
 
   - owner: "iamgerwin"
@@ -64,7 +67,7 @@ repositories:
     dailyTarget:
       min: 3
       max: 7
-    weight: 35  # 35% chance
+    weight: 35  # 35% chance of the first pick
     labels: ["automated", "weighted-selection"]
 
   - owner: "iamgerwin"
@@ -74,7 +77,7 @@ repositories:
     dailyTarget:
       min: 2
       max: 5
-    weight: 25  # 25% chance
+    weight: 25  # 25% chance of the first pick
     labels: ["automated", "low-priority"]
 
 contentTemplate:
