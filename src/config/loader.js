@@ -589,8 +589,11 @@ class ConfigLoader {
           owner: repoNameText(repo.owner),
           repo: repoNameText(repo.repo),
           enabled: repo.enabled !== false,
-          // Unset means the repository's default branch, resolved by GitHub
-          branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch),
+          // Unset means the repository's default branch, resolved by GitHub.
+          // Trimmed because validation only accepts a branch whose trimmed text
+          // is non-empty: a quoted " main" would otherwise pass and then make
+          // every commit target a branch that does not exist
+          branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch).trim(),
           dailyTarget: normalizeDailyTarget(repoTarget),
           path: repo.path || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',
