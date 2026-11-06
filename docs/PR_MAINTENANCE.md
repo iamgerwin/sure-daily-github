@@ -101,7 +101,8 @@ are found by marker (and must be authored by the token's user), then edited only
 `data/pr-maint-state.json`, the next tick costs extra reads but makes no duplicate writes. The one exception is escalation
 records, which live only in the state file in this release. A state file that cannot be parsed (or is not a JSON
 object) loads as empty, which also clears the breaker and the write budget; the unreadable file is first copied to
-`pr-maint-state.json.bak` and reported on stderr, since the next tick's save replaces it.
+`pr-maint-state.json.bak` and reported on stderr, since the next tick's save replaces it. When the file cannot be
+copied (for example it cannot be read at all), the report says so instead of naming a `.bak` that does not exist.
 
 **File locations.** Each pr-maint file has its own environment override:
 
