@@ -5,7 +5,10 @@
 # /opt or a moved config or state file is still reported correctly
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${CONFIG_PATH:-$APP_DIR/config/config.yaml}"
-STATE_FILE="${SDG_ISSUE_STATE_FILE:-$APP_DIR/data/issue-state.json}"
+# Commit and simple issue mode count in state.json; advanced issue mode
+# (range targets or intervalMinutes) keeps its own issue-state.json
+COUNTER_STATE_FILE="${SDG_STATE_FILE:-$APP_DIR/data/state.json}"
+ISSUE_STATE_FILE="${SDG_ISSUE_STATE_FILE:-$APP_DIR/data/issue-state.json}"
 HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
 LOG_DIR="$APP_DIR/logs"
 
@@ -54,11 +57,21 @@ fi
 echo ""
 
 # Check current state
+# Only the file of the configured mode exists, so a missing one is not an
+# error unless neither does
 echo "5️⃣  Current State:"
-if [ -f "$STATE_FILE" ]; then
-  echo "   Last reset: $(grep 'lastDailyReset' "$STATE_FILE" | sed 's/^[[:space:]]*//; s/[",]//g' | sed 's/lastDailyReset: //')"
-else
-  echo "   ❌ State file not found: $STATE_FILE"
+if [ -f "$COUNTER_STATE_FILE" ]; then
+  # lastCommitDate is a YYYY-MM-DD day, so the newest sorts last
+  LAST_COMMIT=$(sed -n 's/.*"lastCommitDate"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$COUNTER_STATE_FILE" | sort | tail -1)
+  echo "   Counter state: $COUNTER_STATE_FILE"
+  echo "   Last commit: ${LAST_COMMIT:-none recorded}"
+fi
+if [ -f "$ISSUE_STATE_FILE" ]; then
+  echo "   Issue state: $ISSUE_STATE_FILE"
+  echo "   Last reset: $(grep 'lastDailyReset' "$ISSUE_STATE_FILE" | sed 's/^[[:space:]]*//; s/[",]//g' | sed 's/lastDailyReset: //')"
+fi
+if [ ! -f "$COUNTER_STATE_FILE" ] && [ ! -f "$ISSUE_STATE_FILE" ]; then
+  echo "   ❌ State file not found: $COUNTER_STATE_FILE or $ISSUE_STATE_FILE"
 fi
 echo ""
 
