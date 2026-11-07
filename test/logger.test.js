@@ -227,6 +227,33 @@ test('pruneOldLogs on a missing directory returns nothing without throwing', () 
   }
 });
 
+test('pruneOldLogs keeps every file when the retention reaches past the Date range', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    seedLogs(dir, ['2000-01-01.log', '2026-10-30.log']);
+    const fileLogger = new Logger({ logDir: dir });
+    assert.deepEqual(fileLogger.pruneOldLogs(999999999, new Date('2026-10-30T12:00:00Z')), []);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['2000-01-01.log', '2026-10-30.log']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a huge LOG_RETENTION_DAYS still writes the line instead of throwing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    seedLogs(dir, ['2000-01-01.log']);
+    captureConsole(() => {
+      withRetention('999999999', () => new Logger({ logDir: dir, color: false }).error('still logged'));
+    });
+    assert.ok(fs.existsSync(path.join(dir, '2000-01-01.log')), 'old file is kept');
+    const today = `${new Date().toISOString().split('T')[0]}.log`;
+    assert.match(fs.readFileSync(path.join(dir, today), 'utf8'), /still logged/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('writing a line prunes old daily logs only when LOG_RETENTION_DAYS is set', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
   try {
