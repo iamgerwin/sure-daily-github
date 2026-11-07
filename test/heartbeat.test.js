@@ -234,6 +234,23 @@ test('health-check reads a limit with a leading zero as decimal', (t) => {
   assert.match(log, /\(limit 90,/);
 });
 
+test('health-check ignores whitespace around the limit', (t) => {
+  for (const maxAge of [' 90', '90 ', '\t90\n']) {
+    const { calls, log, status } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge });
+    assert.equal(status, 0);
+    assert.ok(calls.includes('restart sure-daily-github'), `${JSON.stringify(maxAge)}: ${calls.join('\n')}`);
+    assert.match(log, /\(limit 90,/);
+    assert.doesNotMatch(log, /Ignoring HEARTBEAT_MAX_AGE_MINUTES/);
+  }
+});
+
+test('health-check treats a whitespace-only limit as unset without a warning', (t) => {
+  const { calls, log, status } = runHealthCheck(t, { heartbeatAgeMinutes: 600, maxAge: '  ' });
+  assert.equal(status, 0);
+  assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
+  assert.doesNotMatch(log, /Ignoring HEARTBEAT_MAX_AGE_MINUTES/);
+});
+
 test('health-check does not restart again when the last hang restart left the heartbeat stale', (t) => {
   const dir = tmpDir(t);
   const first = runHealthCheck(t, { dir, heartbeatAgeMinutes: 120, maxAge: 90 });
