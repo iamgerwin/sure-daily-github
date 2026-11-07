@@ -328,6 +328,19 @@ test('a simple issue-mode dry run previews the rendered title and labels', async
   assert.equal(calls.length, 0);
 });
 
+test('simple issue mode sends each repository label once, keeping the first spelling', async () => {
+  const { handler, calls } = createHandler();
+  const repo = { ...repoConfig('dup-labels'), labels: ['automated', 'Bug', 'automated', 'bug', 'docs'] };
+
+  const preview = await handler.createDailyIssue(repo, {}, true);
+  assert.deepEqual(preview.preview.labels, ['automated', 'Bug', 'docs']);
+
+  const result = await handler.createDailyIssue(repo, {}, false);
+  assert.equal(result.success, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].labels, ['automated', 'Bug', 'docs']);
+});
+
 test('a simple issue-mode dry run previews the default labels when none are configured', async () => {
   const { handler } = createHandler();
   const result = await handler.createDailyIssue(repoConfig('preview-default'), {}, true);
