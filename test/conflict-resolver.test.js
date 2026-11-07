@@ -129,6 +129,30 @@ test('countTests counts awaited and member test registrations', () => {
   assert.equal(countTests(text), 5);
 });
 
+test('countTests counts parameterized and conditional registrations once each', () => {
+  const text = [
+    "test.each([[1, 2], [3, 4]])('adds %i', (a, b) => {});\n",
+    'it.each`\n',
+    '  a | b\n',
+    '  ${1} | ${2}\n',
+    "`('row $a', ({ a, b }) => {});\n",
+    "test.skip.each([1])('skipped %i', () => {});\n",
+    "it.concurrent('parallel', async () => {});\n",
+    "test.skipIf(process.env.CI)('local only', () => {});\n",
+    "test.fixme('broken', () => {});\n",
+    "test.describe('group', () => {});\n",
+    'test.beforeEach(() => {});\n'
+  ].join('');
+  assert.equal(countTests(text), 6);
+});
+
+test('countTests notices a dropped parameterized block next to plain tests', () => {
+  const before = "test('a', () => {});\ntest.each([1, 2])('b %i', () => {});\n";
+  const after = "test('a', () => {});\n";
+  assert.equal(countTests(before), 2);
+  assert.equal(countTests(after), 1);
+});
+
 test('countTests returns null when tests are registered in a form it cannot count', () => {
   assert.equal(countTests("export default test('a', () => {});\n"), null);
   assert.equal(countTests("void it('a', () => {});\n"), null);
