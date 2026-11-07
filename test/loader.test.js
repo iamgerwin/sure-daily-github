@@ -720,6 +720,22 @@ test('validate rejects a repository commitMessage that is not a string instead o
   }
 });
 
+test('validate rejects a whitespace-only repository commitMessage instead of committing with a blank message', () => {
+  for (const commitMessage of ['   ', '\n', '\t \n']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, commitMessage }] }),
+      /Repository 0: commitMessage must not be blank/,
+      `commitMessage ${JSON.stringify(commitMessage)} should be rejected`
+    );
+  }
+});
+
+test('validate still accepts an empty commitMessage, which falls back to the default', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, commitMessage: '' }, { owner: 'me', repo: 'other', commitMessage: ' chore: ${date} ' }] });
+  assert.equal(cfg.repositories[0].commitMessage, 'docs: daily update ${date}');
+  assert.equal(cfg.repositories[1].commitMessage, ' chore: ${date} ');
+});
+
 test('validate rejects string on/off flags for randomization and schedule', () => {
   for (const value of ['off', 'no', 'false', 0]) {
     assert.throws(
