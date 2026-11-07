@@ -70,6 +70,8 @@ export SDG_RUN_LOCK_FILE=/var/lib/sure-daily-github/run.lock   # lock location
 export SDG_RUN_LOCK_STALE_MS=7200000                           # age after which a lock is reclaimed
 ```
 
+`SDG_RUN_LOCK_STALE_MS` is a positive number of milliseconds (surrounding whitespace is ignored). Any other value (`4h`, `0`, `-1`) falls back to the 2-hour default, and the first run to take the lock logs a warning naming the ignored value, since a run meant to last longer than 2 hours could otherwise have its lock reclaimed by a concurrent run.
+
 ## Testing
 
 Run unit tests covering state logic and window resets:
