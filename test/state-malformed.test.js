@@ -150,3 +150,42 @@ test('well-formed legacy commit fields are kept', () => {
   assert.equal(repo.commitsToday, 0);
   assert.equal(repo.lastCommitDate, '2025-01-05');
 });
+
+function captureConsoleError(fn) {
+  const messages = [];
+  const original = console.error;
+  console.error = (...args) => messages.push(args.join(' '));
+  try {
+    return { result: fn(), messages };
+  } finally {
+    console.error = original;
+  }
+}
+
+test('a corrupted state file reports where its backup is kept', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-state-malformed-'));
+  const filePath = path.join(dir, 'state.json');
+  fs.writeFileSync(filePath, '{ not json');
+
+  const { messages } = captureConsoleError(() => new StateManager({ filePath }));
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /^Error loading state, starting fresh: /);
+  assert.match(messages[0], new RegExp(`the original is kept at ${filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.bak$`));
+  assert.equal(fs.readFileSync(`${filePath}.bak`, 'utf8'), '{ not json');
+});
+
+test('a state file whose backup cannot be written says the next save replaces it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-state-malformed-'));
+  const filePath = path.join(dir, 'state.json');
+  fs.writeFileSync(filePath, '{ not json');
+  // A directory in place of the .bak file makes the copy fail, as an
+  // unreadable state file (permissions) would, even when running as root
+  fs.mkdirSync(`${filePath}.bak`);
+
+  const { messages } = captureConsoleError(() => new StateManager({ filePath }));
+
+  assert.equal(messages.length, 1);
+  assert.doesNotMatch(messages[0], /is kept at/);
+  assert.match(messages[0], /the original could not be copied to .*state\.json\.bak \(.+\) and the next save replaces it$/);
+});
