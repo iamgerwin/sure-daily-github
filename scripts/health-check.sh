@@ -10,7 +10,44 @@
 SERVICE_NAME="sure-daily-github"
 APP_DIR="${SDG_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOG_FILE="$APP_DIR/logs/health-check.log"
+
+# The value of $1 in the app's .env, read the way the service's dotenv reads it
+# (optional `export`, quotes stripped, unquoted `#` comments and surrounding
+# whitespace dropped, last line wins). Fails when the file or key is missing.
+dotenv_value() {
+  local key="$1" file="$APP_DIR/.env" line value="" found=1
+  local assign="^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=[[:space:]]*(.*)$"
+  local double_quoted='^"([^"]*)"' single_quoted="^'([^']*)'"
+  [ -r "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ $assign ]] || continue
+    value="${BASH_REMATCH[2]}"
+    if [[ "$value" =~ $double_quoted ]] || [[ "$value" =~ $single_quoted ]]; then
+      value="${BASH_REMATCH[1]}"
+    else
+      value="${value%%#*}"
+      value="${value%"${value##*[![:space:]]}"}"
+    fi
+    found=0
+  done < "$file"
+  [ "$found" -eq 0 ] && printf '%s' "$value"
+  return "$found"
+}
+
+# The service loads .env through dotenv, but cron runs this script without it:
+# a heartbeat moved only in .env would never be found here, and the hang check
+# would be skipped forever. A variable set in the environment still wins, as it
+# does for dotenv. A relative path is resolved against the app directory, the
+# service's working directory.
+if [ -z "${SDG_HEARTBEAT_FILE+set}" ]; then
+  SDG_HEARTBEAT_FILE="$(dotenv_value SDG_HEARTBEAT_FILE)"
+fi
 HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
+case "$HEARTBEAT_FILE" in
+  /*) ;;
+  *) HEARTBEAT_FILE="$APP_DIR/$HEARTBEAT_FILE" ;;
+esac
 HEARTBEAT_MAX_AGE_MINUTES="${HEARTBEAT_MAX_AGE_MINUTES:-0}"
 # Touched on every hang restart; a heartbeat not newer than it means the
 # restarted scheduler never wrote one, so another restart would not help
