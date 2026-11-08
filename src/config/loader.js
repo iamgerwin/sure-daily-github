@@ -189,7 +189,8 @@ function validateBabysit(babysit, errors) {
     errors.push(`babysit.engine must be one of: ${BABYSIT_ENGINES.join(', ')}`);
   }
   // The model is passed as a CLI argument, so a leading dash would be read as a flag
-  if (babysit.model !== undefined && (!isNonEmptyString(babysit.model) || babysit.model.startsWith('-'))) {
+  // Checked after trimming, which is how the value is used
+  if (babysit.model !== undefined && (!isNonEmptyString(babysit.model) || babysit.model.trim().startsWith('-'))) {
     errors.push('babysit.model must be a non-empty string not starting with "-"');
   }
   for (const key of ['maxPrsPerRun', 'testTimeoutMinutes', 'engineTimeoutMinutes']) {
@@ -197,6 +198,15 @@ function validateBabysit(babysit, errors) {
       errors.push(`babysit.${key} must be a positive whole number`);
     }
   }
+}
+
+// Validation accepts a label or model whose trimmed text is non-empty, so a
+// quoted " babysit" or "opus " must be trimmed too: the padded label would
+// be sent as the PR label filter and the padded model as the engine's
+// --model argument, neither of which matches the real name
+function normalizeBabysit(babysit) {
+  const settings = { ...BABYSIT_DEFAULTS, ...(babysit || {}) };
+  return { ...settings, label: settings.label.trim(), model: settings.model.trim() };
 }
 
 export const PR_MAINT_MODES = MODES;
@@ -621,7 +631,7 @@ class ConfigLoader {
         allowlist: conflictFixer.allowlist ?? [],
         denylist: conflictFixer.denylist ?? []
       },
-      babysit: { ...BABYSIT_DEFAULTS, ...(config.babysit || {}) },
+      babysit: normalizeBabysit(config.babysit),
       prMaint: {
         ...PR_MAINT_DEFAULTS,
         ...(config.prMaint || {}),
