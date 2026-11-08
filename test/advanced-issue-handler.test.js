@@ -431,6 +431,60 @@ for (const [label, remainingMs, minutes] of [
   });
 }
 
+test('a stored interval past the configured maximum is capped and persisted', async () => {
+  const { handler, created } = createHandler();
+  const realNow = Date.now;
+  const now = realNow();
+  Date.now = () => now;
+  try {
+    // Rolled under an old 180-240 minute interval (or while the clock was ahead)
+    writeState(handler, {
+      lastDailyReset: new Date(now).toISOString(),
+      repositories: {
+        'me/demo': { issuesCreatedToday: 1, lastIssueTime: now - 1000, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: now + 200 * 60 * 1000 }
+      }
+    });
+    const shortened = repo({ intervalMinutes: { min: 5, max: 10 } });
+
+    const [status] = (await handler.getStatus([shortened], 'UTC')).repositories;
+    assert.equal(status.nextIssueTime, new Date(now + 10 * 60 * 1000).toISOString());
+
+    const [result] = await handler.processRepositories([shortened], {}, false, config);
+    assert.equal(created.length, 0);
+    assert.equal(result.reason, 'Waiting for interval (10 minutes remaining)');
+    assert.equal(readState(handler).repositories['me/demo'].nextIssueTime, now + 10 * 60 * 1000);
+
+    // Once the capped wait has elapsed the repository takes an issue again
+    Date.now = () => now + 10 * 60 * 1000;
+    await handler.processRepositories([shortened], {}, false, config);
+    assert.equal(created.length, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a stored interval within the configured maximum is kept as is', async () => {
+  const { handler } = createHandler();
+  const realNow = Date.now;
+  const now = realNow();
+  Date.now = () => now;
+  try {
+    const next = now + 45 * 60 * 1000;
+    writeState(handler, {
+      lastDailyReset: new Date(now).toISOString(),
+      repositories: {
+        'me/demo': { issuesCreatedToday: 1, lastIssueTime: now - 1000, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: next }
+      }
+    });
+
+    const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 30, max: 60 } })], {}, false, config);
+    assert.equal(result.reason, 'Waiting for interval (45 minutes remaining)');
+    assert.equal(readState(handler).repositories['me/demo'].nextIssueTime, next);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test('the daily reset clears counts so a new day starts from zero', async () => {
   const { handler, created } = createHandler();
   const yesterday = Date.now() - 36 * 60 * 60 * 1000;
