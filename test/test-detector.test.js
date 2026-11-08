@@ -196,6 +196,18 @@ test('runTestCommand reports exit code and output', async (t) => {
   assert.equal(failed.output, 'boom\n');
 });
 
+test('runTestCommand resolves a failed result when spawn rejects its arguments', async (t) => {
+  const dir = repoDir(t);
+  const badCommand = await runTestCommand('echo a\0b', { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.equal(badCommand.code, null);
+  assert.equal(badCommand.timedOut, false);
+  assert.match(badCommand.output, /null bytes/);
+
+  const badEnv = await runTestCommand('echo hi', { cwd: dir, env: { ...process.env, SDG_BAD: 'a\0b' }, timeoutMs: 10000 });
+  assert.equal(badEnv.code, null);
+  assert.match(badEnv.output, /SDG_BAD/);
+});
+
 test('runTestCommand kills a command that exceeds the timeout', async (t) => {
   const result = await runTestCommand('sleep 30', { cwd: repoDir(t), env: process.env, timeoutMs: 100 });
   assert.equal(result.timedOut, true);

@@ -951,3 +951,14 @@ test('a per-repo opt-in is fixed even when not allowlisted', async (t) => {
 
   assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
 });
+
+test('regression gate reports a testCommand that cannot be spawned as failed tests', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-fixer-gate-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const fixer = new ConflictFixer('ghp_test', { client: stubClient([]), workRoot: dir });
+
+  const gate = await fixer.runRegressionGate(dir, { testCommand: 'npm test\0' }, { installDeps: false }, 10000);
+  assert.equal(gate.passed, false);
+  assert.match(gate.reason, /^tests failed/);
+  assert.match(gate.output, /null bytes/);
+});
