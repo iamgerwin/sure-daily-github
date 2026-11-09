@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import GitHubClient from '../github/client.js';
+import GitHubClient, { authFailureMessage } from '../github/client.js';
 import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import { runGit, gitAuthEnv, scrubEnv } from '../utils/git.js';
@@ -234,7 +234,7 @@ class ConflictFixer {
 
       const auth = await this.client.validate();
       if (!auth.success) {
-        throw new Error('GitHub authentication failed');
+        throw new Error(authFailureMessage(auth));
       }
       const identity = {
         name: auth.user,

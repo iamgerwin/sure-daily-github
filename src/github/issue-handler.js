@@ -1,4 +1,4 @@
-import GitHubClient from './client.js';
+import GitHubClient, { authFailureMessage } from './client.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
@@ -20,7 +20,7 @@ class IssueHandler {
     }
     const result = await this.client.validate();
     if (!result.success) {
-      throw new Error('GitHub authentication failed');
+      throw new Error(authFailureMessage(result));
     }
     return result;
   }
