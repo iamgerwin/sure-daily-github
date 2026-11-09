@@ -94,6 +94,7 @@ test('runEngine sends the prompt on stdin, never in argv, in the PR workdir', as
   const result = await runEngine('opencode', 'm', { cwd: '/tmp/work', prompt, timeoutMs: 1000, runner, env: { A: '1' } });
 
   assert.equal(result.code, 0);
+  assert.equal(result.signal, null);
   assert.equal(result.stdout, 'ok');
   assert.equal(calls[0].cmd, 'opencode');
   assert.ok(!calls[0].args.includes(prompt));
@@ -204,10 +205,11 @@ test('parseTriage reports undecided ids and ignores unknown or duplicate ones', 
   assert.deepEqual(result.missing, ['review_comment:1']);
 });
 
-test('runTriage fails on a non-zero exit, a spawn error, or a timeout', async () => {
+test('runTriage fails on a non-zero exit, a spawn error, a signal, or a timeout', async () => {
   const outputFile = path.join(tmpDir(), 'triage.json');
   const cases = [
     [{ code: 2, stdout: '', stderr: 'model not found' }, /exited with code 2: model not found/],
+    [{ code: null, signal: 'SIGKILL', stdout: '', stderr: 'partial output' }, /^opencode was killed by SIGKILL: partial output$/],
     [{ code: null, stdout: '', stderr: '', error: new Error('spawn opencode ENOENT') }, /could not be started: spawn opencode ENOENT/],
     [{ code: null, stdout: '', stderr: '', timedOut: true }, /timed out/]
   ];
@@ -521,4 +523,14 @@ test('killActiveEngines still kills a background grandchild after its group lead
 
   await killActiveEngines({ graceMs: 300 });
   assert.throws(() => process.kill(pid, 0), /ESRCH/, 'grandchild is gone');
+});
+
+test('runImplement names the signal that killed the engine instead of a null exit code', async () => {
+  const reportFile = path.join(tmpDir(), 'implement.json');
+  const items = [{ comment: comments[0], decision: { action: 'fix', reasoning: 'r', plan: 'p' } }];
+  const { runner } = stubRunner({ result: { code: null, signal: 'SIGTERM', stdout: '', stderr: '' } });
+  const result = await runImplement({ engine: 'claude', model: 'm', cwd: '/w', pr, items, reportFile, runner });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'claude was killed by SIGTERM');
+  assert.doesNotMatch(result.error, /code null/);
 });
