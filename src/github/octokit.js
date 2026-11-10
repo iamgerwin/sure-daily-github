@@ -1,4 +1,5 @@
 import { Octokit } from '@octokit/rest';
+import { setTimeout as sleep } from 'node:timers/promises';
 import logger from '../utils/logger.js';
 import { clampTimerMs } from '../utils/process.js';
 
@@ -123,6 +124,7 @@ export function createOctokit(options = {}) {
     const callerSignal = requestOptions.request.signal;
 
     for (let attempt = 0; ; attempt++) {
+      callerSignal?.throwIfAborted();
       requestOptions.request.signal = callerSignal || AbortSignal.timeout(timeoutMs);
 
       let response;
@@ -135,6 +137,9 @@ export function createOctokit(options = {}) {
         failure = error;
       }
 
+      // Cancellation is not a transient network failure. Stop before planning
+      // another attempt, including when the transport wraps the abort error.
+      callerSignal?.throwIfAborted();
       const delay = attempt < retries
         ? getRetryDelayMs(failure, requestOptions, attempt, baseDelayMs)
         : null;
@@ -151,7 +156,8 @@ export function createOctokit(options = {}) {
         attempt: attempt + 1,
         delayMs: delay
       });
-      await new Promise(resolve => setTimeout(resolve, delay));
+      // Clear the backoff timer immediately if the caller cancels while waiting.
+      await sleep(delay, undefined, { signal: callerSignal });
     }
   });
 
