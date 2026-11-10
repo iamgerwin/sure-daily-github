@@ -170,23 +170,24 @@ class Randomizer {
       ? maxCount
       : repositories.length;
 
-    // Calculate total weight
-    const totalWeight = repositories.reduce((sum, repo) => sum + (repo.weight || 1), 0);
-
-    // Make a pool of repositories (can be selected multiple times if maxCount > repos.length)
+    // Draw without replacement from a copy of the candidates
     const pool = [...repositories];
 
     for (let i = 0; i < count && pool.length > 0; i++) {
-      // Weighted random selection
-      const currentTotalWeight = pool.reduce((sum, repo) => sum + (repo.weight || 1), 0);
+      // Scaling preserves relative odds and keeps the sum finite even when
+      // individually valid weights would overflow it. Recompute for each draw
+      // so small weights become selectable after the largest ones are removed.
+      const scale = pool.reduce((max, repo) => Math.max(max, repo.weight || 1), 0);
+      const weights = pool.map(repo => (repo.weight || 1) / scale);
+      const currentTotalWeight = weights.reduce((sum, weight) => sum + weight, 0);
       let random = Math.random() * currentTotalWeight;
 
       // Floating-point rounding can leave a tiny remainder after subtracting
       // every weight; that draw belongs to the last repo, not the first
       let selectedIndex = pool.length - 1;
       for (let j = 0; j < pool.length; j++) {
-        random -= (pool[j].weight || 1);
-        if (random <= 0) {
+        random -= weights[j];
+        if (weights[j] > 0 && random <= 0) {
           selectedIndex = j;
           break;
         }
