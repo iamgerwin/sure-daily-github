@@ -137,6 +137,36 @@ test('createOrUpdateFile does not write when the existence lookup fails with a n
   assert.equal(calls.put.length, 0);
 });
 
+test('createOrUpdateFile refuses to write over an existing directory', async () => {
+  const { client, calls } = stubClient({
+    getContent: async () => ({ data: [{ type: 'file', name: 'a.md', sha: 'x' }] })
+  });
+  const result = await client.createOrUpdateFile('me', 'demo', 'daily-updates/', 'hi', 'docs: update', 'main');
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Cannot write daily-updates: it is an existing directory, not a file/);
+  assert.equal(calls.put.length, 0);
+});
+
+test('createOrUpdateFile refuses to write over a symlink or submodule', async () => {
+  for (const type of ['symlink', 'submodule']) {
+    const { client, calls } = stubClient({ getContent: async () => ({ data: { type, sha: 'x' } }) });
+    const result = await client.createOrUpdateFile('me', 'demo', 'notes/link', 'hi', 'docs: update');
+
+    assert.equal(result.success, false);
+    assert.match(result.error, new RegExp(`it is an existing ${type}, not a file`));
+    assert.equal(calls.put.length, 0);
+  }
+});
+
+test('createOrUpdateFile updates an existing file reported with type file', async () => {
+  const { client, calls } = stubClient({ getContent: async () => ({ data: { type: 'file', sha: 'old' } }) });
+  const result = await client.createOrUpdateFile('me', 'demo', 'notes/today.md', 'hi', 'docs: update');
+
+  assert.equal(result.success, true);
+  assert.equal(calls.put[0].sha, 'old');
+});
+
 test('getFile normalizes the path and reports 404 as notFound', async () => {
   const { client, calls } = stubClient();
   const result = await client.getFile('me', 'demo', 'daily-updates//x.md');
