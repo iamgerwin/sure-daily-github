@@ -117,6 +117,16 @@ class GitHubClient {
       if (!existingFile.success && !existingFile.notFound) {
         throw new Error(`Could not check whether ${path} exists: ${existingFile.error}`);
       }
+      // The contents API lists a directory as an array (and reports symlinks and
+      // submodules by type); writing there without a file sha only earns an
+      // unexplained 422, so name the real problem instead
+      if (existingFile.success) {
+        const { data } = existingFile;
+        const type = Array.isArray(data) ? 'dir' : data?.type;
+        if (type && type !== 'file') {
+          throw new Error(`Cannot write ${path}: it is an existing ${type === 'dir' ? 'directory' : type}, not a file`);
+        }
+      }
 
       const params = {
         owner,

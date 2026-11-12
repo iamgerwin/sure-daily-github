@@ -26,6 +26,13 @@ test('the top-level help lists the pr-maint command', () => {
   assert.match(result.stdout, /pr-maint/);
 });
 
+test('pr-maint accepts --pr when the one repository is named twice in different case', () => {
+  const result = cli('pr-maint', '--pr', '3', '--repo', 'me/a', '--repo', 'ME/a', '--config', '/nonexistent/config.yaml');
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, /--pr requires exactly one --repo/);
+  assert.match(result.stderr, /nonexistent/);
+});
+
 test('pr-maint rejects an unknown --mode before loading config', () => {
   const result = cli('pr-maint', '--mode', 'yolo');
   assert.equal(result.status, 1);

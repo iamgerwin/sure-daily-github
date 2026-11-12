@@ -39,6 +39,13 @@ test('babysit rejects --pr without exactly one --repo before loading config', ()
   assert.match(result.stderr, /--pr must be a positive pull request number/);
 });
 
+test('babysit accepts --pr when the one repository is named twice in different case', () => {
+  const result = cli('babysit', '--pr', '3', '--repo', 'me/a', '--repo', 'Me/A', '--config', '/nonexistent/config.yaml');
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, /--pr requires exactly one --repo/);
+  assert.match(result.stderr, /nonexistent/);
+});
+
 test('babysit rejects a malformed --repo', () => {
   const result = cli('babysit', '--repo', 'just-a-name');
   assert.equal(result.status, 1);

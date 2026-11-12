@@ -177,6 +177,79 @@ test('client errors such as 404 are not retried', async () => {
   }
 });
 
+test('an active caller signal still allows transient retries', async () => {
+  const srv = await startServer([{ status: 502 }, { status: 200 }]);
+  const controller = new AbortController();
+  try {
+    const { data } = await srv.octokit.request('GET /user', {
+      request: { signal: controller.signal }
+    });
+    assert.equal(data.login, 'me');
+    assert.equal(srv.requests.length, 2);
+    assert.equal(controller.signal.aborted, false);
+  } finally {
+    srv.close();
+  }
+});
+
+test('an already canceled request never reaches the transport', async () => {
+  const controller = new AbortController();
+  const reason = new Error('scan canceled');
+  controller.abort(reason);
+  let calls = 0;
+  const octokit = createOctokit({ request: { fetch: async () => { calls++; } } });
+
+  await assert.rejects(octokit.request('GET /user', {
+    request: { signal: controller.signal }
+  }), error => error === reason);
+  assert.equal(calls, 0);
+});
+
+test('a caller abort wrapped as a network error is not retried', async () => {
+  const controller = new AbortController();
+  const reason = new Error('scan canceled');
+  let calls = 0;
+  const octokit = createOctokit({
+    retry: { baseDelayMs: 1 },
+    request: { fetch: async () => {
+      calls++;
+      controller.abort(reason);
+      throw new Error('network failure');
+    } }
+  });
+
+  await assert.rejects(octokit.request('GET /user', {
+    request: { signal: controller.signal }
+  }), error => error === reason);
+  assert.equal(calls, 1);
+});
+
+test('canceling during retry backoff clears the wait and prevents another attempt', async () => {
+  const controller = new AbortController();
+  const reason = new Error('scan canceled');
+  let calls = 0;
+  let timer;
+  const octokit = createOctokit({
+    retry: { baseDelayMs: 200 },
+    request: { fetch: async () => {
+      calls++;
+      timer = setTimeout(() => controller.abort(reason), 20);
+      return new Response(JSON.stringify({ message: 'unavailable' }), {
+        status: 503, headers: { 'content-type': 'application/json' }
+      });
+    } }
+  });
+
+  try {
+    await assert.rejects(octokit.request('GET /user', {
+      request: { signal: controller.signal }
+    }), error => error.code === 'ABORT_ERR' && error.cause === reason);
+    assert.equal(calls, 1);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 test('each retry of a timed-out GET gets a fresh deadline', async () => {
   let calls = 0;
   // First request stalls past the timeout; the second answers immediately

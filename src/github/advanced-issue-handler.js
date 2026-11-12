@@ -14,6 +14,10 @@ const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isCount = (value) => Number.isInteger(value) && value >= 0;
+// The loader normalizes dailyTarget to { min, max }; a bare number is one value
+const targetBounds = (dailyTarget) => (typeof dailyTarget === 'object'
+  ? dailyTarget
+  : { min: dailyTarget, max: dailyTarget });
 
 // Template labels are added to the repository's labels (default ["automated"]),
 // so a template that also lists "automated" would send it twice. GitHub label
@@ -175,20 +179,28 @@ class AdvancedIssueHandler {
   // edited dailyTarget takes effect the same day instead of tomorrow (matching
   // commit mode). Returns true when a new target was rolled.
   resolveTodayTarget(repoState, dailyTarget) {
-    const { min, max } = typeof dailyTarget === 'object' ? dailyTarget : { min: dailyTarget, max: dailyTarget };
-    const target = repoState.todayTarget;
-    const saved = repoState.targetRange;
-    // State written before targetRange was recorded keeps its target if it still fits the range
-    const sameRange = saved
-      ? saved.min === min && saved.max === max
-      : target >= min && target <= max;
-    if (Number.isInteger(target) && sameRange) {
-      if (!saved) repoState.targetRange = { min, max };
+    const { min, max } = targetBounds(dailyTarget);
+    if (this.keepsTodayTarget(repoState, dailyTarget)) {
+      if (!repoState.targetRange) repoState.targetRange = { min, max };
       return false;
     }
     repoState.todayTarget = this.getRandomInt(min, max);
     repoState.targetRange = { min, max };
     return true;
+  }
+
+  // Whether today's stored target still applies to the configured dailyTarget,
+  // so the next run keeps it instead of rolling a new one. Read-only, so
+  // `status` can report the target the run will use.
+  keepsTodayTarget(repoState, dailyTarget) {
+    const { min, max } = targetBounds(dailyTarget);
+    const target = repoState?.todayTarget;
+    const saved = repoState?.targetRange;
+    // State written before targetRange was recorded keeps its target if it still fits the range
+    const sameRange = saved
+      ? saved.min === min && saved.max === max
+      : target >= min && target <= max;
+    return Number.isInteger(target) && sameRange;
   }
 
   getRandomElement(array) {
@@ -511,10 +523,13 @@ class AdvancedIssueHandler {
       // elapsed interval no longer holds the repo back, and a stored time past
       // the configured interval is capped, exactly as processRepositories does
       const nextIssueTime = this.pendingIssueTime(repoState, repo, now);
+      // A target rolled for a dailyTarget that has since been edited is
+      // replaced by the next run, so it is not the target that run works to
+      const targetApplies = !repo.dailyTarget || this.keepsTodayTarget(todayState, repo.dailyTarget);
       statuses.push({
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
-        todayTarget: todayState.todayTarget || 'Not set',
+        todayTarget: (targetApplies && todayState.todayTarget) || 'Not set',
         lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
         nextIssueTime: nextIssueTime !== null ? new Date(nextIssueTime).toISOString() : 'Any time'
       });
