@@ -379,6 +379,25 @@ test('getRequestRetries reads GITHUB_REQUEST_RETRIES and falls back on invalid v
   }
 });
 
+test('getRequestRetries keeps the default for a blank value instead of disabling retries', () => {
+  try {
+    for (const blank of ['', ' ', '\t', '  \n']) {
+      process.env.GITHUB_REQUEST_RETRIES = blank;
+      assert.equal(getRequestRetries(), 2, `blank value ${JSON.stringify(blank)}`);
+    }
+    for (const odd of ['0x2', '1e1', '-1', '1.5', '2 3']) {
+      process.env.GITHUB_REQUEST_RETRIES = odd;
+      assert.equal(getRequestRetries(), 2, `invalid value ${JSON.stringify(odd)}`);
+    }
+    process.env.GITHUB_REQUEST_RETRIES = ' 3 ';
+    assert.equal(getRequestRetries(), 3);
+    process.env.GITHUB_REQUEST_RETRIES = '0';
+    assert.equal(getRequestRetries(), 0);
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
 test('getRequestTimeoutMs caps GITHUB_REQUEST_TIMEOUT_MS at the timer limit', () => {
   process.env.GITHUB_REQUEST_TIMEOUT_MS = '9999999999';
   try {

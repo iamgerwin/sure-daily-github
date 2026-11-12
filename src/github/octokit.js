@@ -21,12 +21,13 @@ export function getRequestTimeoutMs() {
   return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
+// Whole digits only, surrounding whitespace ignored: Number() reads a blank
+// value (a systemd Environment= or env-file line like "GITHUB_REQUEST_RETRIES= ")
+// as 0, which would silently turn every retry off, and also accepts forms such
+// as "0x2" or "1e1" that nobody means as a retry count
 export function getRequestRetries() {
-  const raw = process.env.GITHUB_REQUEST_RETRIES;
-  const value = Number(raw);
-  return raw !== undefined && raw !== '' && Number.isInteger(value) && value >= 0
-    ? value
-    : DEFAULT_REQUEST_RETRIES;
+  const text = String(process.env.GITHUB_REQUEST_RETRIES ?? '').trim();
+  return /^[0-9]+$/.test(text) ? Number(text) : DEFAULT_REQUEST_RETRIES;
 }
 
 // A secondary (abuse) limit may arrive as a 403 without any rate limit
