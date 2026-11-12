@@ -118,7 +118,16 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
       output = (output + chunk).slice(-MAX_OUTPUT_CHARS);
     };
 
-    const child = spawn(command, { cwd, env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // spawn throws (instead of emitting 'error') for arguments it rejects up
+    // front, such as a NUL byte in the command or an env value. That is a
+    // failed gate, not an exception for the caller to handle.
+    let child;
+    try {
+      child = spawn(command, { cwd, env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      resolve({ code: null, timedOut: false, output: error.message });
+      return;
+    }
     activeChildren.add(child);
     // Decode on the stream so a multibyte character split across two reads is
     // not turned into U+FFFD (decoding each chunk on its own would)
