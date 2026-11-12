@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import executor, { describeFailures, describeRunMode, getRunExitCode, randomizationCountsIgnoredReason } from './core/executor.js';
 import scheduler from './core/scheduler.js';
-import ConflictFixer, { parseScanTimeout, unmatchedGateEntries } from './core/conflict-fixer.js';
+import ConflictFixer, { distinctRepoCount, parseScanTimeout, unmatchedGateEntries } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
 import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
@@ -91,7 +91,7 @@ program
       let pr = null;
       if (options.pr !== undefined) {
         pr = parsePrNumber(options.pr);
-        if (options.repo.length !== 1) {
+        if (distinctRepoCount(options.repo) !== 1) {
           throw new Error('--pr requires exactly one --repo <owner/repo>');
         }
       }
@@ -159,7 +159,7 @@ program
       let pr = null;
       if (options.pr !== undefined) {
         pr = parsePrNumber(options.pr);
-        if (options.repo.length !== 1) {
+        if (distinctRepoCount(options.repo) !== 1) {
           throw new Error('--pr requires exactly one --repo <owner/repo>');
         }
       }
