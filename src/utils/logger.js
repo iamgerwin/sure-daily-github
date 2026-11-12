@@ -54,7 +54,12 @@ export class Logger {
   // Deletes daily log files more than `days` days old. File names (and today)
   // are UTC dates, matching the names write() gives them. Never throws.
   pruneOldLogs(days, now = new Date()) {
-    const cutoff = new Date(now.getTime() - (days - 1) * DAY_MS).toISOString().split('T')[0];
+    const cutoffDate = new Date(now.getTime() - (days - 1) * DAY_MS);
+    // A retention so long (e.g. 999999999 days) that the cutoff falls outside
+    // the Date range covers every possible file: keep them all instead of
+    // letting toISOString() throw out of every log write
+    if (Number.isNaN(cutoffDate.getTime())) return [];
+    const cutoff = cutoffDate.toISOString().split('T')[0];
     let entries;
     try {
       entries = fs.readdirSync(this.logDir);
