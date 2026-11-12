@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import yaml from 'js-yaml';
-import config, { readGitHubToken, MAX_LABEL_NAME_LENGTH } from '../src/config/loader.js';
+import config, { readGitHubToken, MAX_LABEL_NAME_LENGTH, MAX_ISSUE_TITLE_LENGTH } from '../src/config/loader.js';
 
 process.env.GITHUB_TOKEN = 'ghp_test';
 
@@ -798,6 +798,33 @@ test('validate rejects a whitespace-only template title that GitHub would refuse
     () => config.validate({ repositories: [baseRepo], contentTemplates: [{ title: 'a' }, { title: '\n\t' }] }),
     /contentTemplates\[1\]\.title must not be blank/
   );
+});
+
+test('validate rejects a template title longer than GitHub allows', () => {
+  const long = 'x'.repeat(MAX_ISSUE_TITLE_LENGTH + 1);
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplate: { title: long, body: 'b' } }),
+    /contentTemplate\.title must be at most 256 characters, not counting placeholders \(has 257\)/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], contentTemplates: [{ title: 'a' }, { title: `${long} \${date}` }] }),
+    /contentTemplates\[1\]\.title must be at most 256 characters/
+  );
+});
+
+test('validate accepts a template title at the limit, counting characters and not placeholders', () => {
+  const atLimit = 'x'.repeat(MAX_ISSUE_TITLE_LENGTH);
+  const emoji = '🚀'.repeat(MAX_ISSUE_TITLE_LENGTH);
+  // Placeholders may render shorter than their names (${repo} as "a"), so
+  // only the fixed text is held to the limit
+  const withPlaceholders = `${'x'.repeat(MAX_ISSUE_TITLE_LENGTH - 1)} \${repo}\${date}`;
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    contentTemplate: { title: atLimit, body: 'b' },
+    contentTemplates: [{ title: emoji }, { title: withPlaceholders }]
+  });
+  assert.equal(cfg.contentTemplate.title, atLimit);
+  assert.equal(cfg.contentTemplates[1].title, withPlaceholders);
 });
 
 test('validate still accepts an empty template title, which falls back to the default', () => {

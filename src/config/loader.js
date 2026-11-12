@@ -80,6 +80,10 @@ export function readGitHubToken(env = process.env) {
 // so an issue that carries one fails on every run
 export const MAX_LABEL_NAME_LENGTH = 50;
 
+// GitHub rejects an issue whose title is longer than this (422 "title is too
+// long"), so a template title past it fails on every run
+export const MAX_ISSUE_TITLE_LENGTH = 256;
+
 // GitHub expects a list of label names; a bare string such as `labels: bug`
 // would be spread into one label per character ("b", "u", "g")
 function validateLabels(labels, label, errors) {
@@ -136,6 +140,15 @@ function validateContentTemplate(template, label, errors) {
   // is sent as is and GitHub rejects every issue with a blank title
   if (typeof template.title === 'string' && template.title !== '' && !template.title.trim()) {
     errors.push(`${label}.title must not be blank`);
+  }
+  // Placeholders are left out of the count since a value such as ${repo} may
+  // be shorter than its name; text that is over the limit even without them
+  // makes GitHub reject every issue created from this template
+  if (typeof template.title === 'string') {
+    const fixedLength = [...template.title.replace(/\$\{\w+\}/g, '')].length;
+    if (fixedLength > MAX_ISSUE_TITLE_LENGTH) {
+      errors.push(`${label}.title must be at most ${MAX_ISSUE_TITLE_LENGTH} characters, not counting placeholders (has ${fixedLength})`);
+    }
   }
   validateTemplateText(template.body, `${label}.body`, errors);
 }
