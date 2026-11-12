@@ -956,3 +956,15 @@ test('a per-repo opt-in is fixed even when not allowlisted', async (t) => {
 
   assert.equal(result.results[0].status, 'fixed', result.results[0].reason);
 });
+
+test('a failed authentication reports its reason and lists no pull requests', async () => {
+  const client = stubClient([]);
+  client.validate = async () => ({ success: false, error: 'Bad credentials' });
+  const fixer = new ConflictFixer('ghp_test', { client });
+
+  const result = await fixer.execute(config());
+
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'GitHub authentication failed: Bad credentials');
+  assert.equal(client.calls.list, 0);
+});

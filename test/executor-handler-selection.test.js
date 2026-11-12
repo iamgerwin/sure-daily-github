@@ -92,3 +92,15 @@ test('execute routes a loaded fixed-target issue config to IssueHandler', async 
 
   assert.deepEqual(calls, ['IssueHandler', 'AdvancedIssueHandler']);
 });
+
+test('execute reports why the advanced handler could not authenticate', async (t) => {
+  const init = mock.method(AdvancedIssueHandler.prototype, 'init', async () => ({ success: false, error: 'Bad credentials' }));
+  const process = mock.method(AdvancedIssueHandler.prototype, 'processRepositories', async () => []);
+  t.after(() => { init.mock.restore(); process.mock.restore(); });
+
+  const result = await executor.execute(issueConfig({ dailyTarget: { min: 1, max: 3 } }));
+
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'GitHub authentication failed: Bad credentials');
+  assert.equal(process.mock.callCount(), 0);
+});

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import CommitHandler from '../github/commit-handler.js';
 import IssueHandler from '../github/issue-handler.js';
 import AdvancedIssueHandler from '../github/advanced-issue-handler.js';
+import { authFailureMessage } from '../github/client.js';
 import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import config from '../config/loader.js';
@@ -144,7 +145,7 @@ class Executor {
       // Validate authentication
       const authResult = await handler.init();
       if (!authResult.success) {
-        throw new Error('GitHub authentication failed');
+        throw new Error(authFailureMessage(authResult));
       }
 
       logger.info('Authenticated with GitHub', { user: authResult.user, mode });
