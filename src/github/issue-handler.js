@@ -3,6 +3,7 @@ import state from '../utils/state.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
+import { uniqueLabels } from './advanced-issue-handler.js';
 
 class IssueHandler {
   // Without a token only the local-state methods (getStatus) are usable
@@ -123,7 +124,9 @@ class IssueHandler {
 
       // Generate issue content
       const { title, body } = this.generateIssueContent(contentTemplate, timezone, now, repo);
-      const labels = repoConfig.labels || ['automated'];
+      // Each label once, as in advanced issue mode: GitHub label names are
+      // case-insensitive, so ["bug", "Bug"] or a repeated name is one label
+      const labels = uniqueLabels(repoConfig.labels || ['automated']);
 
       // Rendered like a real run, so a dry run shows the title and labels an
       // issue would get (as advanced issue mode does)
