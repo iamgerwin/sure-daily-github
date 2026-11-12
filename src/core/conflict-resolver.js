@@ -16,8 +16,18 @@ const BINARY_SNIFF_CHARS = 8000;
 // added on the older side are never dropped
 const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.test\.js$/, /\.spec\.js$/];
 // A test(...) or it(...) registration at the start of a line: optionally
-// awaited, optionally on a receiver (t.test, suite.it), including .only/.skip/.todo
-const TEST_CALL = /^[ \t]*(?:await[ \t]+)?(?:[A-Za-z_$][\w$]*\.)?(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\(/gm;
+// awaited, optionally on a receiver (t.test, suite.it), including chained
+// modifiers (.only/.skip/.todo) and the parameterized and conditional forms
+// of Jest, Vitest and Playwright (test.each(table)(...), test.each`table`,
+// it.concurrent, test.skip.each, test.skipIf(cond)(...), test.fixme), each
+// counted once. Without them a resolution that drops a parameterized block
+// from a file that also has plain test(...) calls keeps the same count.
+// Hooks and groups (test.describe, test.beforeEach) are not tests.
+const TEST_MODIFIERS = 'only|skip|todo|each|concurrent|sequential|failing|fails|fixme|skipIf|runIf';
+const TEST_CALL = new RegExp(
+  `^[ \\t]*(?:await[ \\t]+)?(?:[A-Za-z_$][\\w$]*\\.)?(?:test|it)(?:\\.(?:${TEST_MODIFIERS}))*[ \\t]*[(\`]`,
+  'gm'
+);
 // Any test(...) or it(...) call, wherever it sits; seeing one when TEST_CALL
 // counts nothing means the file registers tests in a form we cannot count
 const ANY_TEST_CALL = /\b(?:test|it)\b(?:\.\w+)*[ \t]*\(/;

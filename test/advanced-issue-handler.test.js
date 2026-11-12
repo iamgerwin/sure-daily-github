@@ -381,6 +381,52 @@ test('status does not report a previous day\'s progress as today', async () => {
   assert.equal(status.lastIssueTime, new Date(yesterday).toISOString());
 });
 
+test('status does not report a target rolled for a dailyTarget range that has since changed', async () => {
+  const { handler, created } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: null, todayTarget: 5, targetRange: { min: 5, max: 5 }, nextIssueTime: null }
+    }
+  });
+  const edited = repo({ dailyTarget: { min: 2, max: 2 } });
+
+  const { repositories: [status] } = await handler.getStatus([edited], 'UTC');
+  assert.equal(status.todayTarget, 'Not set');
+  assert.equal(status.issuesCreatedToday, 1);
+
+  // The next run rolls a new target from the edited range instead of using 5
+  await handler.processRepositories([edited], {}, false, config);
+  assert.equal(created.length, 1);
+  assert.equal(readState(handler).repositories['me/demo'].todayTarget, 2);
+});
+
+test('status does not report a legacy target outside the configured dailyTarget range', async () => {
+  const { handler } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 0, lastIssueTime: null, todayTarget: 9, nextIssueTime: null }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo({ dailyTarget: { min: 1, max: 4 } })], 'UTC');
+  assert.equal(status.todayTarget, 'Not set');
+});
+
+test('status keeps reporting a rolled target while its dailyTarget range is unchanged', async () => {
+  const { handler } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 0, lastIssueTime: null, todayTarget: 3, targetRange: { min: 1, max: 4 }, nextIssueTime: null }
+    }
+  });
+
+  const { repositories: [status] } = await handler.getStatus([repo({ dailyTarget: { min: 1, max: 4 } })], 'UTC');
+  assert.equal(status.todayTarget, 3);
+});
+
 test('the daily reset keeps a pending interval from the previous day', async () => {
   const { handler, created } = createHandler();
   const yesterday = Date.now() - 36 * 60 * 60 * 1000;

@@ -130,6 +130,59 @@ test('selectRepositories weighted uses weights (stubbed Math.random sequence)', 
   }
 });
 
+test('weighted selection preserves odds when finite weights would overflow their sum', () => {
+  const repos = [
+    { id: 'A', enabled: true, weight: 1e308 },
+    { id: 'B', enabled: true, weight: 5e307 },
+    { id: 'C', enabled: true, weight: 5e307 }
+  ];
+  const originalRandom = Math.random;
+  try {
+    for (const [draw, expected] of [[0, 'A'], [0.25, 'A'], [0.6, 'B'], [0.9, 'C']]) {
+      Math.random = () => draw;
+      const selected = randomizer.selectRepositories(repos, { strategy: 'weighted', maxPerExecution: 1 });
+      assert.deepEqual(selected.map(repo => repo.id), [expected], `draw ${draw}`);
+    }
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('weighted selection handles subnormal weights and zero draws without selecting an underflowed weight', () => {
+  const originalRandom = Math.random;
+  try {
+    Math.random = () => 0.75;
+    const tiny = [
+      { id: 'A', enabled: true, weight: Number.MIN_VALUE },
+      { id: 'B', enabled: true, weight: Number.MIN_VALUE }
+    ];
+    assert.deepEqual(randomizer.selectWeightedRepositories(tiny, 1), [tiny[1]]);
+
+    Math.random = () => 0;
+    const mixed = [tiny[0], { id: 'large', enabled: true, weight: Number.MAX_VALUE }];
+    assert.deepEqual(randomizer.selectWeightedRepositories(mixed, 1), [mixed[1]]);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('weighted selection rescales the remaining pool after a large weight is removed', () => {
+  const repos = [
+    { id: 'large', enabled: true, weight: Number.MAX_VALUE },
+    { id: 'small', enabled: true, weight: Number.MIN_VALUE },
+    { id: 'default', enabled: true }
+  ];
+  const originalRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const selected = randomizer.selectRepositories(repos, { strategy: 'weighted' });
+    assert.deepEqual(selected.map(repo => repo.id), ['large', 'default', 'small']);
+    assert.deepEqual(repos.map(repo => repo.id), ['large', 'small', 'default']);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 // Seeded mulberry32 generator so the frequency check below can never flake
 function withSeededRandom(fn) {
   let seed = 12345;

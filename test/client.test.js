@@ -137,6 +137,36 @@ test('createOrUpdateFile does not write when the existence lookup fails with a n
   assert.equal(calls.put.length, 0);
 });
 
+test('createOrUpdateFile refuses to write over an existing directory', async () => {
+  const { client, calls } = stubClient({
+    getContent: async () => ({ data: [{ type: 'file', name: 'a.md', sha: 'x' }] })
+  });
+  const result = await client.createOrUpdateFile('me', 'demo', 'daily-updates/', 'hi', 'docs: update', 'main');
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Cannot write daily-updates: it is an existing directory, not a file/);
+  assert.equal(calls.put.length, 0);
+});
+
+test('createOrUpdateFile refuses to write over a symlink or submodule', async () => {
+  for (const type of ['symlink', 'submodule']) {
+    const { client, calls } = stubClient({ getContent: async () => ({ data: { type, sha: 'x' } }) });
+    const result = await client.createOrUpdateFile('me', 'demo', 'notes/link', 'hi', 'docs: update');
+
+    assert.equal(result.success, false);
+    assert.match(result.error, new RegExp(`it is an existing ${type}, not a file`));
+    assert.equal(calls.put.length, 0);
+  }
+});
+
+test('createOrUpdateFile updates an existing file reported with type file', async () => {
+  const { client, calls } = stubClient({ getContent: async () => ({ data: { type: 'file', sha: 'old' } }) });
+  const result = await client.createOrUpdateFile('me', 'demo', 'notes/today.md', 'hi', 'docs: update');
+
+  assert.equal(result.success, true);
+  assert.equal(calls.put[0].sha, 'old');
+});
+
 test('getFile normalizes the path and reports 404 as notFound', async () => {
   const { client, calls } = stubClient();
   const result = await client.getFile('me', 'demo', 'daily-updates//x.md');
@@ -244,4 +274,122 @@ test('validate() reports the API error that authFailureMessage passes on', async
   const result = await client.validate();
   assert.equal(result.success, false);
   assert.equal(result.error, 'Bad credentials');
+});
+
+function apiError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+// Babysit reads and writes go through these wrappers; the babysitter tests stub
+// the whole client, so the GitHub parameters they send are only checked here
+function stubBabysitClient({ fail = null } = {}) {
+  const client = new GitHubClient('ghp_test');
+  const calls = [];
+  const endpoint = (name, data) => async (params) => {
+    calls.push({ name, params });
+    if (fail?.[name]) throw fail[name];
+    return { data };
+  };
+  const rest = {
+    users: { getAuthenticated: endpoint('getAuthenticated', { login: 'octo', id: 42, name: 'ignored' }) },
+    pulls: {
+      get: endpoint('pulls.get', { number: 7, head: { sha: 'abc' } }),
+      listReviewComments: endpoint('pulls.listReviewComments', []),
+      listReviews: endpoint('pulls.listReviews', [])
+    },
+    issues: {
+      listComments: endpoint('issues.listComments', []),
+      createComment: endpoint('issues.createComment', { id: 99 })
+    }
+  };
+  const names = new Map([
+    [rest.pulls.listReviewComments, 'pulls.listReviewComments'],
+    [rest.pulls.listReviews, 'pulls.listReviews'],
+    [rest.issues.listComments, 'issues.listComments']
+  ]);
+  client.octokit = {
+    rest,
+    paginate: async (method, params) => {
+      const name = names.get(method);
+      calls.push({ name: `paginate:${name}`, params });
+      if (fail?.[name]) throw fail[name];
+      return [{ id: 1, via: name }];
+    }
+  };
+  return { client, calls };
+}
+
+test('getAuthenticatedUser returns only the login and id', async () => {
+  const { client } = stubBabysitClient();
+  assert.deepEqual(await client.getAuthenticatedUser(), { success: true, data: { login: 'octo', id: 42 } });
+});
+
+test('getAuthenticatedUser reports an auth failure with its status instead of throwing', async () => {
+  const { client } = stubBabysitClient({ fail: { getAuthenticated: apiError('Bad credentials', 401) } });
+  const result = await client.getAuthenticatedUser();
+  assert.equal(result.success, false);
+  assert.equal(result.status, 401);
+  assert.match(result.error, /Bad credentials/);
+});
+
+test('getPullRequest requests the pull by pull_number and returns its data', async () => {
+  const { client, calls } = stubBabysitClient();
+  const result = await client.getPullRequest('me', 'demo', 7);
+  assert.deepEqual(result, { success: true, data: { number: 7, head: { sha: 'abc' } } });
+  assert.deepEqual(calls, [{ name: 'pulls.get', params: { owner: 'me', repo: 'demo', pull_number: 7 } }]);
+});
+
+// babysitter.lookupHead treats status 404 as a deleted pull request and any
+// other failure as transient, so the status must survive the wrapper
+test('getPullRequest keeps the HTTP status of a failed lookup', async () => {
+  const gone = stubBabysitClient({ fail: { 'pulls.get': apiError('Not Found', 404) } });
+  const missing = await gone.client.getPullRequest('me', 'demo', 7);
+  assert.equal(missing.success, false);
+  assert.equal(missing.status, 404);
+
+  const flaky = stubBabysitClient({ fail: { 'pulls.get': apiError('fetch failed') } });
+  const transient = await flaky.client.getPullRequest('me', 'demo', 7);
+  assert.equal(transient.success, false);
+  assert.equal(transient.status, undefined);
+  assert.match(transient.error, /fetch failed/);
+});
+
+test('listing review comments, reviews and issue comments paginates every page of the pull request', async () => {
+  const { client, calls } = stubBabysitClient();
+  const results = [
+    await client.listReviewComments('me', 'demo', 7),
+    await client.listReviews('me', 'demo', 7),
+    await client.listIssueComments('me', 'demo', 7)
+  ];
+
+  assert.deepEqual(results.map(r => r.data[0].via), ['pulls.listReviewComments', 'pulls.listReviews', 'issues.listComments']);
+  assert.ok(results.every(r => r.success));
+  assert.deepEqual(calls, [
+    { name: 'paginate:pulls.listReviewComments', params: { owner: 'me', repo: 'demo', pull_number: 7, per_page: 100 } },
+    { name: 'paginate:pulls.listReviews', params: { owner: 'me', repo: 'demo', pull_number: 7, per_page: 100 } },
+    // Conversation comments live on the issue API, keyed by issue_number
+    { name: 'paginate:issues.listComments', params: { owner: 'me', repo: 'demo', issue_number: 7, per_page: 100 } }
+  ]);
+});
+
+test('a failed comment listing is reported with its status instead of throwing', async () => {
+  const { client } = stubBabysitClient({ fail: { 'pulls.listReviews': apiError('Server Error', 502) } });
+  const result = await client.listReviews('me', 'demo', 7);
+  assert.equal(result.success, false);
+  assert.equal(result.status, 502);
+  assert.match(result.error, /Server Error/);
+});
+
+test('createIssueComment posts to the pull request conversation by issue_number', async () => {
+  const { client, calls } = stubBabysitClient();
+  const result = await client.createIssueComment('me', 'demo', 7, 'Summary');
+  assert.deepEqual(result, { success: true, data: { id: 99 } });
+  assert.deepEqual(calls, [{ name: 'issues.createComment', params: { owner: 'me', repo: 'demo', issue_number: 7, body: 'Summary' } }]);
+
+  const failing = stubBabysitClient({ fail: { 'issues.createComment': apiError('Forbidden', 403) } });
+  const failed = await failing.client.createIssueComment('me', 'demo', 7, 'Summary');
+  assert.equal(failed.success, false);
+  assert.equal(failed.status, 403);
 });

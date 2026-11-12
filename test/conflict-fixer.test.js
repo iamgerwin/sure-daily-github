@@ -307,6 +307,11 @@ test('--pr filters to one pull request and requires a single repository', async 
   const unscoped = await fixer.run(config(), { scanOnly: true, pr: '8' });
   assert.equal(unscoped.success, false);
   assert.match(unscoped.error, /--pr requires exactly one --repo/);
+
+  // The same repository named twice is still one repository
+  const repeated = await fixer.run(config(), { scanOnly: true, repos: ['me/demo', 'Me/Demo'], pr: '8' });
+  assert.equal(repeated.success, true, repeated.error);
+  assert.deepEqual(repeated.results.map(r => r.pr), [8]);
 });
 
 test('invalid --pr values are rejected instead of matching nothing', async (t) => {

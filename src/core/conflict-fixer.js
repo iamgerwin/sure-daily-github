@@ -61,6 +61,13 @@ export function selectRepositories(repositories = [], filters = []) {
   return selected;
 }
 
+// Distinct owner/repo names (case-insensitive), the number of repositories
+// selectRepositories picks from the same filters. --pr needs exactly one, so
+// naming that repository twice (e.g. me/demo and Me/Demo) must still count once.
+export function distinctRepoCount(filters = []) {
+  return new Set(filters.map(filter => String(filter).toLowerCase())).size;
+}
+
 // Opt-in gate: returns the skip reason for a repository, or null if allowed.
 // With no configuration the allowlist is empty, so nothing is ever fixed.
 export function gateReason(repoConfig, conflictFixer = {}) {
@@ -216,7 +223,7 @@ class ConflictFixer {
   async execute(cfg, { repos = [], pr = null, dryRun = false, scanOnly = false, scanTimeoutSeconds = null } = {}) {
     try {
       const repositories = selectRepositories(cfg.repositories, repos);
-      if (pr !== null && pr !== undefined && repos.length !== 1) {
+      if (pr !== null && pr !== undefined && distinctRepoCount(repos) !== 1) {
         throw new Error('--pr requires exactly one --repo');
       }
       // Only plain digits: Number() would read "1e2", "0x10" or "7.0" as some
