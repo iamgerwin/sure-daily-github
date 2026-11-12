@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root so the service and a manual `cli.js run` share it
@@ -15,6 +16,28 @@ function lockFilePath() {
 function staleMs() {
   const value = Number(process.env.SDG_RUN_LOCK_STALE_MS);
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_STALE_MS;
+}
+
+// The raw SDG_RUN_LOCK_STALE_MS when it is set but not a positive number of
+// milliseconds (`4h`, `-1`, `0`), else null. Such a value falls back to the
+// 2-hour default, so a run raised past 2 hours on purpose (long test suites)
+// can have its lock reclaimed by a concurrent run that then races it.
+export function invalidRunLockStaleMs(raw = process.env.SDG_RUN_LOCK_STALE_MS) {
+  const text = String(raw ?? '').trim();
+  if (text === '') return null;
+  const value = Number(text);
+  return Number.isFinite(value) && value > 0 ? null : raw;
+}
+
+// Last invalid value reported, so a long-running scheduler that acquires the
+// lock every tick warns once per value instead of on every run
+let warnedStaleValue = null;
+
+function warnInvalidStaleMs() {
+  const invalid = invalidRunLockStaleMs();
+  if (invalid === null || invalid === warnedStaleValue) return;
+  warnedStaleValue = invalid;
+  logger.warn('Ignoring SDG_RUN_LOCK_STALE_MS (expected a positive number of milliseconds); a lock older than the 2-hour default is reclaimed', { value: invalid });
 }
 
 function isProcessAlive(pid) {
@@ -112,6 +135,7 @@ function reclaimStaleLock(filePath, staleRaw) {
 // Returns { acquired: true, release } or { acquired: false, holder }.
 // `filePath` selects a separate lock (pr-maint ticks must not wait on `run`).
 export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } = {}) {
+  warnInvalidStaleMs();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
   for (let attempt = 0; attempt < 2; attempt++) {

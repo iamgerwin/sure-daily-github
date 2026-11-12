@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { acquireRunLock } from '../src/utils/run-lock.js';
+import { acquireRunLock, invalidRunLockStaleMs } from '../src/utils/run-lock.js';
+import logger from '../src/utils/logger.js';
 import executor from '../src/core/executor.js';
 
 function useTmpLockFile(t) {
@@ -260,4 +261,51 @@ test('acquireRunLock leaves no moved-aside file after reclaiming a stale lock', 
   assert.equal(result.acquired, true);
   assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
   result.release();
+});
+
+function captureWarnings(t) {
+  const warnings = [];
+  const original = logger.warn;
+  logger.warn = (message, meta) => warnings.push({ message, meta });
+  t.after(() => { logger.warn = original; });
+  return warnings;
+}
+
+test('invalidRunLockStaleMs reports only a set value that is not a positive number', () => {
+  for (const ok of [undefined, '', '   ', '7200000', ' 14400000 ', '1e7']) {
+    assert.equal(invalidRunLockStaleMs(ok), null, `expected ${JSON.stringify(ok)} to be accepted`);
+  }
+  for (const bad of ['4h', '-1', '0', 'abc', '2 hours']) {
+    assert.equal(invalidRunLockStaleMs(bad), bad, `expected ${JSON.stringify(bad)} to be reported`);
+  }
+});
+
+test('acquireRunLock warns once per invalid SDG_RUN_LOCK_STALE_MS and still falls back to the default', (t) => {
+  const filePath = useTmpLockFile(t);
+  const warnings = captureWarnings(t);
+  process.env.SDG_RUN_LOCK_STALE_MS = '4h-test';
+
+  acquireRunLock().release();
+  acquireRunLock().release();
+
+  const staleWarnings = warnings.filter(w => /SDG_RUN_LOCK_STALE_MS/.test(w.message));
+  assert.equal(staleWarnings.length, 1);
+  assert.equal(staleWarnings[0].meta.value, '4h-test');
+
+  // The 2-hour default still applies: a live holder started 3 hours ago is reclaimed
+  writeForeignLock(filePath, { startedAt: Date.now() - 3 * 60 * 60 * 1000 });
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  result.release();
+});
+
+test('acquireRunLock does not warn for a valid or unset SDG_RUN_LOCK_STALE_MS', (t) => {
+  useTmpLockFile(t);
+  const warnings = captureWarnings(t);
+
+  acquireRunLock().release();
+  process.env.SDG_RUN_LOCK_STALE_MS = ' 14400000 ';
+  acquireRunLock().release();
+
+  assert.equal(warnings.filter(w => /SDG_RUN_LOCK_STALE_MS/.test(w.message)).length, 0);
 });
