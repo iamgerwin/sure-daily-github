@@ -34,6 +34,12 @@ restart_service() {
   fi
 }
 
+# Surrounding whitespace (a quoted crontab or env-file value such as " 90") is
+# ignored, as the scheduler does for SDG_MAX_EXECUTION_MINUTES; rejecting it
+# would silently turn the hang check off
+HEARTBEAT_MAX_AGE_MINUTES="${HEARTBEAT_MAX_AGE_MINUTES#"${HEARTBEAT_MAX_AGE_MINUTES%%[![:space:]]*}"}"
+HEARTBEAT_MAX_AGE_MINUTES="${HEARTBEAT_MAX_AGE_MINUTES%"${HEARTBEAT_MAX_AGE_MINUTES##*[![:space:]]}"}"
+[ -z "$HEARTBEAT_MAX_AGE_MINUTES" ] && HEARTBEAT_MAX_AGE_MINUTES=0
 if ! [[ "$HEARTBEAT_MAX_AGE_MINUTES" =~ ^[0-9]+$ ]]; then
   log "⚠️  Ignoring HEARTBEAT_MAX_AGE_MINUTES=$HEARTBEAT_MAX_AGE_MINUTES (expected whole minutes)"
   HEARTBEAT_MAX_AGE_MINUTES=0

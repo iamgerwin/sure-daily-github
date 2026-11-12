@@ -38,7 +38,7 @@ The restarted scheduler writes a fresh heartbeat on start, so a heartbeat that i
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `HEARTBEAT_MAX_AGE_MINUTES` | `0` (off) | Heartbeat age, in whole minutes, after which a running service is restarted |
+| `HEARTBEAT_MAX_AGE_MINUTES` | `0` (off) | Heartbeat age, in whole minutes, after which a running service is restarted. Surrounding whitespace is ignored; any other non-numeric value is logged and turns the check off |
 | `SDG_MAX_EXECUTION_MINUTES` | unset (off) | Set on the service: minutes an execution may stay in flight before skipped ticks stop refreshing the heartbeat |
 | `SDG_HEARTBEAT_FILE` | `data/scheduler-heartbeat.json` | Heartbeat location; set the same value for the service and the health check |
 | `SDG_APP_DIR` | the script's parent directory | Install directory holding `logs/` and `data/` |
