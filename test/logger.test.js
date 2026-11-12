@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import logger, { Logger, resolveLogLevel, resolveRetentionDays, shouldUseColor } from '../src/utils/logger.js';
+import logger, { Logger, invalidLogLevel, resolveLogLevel, resolveRetentionDays, shouldUseColor } from '../src/utils/logger.js';
 
 function withLogLevel(value, fn) {
   const original = process.env.LOG_LEVEL;
@@ -33,11 +33,67 @@ test('resolveLogLevel falls back to info for missing or unknown values', () => {
 });
 
 test('an unknown LOG_LEVEL still logs errors', () => {
-  withLogLevel('verbose', () => {
-    assert.equal(logger.shouldLog('error'), true);
-    assert.equal(logger.shouldLog('info'), true);
-    assert.equal(logger.shouldLog('debug'), false);
-  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    captureConsole(() => withLogLevel('verbose', () => {
+      assert.equal(fileLogger.shouldLog('error'), true);
+      assert.equal(fileLogger.shouldLog('info'), true);
+      assert.equal(fileLogger.shouldLog('debug'), false);
+    }));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('invalidLogLevel names only a set value that is not a level', () => {
+  assert.equal(invalidLogLevel(undefined), null);
+  assert.equal(invalidLogLevel(''), null);
+  assert.equal(invalidLogLevel('  '), null);
+  assert.equal(invalidLogLevel('debug'), null);
+  assert.equal(invalidLogLevel(' WARN '), null);
+  assert.equal(invalidLogLevel('deubg'), 'deubg');
+  assert.equal(invalidLogLevel('toString'), 'toString');
+});
+
+test('an unknown LOG_LEVEL is warned about once per value, in the console and the log file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    const lines = captureConsole(() => {
+      withLogLevel('deubg', () => {
+        fileLogger.info('first');
+        fileLogger.info('second');
+      });
+      withLogLevel('verbose', () => fileLogger.info('third'));
+      withLogLevel('debug', () => fileLogger.info('fourth'));
+    });
+    const warnings = lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line));
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0], /\[WARN\].*logging at info.*"value":"deubg"/);
+    assert.match(warnings[1], /"value":"verbose"/);
+    assert.equal(lines.log.filter(line => /\] (first|second|third|fourth)$/.test(line)).length, 4);
+    const [file] = fs.readdirSync(dir);
+    assert.match(fs.readFileSync(path.join(dir, file), 'utf8'), /Ignoring LOG_LEVEL.*"value":"deubg"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a valid or unset LOG_LEVEL is not warned about', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    const lines = captureConsole(() => {
+      withLogLevel(undefined, () => fileLogger.info('unset'));
+      withLogLevel('', () => fileLogger.info('blank'));
+      withLogLevel(' INFO ', () => fileLogger.info('padded'));
+    });
+    assert.equal(lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
+    assert.equal(lines.log.length, 3);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('uppercase LOG_LEVEL is honored', () => {

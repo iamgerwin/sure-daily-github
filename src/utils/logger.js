@@ -17,6 +17,13 @@ export function resolveLogLevel(value) {
   return Object.hasOwn(LOG_LEVELS, level) ? level : 'info';
 }
 
+// The raw LOG_LEVEL when it is set but names no level, so the logger can warn
+// that a typo ("deubg") is running at info; else null
+export function invalidLogLevel(value) {
+  const level = String(value ?? '').trim().toLowerCase();
+  return level === '' || Object.hasOwn(LOG_LEVELS, level) ? null : value;
+}
+
 // Color escapes only help a terminal: under systemd, pm2, cron or a pipe they
 // land in the captured output as literal "[36m" noise. A non-empty NO_COLOR
 // (https://no-color.org) turns them off on a terminal too.
@@ -48,6 +55,7 @@ export class Logger {
     this.color = color;
     this.fileErrorReported = false;
     this.lastPrunedDay = null;
+    this.reportedInvalidLevel = null;
     this.ensureLogDir();
   }
 
@@ -102,8 +110,16 @@ export class Logger {
 
   // Read on every call: this module is imported before loader.js runs
   // dotenv.config(), so LOG_LEVEL from .env is not set at construction time
+  // A LOG_LEVEL that names no level is reported once per distinct value
+  // (marked before writing, since write() reads the level again)
   get level() {
-    return resolveLogLevel(process.env.LOG_LEVEL);
+    const raw = process.env.LOG_LEVEL;
+    const invalid = invalidLogLevel(raw);
+    if (invalid !== null && invalid !== this.reportedInvalidLevel) {
+      this.reportedInvalidLevel = invalid;
+      this.write('warn', 'Ignoring LOG_LEVEL (expected error, warn, info or debug); logging at info', { value: invalid });
+    }
+    return resolveLogLevel(raw);
   }
 
   shouldLog(level) {
