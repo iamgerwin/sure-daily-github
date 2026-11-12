@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import AdvancedIssueHandler, { uniqueLabels } from '../src/github/advanced-issue-handler.js';
 import { describeFailures } from '../src/core/executor.js';
 import loader, { DEFAULT_CONTENT_TEMPLATE } from '../src/config/loader.js';
+import logger from '../src/utils/logger.js';
 
 const config = { general: { timezone: 'UTC' }, randomization: {}, contentTemplates: [] };
 
@@ -262,6 +263,47 @@ test('backs up a corrupt state file instead of silently discarding it', async ()
 
   assert.deepEqual(state.repositories, {});
   assert.ok(fs.readdirSync(dir).some(f => f.startsWith('issue-state.json.corrupt-')));
+});
+
+function captureErrors(t) {
+  const calls = [];
+  const original = logger.error;
+  logger.error = (message, meta) => calls.push({ message, meta });
+  t.after(() => { logger.error = original; });
+  return calls;
+}
+
+test('names the backup of a corrupt state file in the load error', async (t) => {
+  const { handler } = createHandler();
+  const dir = path.dirname(handler.stateFile);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(handler.stateFile, 'not json');
+  const errors = captureErrors(t);
+
+  await handler.loadState();
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].message, 'Failed to load issue state, starting fresh');
+  assert.match(errors[0].meta.backup, /issue-state\.json\.corrupt-\d+$/);
+  assert.equal(fs.readFileSync(errors[0].meta.backup, 'utf8'), 'not json');
+});
+
+test('does not name a backup when the unreadable state file cannot be copied', async (t) => {
+  const { handler } = createHandler();
+  const dir = path.dirname(handler.stateFile);
+  // A directory in place of the file: reading and copying both fail, as for
+  // a file without read permission (which root could still read)
+  fs.mkdirSync(handler.stateFile, { recursive: true });
+  const errors = captureErrors(t);
+
+  const state = await handler.loadState();
+
+  assert.deepEqual(state.repositories, {});
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /could not be backed up and the next save replaces it/);
+  assert.equal(errors[0].meta.backup, undefined);
+  assert.ok(errors[0].meta.backupError);
+  assert.ok(!fs.readdirSync(dir).some(f => f.startsWith('issue-state.json.corrupt-')));
 });
 
 function writeState(handler, state) {
