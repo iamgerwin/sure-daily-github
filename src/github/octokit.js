@@ -15,9 +15,11 @@ export const SECONDARY_RATE_LIMIT_DELAY_MS = 60000;
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD']);
 
 // Capped at the timer limit: AbortSignal.timeout fires after 1ms beyond it, which
-// would abort every request at once
+// would abort every request at once. Rounded down to whole milliseconds:
+// AbortSignal.timeout throws a RangeError for a fractional delay, which would
+// fail every GitHub request; a value below 1ms falls back to the default.
 export function getRequestTimeoutMs() {
-  const value = Number(process.env.GITHUB_REQUEST_TIMEOUT_MS);
+  const value = Math.floor(Number(process.env.GITHUB_REQUEST_TIMEOUT_MS));
   return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 

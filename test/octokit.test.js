@@ -392,6 +392,29 @@ test('getRequestTimeoutMs caps GITHUB_REQUEST_TIMEOUT_MS at the timer limit', ()
   }
 });
 
+test('getRequestTimeoutMs rounds a fractional GITHUB_REQUEST_TIMEOUT_MS down to whole milliseconds', () => {
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '1500.7';
+  try {
+    assert.equal(getRequestTimeoutMs(), 1500);
+    process.env.GITHUB_REQUEST_TIMEOUT_MS = '0.5';
+    assert.equal(getRequestTimeoutMs(), 30000);
+  } finally {
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+  }
+});
+
+test('a fractional GITHUB_REQUEST_TIMEOUT_MS does not fail every request', async () => {
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '30000.5';
+  const srv = await startServer([{ status: 200 }]);
+  try {
+    const { data } = await srv.octokit.request('GET /user');
+    assert.equal(data.login, 'me');
+  } finally {
+    srv.close();
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+  }
+});
+
 test('a very long GITHUB_REQUEST_TIMEOUT_MS does not abort requests at once', async () => {
   process.env.GITHUB_REQUEST_TIMEOUT_MS = '9999999999';
   const srv = await startServer([{ status: 200 }]);
