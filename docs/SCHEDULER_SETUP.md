@@ -143,7 +143,7 @@ journalctl -u sure-daily-github -n 50
 
 - **Main Scheduler**: `/opt/sure-daily-github/src/cli.js`
 - **Configuration**: `/opt/sure-daily-github/config/config.yaml`
-- **State File**: `/opt/sure-daily-github/data/issue-state.json`
+- **State Files**: `/opt/sure-daily-github/data/state.json` (commit and simple issue mode counters) and `/opt/sure-daily-github/data/issue-state.json` (advanced issue mode); `verify-status.sh` reports whichever exists
 - **Systemd Service**: `/etc/systemd/system/sure-daily-github.service`
 - **Health Check Script**: `/opt/sure-daily-github/scripts/health-check.sh`
 - **Status Script**: `/opt/sure-daily-github/scripts/verify-status.sh`

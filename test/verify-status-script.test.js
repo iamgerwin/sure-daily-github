@@ -21,6 +21,7 @@ function run(appDir, env = {}) {
   const baseEnv = { ...process.env };
   delete baseEnv.CONFIG_PATH;
   delete baseEnv.SDG_ISSUE_STATE_FILE;
+  delete baseEnv.SDG_STATE_FILE;
   delete baseEnv.SDG_HEARTBEAT_FILE;
   return execFileSync('bash', [path.join(appDir, 'scripts/verify-status.sh')], {
     encoding: 'utf8',
@@ -95,8 +96,46 @@ test('verify-status names the paths it looked at when files are missing', (t) =>
 
   assert.match(output, new RegExp(`No logs found in ${appDir}/logs`));
   assert.match(output, new RegExp(`Config file not found: ${appDir}/config/config\\.yaml`));
-  assert.match(output, new RegExp(`State file not found: ${appDir}/data/issue-state\\.json`));
+  assert.match(output, new RegExp(`State file not found: ${appDir}/data/state\\.json or ${appDir}/data/issue-state\\.json`));
   assert.match(output, new RegExp(`No scheduler heartbeat at ${appDir}/data/scheduler-heartbeat\\.json`));
+});
+
+test('verify-status reports the counter state of commit and simple issue mode', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  // Written by state.js with two-space indentation; no issue-state.json exists
+  fs.writeFileSync(path.join(appDir, 'data/state.json'), JSON.stringify({
+    repositories: {
+      'me/older': { lastCommitDate: '2026-11-02', totalCommits: 3 },
+      'me/newer': { lastCommitDate: '2026-11-05', totalCommits: 1 },
+      'me/issues-only': { lastCommitDate: null, totalCommits: 0 }
+    },
+    meta: { version: 2 }
+  }, null, 2));
+
+  const output = run(appDir);
+
+  assert.match(output, new RegExp(`Counter state: ${appDir}/data/state\\.json`));
+  assert.match(output, /Last commit: 2026-11-05/);
+  assert.doesNotMatch(output, /State file not found/);
+  assert.doesNotMatch(output, /Issue state:/);
+});
+
+test('verify-status honors SDG_STATE_FILE and reports a state without commits', (t) => {
+  const appDir = makeAppDir();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-verify-state-'));
+  t.after(() => {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+  const stateFile = path.join(elsewhere, 'counters.json');
+  fs.writeFileSync(stateFile, JSON.stringify({ repositories: {}, meta: { version: 2 } }, null, 2));
+
+  const output = run(appDir, { SDG_STATE_FILE: stateFile });
+
+  assert.match(output, new RegExp(`Counter state: ${stateFile}`));
+  assert.match(output, /Last commit: none recorded/);
+  assert.doesNotMatch(output, /State file not found/);
 });
 
 test('verify-status shows the last scheduler tick and the heartbeat age', (t) => {
