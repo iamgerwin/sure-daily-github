@@ -266,6 +266,26 @@ test('validate keeps valid repository paths and defaults a missing path', () => 
   assert.deepEqual(cfg.repositories.map(repo => repo.path), ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024, 'daily-updates']);
 });
 
+test('validate trims whitespace around a repository path so commits land in the intended folder', () => {
+  const repos = [' daily-updates ', '\tnotes/daily\n', ' / '].map((repoPath, i) => ({ owner: 'me', repo: `r${i}`, path: repoPath }));
+  const cfg = config.validate({ repositories: repos });
+  assert.deepEqual(cfg.repositories.map(repo => repo.path), ['daily-updates', 'notes/daily', '/']);
+});
+
+test('validate rejects a whitespace-only repository path and checks "." segments after trimming', () => {
+  for (const repoPath of [' ', '\t\n']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, path: repoPath }] }),
+      /Repository 0: path must not be blank/,
+      `path ${JSON.stringify(repoPath)} should be rejected`
+    );
+  }
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, path: ' ./updates' }] }),
+    /Repository 0: path must not contain "\." or "\.\." segments/
+  );
+});
+
 test('validate rejects random title lists that are not lists of non-empty strings, even with randomization off', () => {
   for (const key of ['bugTitles', 'featureTitles', 'docTitles', 'perfTitles']) {
     for (const value of ['Login fails', ['ok', ''], ['ok', 3], { a: 'b' }]) {

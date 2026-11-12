@@ -106,14 +106,24 @@ function repoNameText(value) {
 }
 
 // The commit path is checked by normalizeRepoPath only when a commit is made,
-// so "./updates" or "../x" would pass `validate` and then fail every commit
+// so "./updates" or "../x" would pass `validate` and then fail every commit.
+// Surrounding whitespace is trimmed (see repoPathText); a path of nothing but
+// whitespace would be kept as a folder named "  " instead of the default.
 function validateRepoPath(repoPath, label, errors) {
   if (repoPath === undefined || repoPath === null) return;
   if (typeof repoPath !== 'string' && typeof repoPath !== 'number') {
     errors.push(`${label} must be a directory path string`);
-  } else if (String(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
+  } else if (typeof repoPath === 'string' && repoPath !== '' && !repoPath.trim()) {
+    errors.push(`${label} must not be blank`);
+  } else if (repoPathText(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
     errors.push(`${label} must not contain "." or ".." segments`);
   }
+}
+
+// A quoted " daily-updates " would otherwise commit into a folder whose name
+// starts and ends with a space, beside the intended one
+function repoPathText(repoPath) {
+  return typeof repoPath === 'string' ? repoPath.trim() : String(repoPath);
 }
 
 // Template text is run through String#replace at commit/issue time, so a YAML
@@ -595,7 +605,7 @@ class ConfigLoader {
           // every commit target a branch that does not exist
           branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch).trim(),
           dailyTarget: normalizeDailyTarget(repoTarget),
-          path: repo.path || 'daily-updates',
+          path: (typeof repo.path === 'string' ? repo.path.trim() : repo.path) || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',
           labels: repo.labels || ['automated'],
           weight: repo.weight || 1,
