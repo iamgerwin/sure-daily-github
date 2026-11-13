@@ -180,6 +180,9 @@ export function normalizePullRequest(node) {
     mergeStateStatus: node.mergeStateStatus,
     author: node.author?.login || null,
     labels: (node.labels?.nodes || []).map(l => l.name),
+    // Set when a later page of review threads could not be read: the list is
+    // partial, so decide() holds the PR instead of judging it on what was read
+    threadsIncomplete: Boolean(node.reviewThreadsIncomplete),
     reviewThreads: (node.reviewThreads?.nodes || []).map(t => ({
       id: t.id,
       isResolved: Boolean(t.isResolved),
@@ -237,9 +240,12 @@ export class PrMaintGitHub {
     while (cursor) {
       const data = await this.octokit.graphql(REVIEW_THREADS_QUERY, { owner, repo, number: node.number, cursor });
       const page = data.repository?.pullRequest?.reviewThreads;
-      // Gone since the snapshot page (deleted, or no longer visible): keep what
-      // was read; the open-state policy rule denies writes to a closed PR
-      if (!page) return;
+      // Gone since the snapshot page (deleted, or no longer visible): the list
+      // is partial, so the PR is marked and decide() plans nothing for it
+      if (!page) {
+        node.reviewThreadsIncomplete = true;
+        return;
+      }
       threads.nodes = [...(threads.nodes || []), ...(page.nodes || [])];
       cursor = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
     }

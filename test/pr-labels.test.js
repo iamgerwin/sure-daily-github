@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
+import { decide } from '../src/core/pr-maint.js';
 
 const OWNER = 'iamgerwin';
 
@@ -277,7 +278,7 @@ test('fetchSnapshot reads every review thread of a PR with more than one page of
   ]);
 });
 
-test('fetchSnapshot keeps the threads already read when the PR disappears between pages', async () => {
+test('fetchSnapshot marks the thread list incomplete when the PR disappears between pages', async () => {
   const node = {
     number: 4, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE', author: { login: OWNER },
     labels: { nodes: [] }, reviews: { nodes: [] },
@@ -290,6 +291,11 @@ test('fetchSnapshot keeps the threads already read when the PR disappears betwee
   });
   const snapshot = await github.fetchSnapshot(OWNER, 'demo');
   assert.deepEqual(snapshot.prs[0].reviewThreads.map(t => t.id), ['T1']);
+  assert.equal(snapshot.prs[0].threadsIncomplete, true);
+  // A partial list is never judged: no label, sticky, status or thread write
+  const [row] = decide(snapshot, { prs: {}, escalations: {} }, { mode: 'act', authors: [OWNER], owner: OWNER, now: Date.now(), pr: null }).prs;
+  assert.equal(row.skip, 'threads');
+  assert.deepEqual(row.actions, []);
 });
 
 test('rollupState leaves out our own status and reports the worst remaining state', () => {

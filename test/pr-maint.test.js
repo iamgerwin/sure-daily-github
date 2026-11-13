@@ -91,6 +91,15 @@ test('decide: automation-paused PRs are skipped with no actions at all', () => {
   assert.deepEqual(row.actions, []);
 });
 
+test('decide: a PR whose review threads could not all be read is held with no actions', () => {
+  const ledger = emptyLedger();
+  ledger.prs['9'] = { fingerprint: 'old', mode: 'act', managedLabels: ['sdg:waiting'] };
+  const [row] = only([pr(9, { labels: ['sdg:waiting'], threadsIncomplete: true })], ledger);
+  assert.equal(row.skip, 'threads');
+  assert.equal(row.changed, false);
+  assert.deepEqual(row.actions, []);
+});
+
 test('decide: fork and non-allowlisted PRs are skipped', () => {
   const rows = only([pr(7, { isCrossRepository: true }), pr(8, { author: 'stranger' })]);
   assert.deepEqual(rows.map(r => [r.number, r.skip, r.actions.length]), [[7, 'fork', 0], [8, 'author', 0]]);
