@@ -122,6 +122,10 @@ const REVIEW_THREADS_QUERY = `
   }
 `;
 
+// Further thread pages read per PR at most (5,000 threads past the first 100);
+// a PR beyond it is marked incomplete rather than read without end
+export const MAX_THREAD_PAGES = 50;
+
 const PIN_ISSUE_MUTATION = `
   mutation ($issueId: ID!) {
     pinIssue(input: { issueId: $issueId }) { issue { number } }
@@ -237,7 +241,16 @@ export class PrMaintGitHub {
   async readRemainingThreads(owner, repo, node) {
     const threads = node.reviewThreads;
     let cursor = threads?.pageInfo?.hasNextPage ? threads.pageInfo.endCursor : null;
+    const seen = new Set();
     while (cursor) {
+      // A cursor that repeats (a malformed response) or a PR past the page cap
+      // would loop on: stop, and mark the list partial so decide() holds it
+      if (seen.has(cursor) || seen.size >= MAX_THREAD_PAGES) {
+        logger.warn('pr-maint review threads not fully read', { repo: `${owner}/${repo}`, pr: node.number, pages: seen.size });
+        node.reviewThreadsIncomplete = true;
+        return;
+      }
+      seen.add(cursor);
       const data = await this.octokit.graphql(REVIEW_THREADS_QUERY, { owner, repo, number: node.number, cursor });
       const page = data.repository?.pullRequest?.reviewThreads;
       // Gone since the snapshot page (deleted, or no longer visible): the list

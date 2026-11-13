@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
+import { PrMaintGitHub, LABEL_DEFINITIONS, MAX_THREAD_PAGES, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
 import { decide } from '../src/core/pr-maint.js';
 
@@ -296,6 +296,29 @@ test('fetchSnapshot marks the thread list incomplete when the PR disappears betw
   const [row] = decide(snapshot, { prs: {}, escalations: {} }, { mode: 'act', authors: [OWNER], owner: OWNER, now: Date.now(), pr: null }).prs;
   assert.equal(row.skip, 'threads');
   assert.deepEqual(row.actions, []);
+});
+
+test('fetchSnapshot stops on a repeated thread cursor and on the page cap, marking the list incomplete', async () => {
+  const node = (number) => ({
+    number, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE', author: { login: OWNER },
+    labels: { nodes: [] }, reviews: { nodes: [] },
+    reviewThreads: { nodes: [{ id: `T${number}-0`, isResolved: true }], pageInfo: { hasNextPage: true, endCursor: 'c0' } }
+  });
+  const { github, calls } = await client({
+    graphql: (vars) => {
+      if (vars.number === undefined) {
+        return { repository: { pausedIssues: { nodes: [] }, pullRequests: { nodes: [node(1), node(2)], pageInfo: { hasNextPage: false } } } };
+      }
+      // #1 always answers the same cursor; #2 always has a fresh next page
+      const n = calls.filter(c => c.params.number === vars.number).length;
+      const endCursor = vars.number === 1 ? 'c0' : `c${n}`;
+      return { repository: { pullRequest: { reviewThreads: { nodes: [{ id: `T${vars.number}-${n}`, isResolved: true }], pageInfo: { hasNextPage: true, endCursor } } } } };
+    }
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.equal(calls.filter(c => c.params.number === 1).length, 1);
+  assert.equal(calls.filter(c => c.params.number === 2).length, MAX_THREAD_PAGES);
+  assert.deepEqual(snapshot.prs.map(p => p.threadsIncomplete), [true, true]);
 });
 
 test('rollupState leaves out our own status and reports the worst remaining state', () => {
