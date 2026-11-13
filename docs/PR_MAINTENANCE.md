@@ -92,7 +92,9 @@ changes, the mode changes, or its managed labels differ from what the ledger rec
 managed label someone else added or removed is reconciled). `checks` is computed from the check contexts *without*
 `sdg/merge-policy`, and the sticky comment isn't part of the snapshot, so none of our own writes wake a PR. `checks` is
 `SUCCESS` only when every context passes the way a required status check does (`SUCCESS`, `NEUTRAL` or `SKIPPED`); a
-failed one makes it `FAILURE`, and anything else (in progress, `STALE`, or a value GitHub adds later) `PENDING`. An idle tick
+failed one makes it `FAILURE`, and anything else (in progress, `STALE`, or a value GitHub adds later) `PENDING`. Only the
+first 100 contexts of the head commit are read; when GitHub has more, `checks` is never `SUCCESS` (a failure among the
+first 100 is still `FAILURE`, otherwise `PENDING`), because an unread context may have failed. An idle tick
 costs one GraphQL query, one dashboard read, and no writes.
 
 **Idempotency.** GitHub is the source of truth. Labels are compared against the snapshot. The status is only posted when

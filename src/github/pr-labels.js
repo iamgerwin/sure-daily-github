@@ -63,6 +63,7 @@ const SNAPSHOT_QUERY = `
                       ... on CheckRun { name status conclusion }
                       ... on StatusContext { context state }
                     }
+                    pageInfo { hasNextPage }
                   }
                 }
               }
@@ -91,6 +92,7 @@ const FRESH_CHECKS_QUERY = `
                     ... on CheckRun { name status conclusion }
                     ... on StatusContext { context state }
                   }
+                  pageInfo { hasNextPage }
                 }
               }
             }
@@ -124,8 +126,10 @@ export function restMergeable(data) {
 }
 
 // GitHub's own rollup counts our sdg/merge-policy status, so posting it would
-// change the fingerprint and wake the next tick; this one leaves it out
-export function rollupState(contexts = []) {
+// change the fingerprint and wake the next tick; this one leaves it out.
+// `truncated` means GitHub holds more contexts than the page read: an unread
+// one may have failed, so the result is at best PENDING, never SUCCESS.
+export function rollupState(contexts = [], { truncated = false } = {}) {
   const states = contexts
     .filter(c => c && c.context !== MERGE_POLICY_CONTEXT)
     .map(c => {
@@ -135,8 +139,9 @@ export function rollupState(contexts = []) {
       if (FAILED_CONCLUSIONS.has(outcome)) return 'FAILURE';
       return PASSING_CONCLUSIONS.has(outcome) ? 'SUCCESS' : 'PENDING';
     });
-  if (states.length === 0) return null;
   if (states.includes('FAILURE')) return 'FAILURE';
+  if (truncated) return 'PENDING';
+  if (states.length === 0) return null;
   if (states.includes('PENDING')) return 'PENDING';
   return 'SUCCESS';
 }
@@ -146,8 +151,15 @@ export function mergePolicyState(contexts = []) {
   return contexts.find(c => c?.context === MERGE_POLICY_CONTEXT)?.state || null;
 }
 
+// rollupState arguments for a commit: the contexts read and whether GitHub
+// holds more than that page
+function rollupArgs(commit) {
+  const page = commit?.statusCheckRollup?.contexts;
+  return [page?.nodes || [], { truncated: Boolean(page?.pageInfo?.hasNextPage) }];
+}
+
 export function normalizePullRequest(node) {
-  const contexts = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
+  const [contexts, options] = rollupArgs(node.commits?.nodes?.[0]?.commit);
   return {
     number: node.number,
     isDraft: Boolean(node.isDraft),
@@ -166,7 +178,7 @@ export function normalizePullRequest(node) {
       lastCommentId: t.latest?.nodes?.[0]?.id || null
     })),
     reviews: (node.reviews?.nodes || []).map(r => ({ id: r.id, state: r.state, author: r.author?.login || null })),
-    checks: rollupState(contexts),
+    checks: rollupState(contexts, options),
     mergePolicy: mergePolicyState(contexts)
   };
 }
@@ -220,7 +232,7 @@ export class PrMaintGitHub {
       const result = await this.octokit.graphql(FRESH_CHECKS_QUERY, { owner, repo, number });
       const commit = result.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
       fresh.checks = commit && commit.oid === fresh.headRefOid
-        ? rollupState(commit.statusCheckRollup?.contexts?.nodes || [])
+        ? rollupState(...rollupArgs(commit))
         : null;
     }
     return fresh;
