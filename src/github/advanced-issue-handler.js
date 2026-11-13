@@ -14,6 +14,14 @@ const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isCount = (value) => Number.isInteger(value) && value >= 0;
+// ISO string for a stored instant, or null when it cannot be placed in time
+// (hand edit, or a number past the Date range): toISOString() and Intl would
+// throw a RangeError and fail the whole status report for one bad field
+const toIsoOrNull = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+};
 // The loader normalizes dailyTarget to { min, max }; a bare number is one value
 const targetBounds = (dailyTarget) => (typeof dailyTarget === 'object'
   ? dailyTarget
@@ -500,7 +508,7 @@ class AdvancedIssueHandler {
         : todayState.nextIssueTime;
       // An elapsed interval no longer holds the repo back (processRepositories
       // only waits while now < nextIssueTime), so it must not read as a future time
-      const waiting = nextIssueTime && now < nextIssueTime;
+      const nextIssueAt = nextIssueTime && now < nextIssueTime ? toIsoOrNull(nextIssueTime) : null;
       // A target rolled for a dailyTarget that has since been edited is
       // replaced by the next run, so it is not the target that run works to
       const targetApplies = !repo.dailyTarget || this.keepsTodayTarget(todayState, repo.dailyTarget);
@@ -508,14 +516,16 @@ class AdvancedIssueHandler {
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
         todayTarget: (targetApplies && todayState.todayTarget) || 'Not set',
-        lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: waiting ? new Date(nextIssueTime).toISOString() : 'Any time'
+        lastIssueTime: toIsoOrNull(repoState.lastIssueTime) || 'Never',
+        nextIssueTime: nextIssueAt || 'Any time'
       });
     }
     
     // The CLI renders these instants in the configured timezone, not the host's
+    // An unparseable reset time is treated as no reset (shouldResetDaily does
+    // the same), so the CLI omits the line instead of failing after the table
     return {
-      lastDailyReset: state.lastDailyReset,
+      lastDailyReset: toIsoOrNull(state.lastDailyReset),
       timezone,
       repositories: statuses
     };

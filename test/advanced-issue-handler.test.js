@@ -326,6 +326,22 @@ test('keeps a valid count from an existing entry', async () => {
   assert.equal(created.length, 1);
 });
 
+test('status reports unparseable stored times as absent instead of throwing', async () => {
+  const { handler } = createHandler();
+  writeState(handler, {
+    lastDailyReset: 'not-a-date',
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: 'garbage', todayTarget: 3, nextIssueTime: 1e20 }
+    }
+  });
+
+  const { lastDailyReset, repositories: [status] } = await handler.getStatus([repo()], 'UTC');
+
+  assert.equal(lastDailyReset, null);
+  assert.equal(status.lastIssueTime, 'Never');
+  assert.equal(status.nextIssueTime, 'Any time');
+});
+
 test('status reports today\'s progress when state is from the current day', async () => {
   const { handler } = createHandler();
   const next = Date.now() + 60 * 60 * 1000;

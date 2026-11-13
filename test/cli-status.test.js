@@ -102,6 +102,48 @@ test('advanced issue-mode status dates a next issue that falls on a later day', 
   assert.match(row, new RegExp(`${date} ${hhmm('UTC', next)} │$`));
 });
 
+test('advanced issue-mode status still prints when stored times are unparseable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  const issueStateFile = path.join(dir, 'issue-state.json');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  timezone: "UTC"',
+    '  mode: "issue"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    '    dailyTarget: { min: 1, max: 3 }',
+    ''
+  ].join('\n'));
+  // A hand-edited state file: neither value can be placed in time
+  fs.writeFileSync(issueStateFile, JSON.stringify({
+    lastDailyReset: 'not-a-date',
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: 'garbage', todayTarget: 3, nextIssueTime: null }
+    }
+  }));
+
+  // execFileSync throws on a non-zero exit, so this also asserts exit code 0
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_ISSUE_STATE_FILE: issueStateFile,
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  const row = output.split('\n').find(line => line.includes('me/demo'));
+  assert.ok(row, output);
+  assert.match(row, /Any time │$/);
+  assert.doesNotMatch(output, /Last daily reset/);
+  assert.doesNotMatch(output, /Invalid time value/);
+});
+
 test('commit-mode status lists a disabled repository below the table instead of as pending', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
   const configFile = path.join(dir, 'config.yaml');
