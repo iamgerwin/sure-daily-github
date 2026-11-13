@@ -31,6 +31,7 @@ const SNAPSHOT_QUERY = `
     repository(owner: $owner, name: $repo) {
       pausedIssues: issues(states: OPEN, labels: ["${PAUSED}"], first: 20) {
         nodes { number body }
+        pageInfo { hasNextPage endCursor }
       }
       pullRequests(states: OPEN, first: 50, after: $cursor) {
         nodes {
@@ -74,6 +75,23 @@ const SNAPSHOT_QUERY = `
     }
   }
 `;
+
+// The open issues labeled automation-paused after the snapshot's first 20, so
+// a paused dashboard is found even when other paused issues come before it
+const PAUSED_ISSUES_QUERY = `
+  query ($owner: String!, $repo: String!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      issues(states: OPEN, labels: ["${PAUSED}"], first: 100, after: $cursor) {
+        nodes { number body }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+// Further paused-issue pages read at most (10,000 issues past the first 20);
+// past it the kill switch fails closed and the repository counts as paused
+export const MAX_PAUSED_ISSUE_PAGES = 100;
 
 // Check evidence for clearing needs-human, read right before the write
 const FRESH_CHECKS_QUERY = `
@@ -195,13 +213,31 @@ export class PrMaintGitHub {
       const data = await this.octokit.graphql(SNAPSHOT_QUERY, { owner, repo, cursor });
       const repository = data.repository;
       if (first) {
-        paused = (repository.pausedIssues?.nodes || []).some(issue => String(issue.body || '').includes(MARKERS.dashboard));
+        paused = await this.isDashboardPaused(owner, repo, repository.pausedIssues);
         first = false;
       }
       prs.push(...repository.pullRequests.nodes.map(normalizePullRequest));
       cursor = repository.pullRequests.pageInfo.hasNextPage ? repository.pullRequests.pageInfo.endCursor : null;
     } while (cursor);
     return { owner, repo, paused, prs: prs.sort((a, b) => a.number - b.number) };
+  }
+
+  // The kill switch: an open automation-paused issue carrying the dashboard
+  // marker. Reads past the snapshot's first page of paused issues, since other
+  // issues labeled automation-paused can come first and hide the dashboard.
+  async isDashboardPaused(owner, repo, firstPage) {
+    const hasMarker = (page) => (page?.nodes || []).some(issue => String(issue?.body || '').includes(MARKERS.dashboard));
+    let page = firstPage;
+    for (let pages = 0; ; pages++) {
+      if (hasMarker(page)) return true;
+      if (!page?.pageInfo?.hasNextPage) return false;
+      if (pages >= MAX_PAUSED_ISSUE_PAGES) {
+        logger.warn('Too many open automation-paused issues to find the dashboard, treating the repository as paused', { owner, repo });
+        return true;
+      }
+      const data = await this.octokit.graphql(PAUSED_ISSUES_QUERY, { owner, repo, cursor: page.pageInfo.endCursor });
+      page = data.repository?.issues;
+    }
   }
 
   // The head pin: re-read right before a write. Mergeability comes with it;
