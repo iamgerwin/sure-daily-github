@@ -13,11 +13,26 @@ export function emptyState() {
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const objectOr = (value, fallback) => (isPlainObject(value) ? value : fallback);
 
+const finiteList = (value) => (Array.isArray(value) ? value.filter(Number.isFinite) : []);
+
+// Drops per-PR records that are not objects: pr-maint writes fields onto them
+// (sticky hash, escalation flags), which throws on a string or number
+function keepObjects(records) {
+  for (const key of Object.keys(records)) if (!isPlainObject(records[key])) delete records[key];
+  return records;
+}
+
 export function repoState(state, owner, repo) {
   const key = `${owner}/${repo}`.toLowerCase();
   const entry = state.repos[key] = objectOr(state.repos[key], {});
-  entry.prs = objectOr(entry.prs, {});
-  entry.escalations = objectOr(entry.escalations, {});
+  entry.prs = keepObjects(objectOr(entry.prs, {}));
+  entry.escalations = keepObjects(objectOr(entry.escalations, {}));
+  // Escalation history and clears are timestamp lists filtered by age every
+  // tick; any other shape would throw there and stall the whole repository
+  for (const escalation of Object.values(entry.escalations)) {
+    if (escalation.history !== undefined) escalation.history = finiteList(escalation.history);
+    if (escalation.clears !== undefined) escalation.clears = finiteList(escalation.clears);
+  }
   entry.dashboard = objectOr(entry.dashboard, {});
   return entry;
 }
