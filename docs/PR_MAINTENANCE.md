@@ -188,7 +188,8 @@ log is the dataset you review before promoting to `act`.
 
 - **Dashboard issue** "sdg: PR automation", marker `<!-- sdg:dashboard -->`, pinned when created. It shows the mode (and
   the configured mode if the breaker lowered it), the rate caps, the breaker state, and one row per open PR: state, next
-  step, blocker and pending label changes. To pause everything, label this issue `automation-paused`. It is capped at
+  step, blocker and pending label changes. To pause everything, label this issue `automation-paused`; it is found among any number of open
+  `automation-paused` issues (past 10,000 the repository is treated as paused). It is capped at
   50 rows and 8 KB (UTF-8), with the number of PRs left out and a link to the PR list. A dashboard that can't be
   published fails the tick (exit 1), is logged as an error, and gets a `dashboard.publish` line in the decisions log.
 - **Sticky comment** per PR, marker `<!-- sdg:status -->`: lifecycle state, why, next step, mode, head, priority, and the

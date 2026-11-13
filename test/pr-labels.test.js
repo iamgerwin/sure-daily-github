@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
+import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, MAX_PAUSED_ISSUE_PAGES, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
@@ -234,6 +234,57 @@ test('fetchSnapshot normalizes every page and detects a paused dashboard', async
   assert.deepEqual(snapshot.prs.map(p => p.number), [1, 2]);
   assert.deepEqual(snapshot.prs[0].reviewThreads, [{ id: 'T1', isResolved: false, author: 'coderabbitai', lastCommentId: 'C9' }]);
   assert.deepEqual(calls.map(c => c.params.cursor), [null, 'c1']);
+});
+
+// One snapshot page with no PRs; `paused` is its first page of paused issues
+const pausedSnapshot = (paused) => ({
+  repository: { pausedIssues: paused, pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
+});
+const otherIssues = (from, count) => Array.from({ length: count }, (_, i) => ({ number: from + i, body: 'paused by hand' }));
+
+test('fetchSnapshot finds a paused dashboard past the first 20 paused issues', async () => {
+  const { github, calls } = await client({
+    graphql: (variables) => {
+      if (!('cursor' in variables) || variables.cursor === null) {
+        return pausedSnapshot({ nodes: otherIssues(1, 20), pageInfo: { hasNextPage: true, endCursor: 'p1' } });
+      }
+      if (variables.cursor === 'p1') {
+        return { repository: { issues: { nodes: otherIssues(21, 100), pageInfo: { hasNextPage: true, endCursor: 'p2' } } } };
+      }
+      return { repository: { issues: { nodes: [{ number: 200, body: `${MARKERS.dashboard}\n` }], pageInfo: { hasNextPage: false, endCursor: null } } } };
+    }
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.equal(snapshot.paused, true);
+  assert.deepEqual(calls.map(c => c.params.cursor), [null, 'p1', 'p2']);
+  assert.match(calls[1].query, /issues\(states: OPEN, labels: \["automation-paused"\], first: 100, after: \$cursor\)/);
+});
+
+test('fetchSnapshot reads no further paused issues once the dashboard is found or none remain', async () => {
+  const found = await client({
+    graphql: () => pausedSnapshot({ nodes: [{ number: 3, body: MARKERS.dashboard }], pageInfo: { hasNextPage: true, endCursor: 'p1' } })
+  });
+  assert.equal((await found.github.fetchSnapshot(OWNER, 'demo')).paused, true);
+  assert.equal(found.calls.length, 1);
+
+  const none = await client({
+    graphql: (variables) => (variables.cursor === 'p1'
+      ? { repository: { issues: { nodes: otherIssues(21, 3), pageInfo: { hasNextPage: false, endCursor: null } } } }
+      : pausedSnapshot({ nodes: otherIssues(1, 20), pageInfo: { hasNextPage: true, endCursor: 'p1' } }))
+  });
+  assert.equal((await none.github.fetchSnapshot(OWNER, 'demo')).paused, false);
+  assert.equal(none.calls.length, 2);
+});
+
+test('fetchSnapshot treats the repository as paused when the paused issues exceed the page budget', async () => {
+  let n = 0;
+  const { github, calls } = await client({
+    graphql: () => (n++ === 0
+      ? pausedSnapshot({ nodes: otherIssues(1, 20), pageInfo: { hasNextPage: true, endCursor: 'p0' } })
+      : { repository: { issues: { nodes: otherIssues(n * 100, 100), pageInfo: { hasNextPage: true, endCursor: `p${n}` } } } })
+  });
+  assert.equal((await github.fetchSnapshot(OWNER, 'demo')).paused, true);
+  assert.equal(calls.length, 1 + MAX_PAUSED_ISSUE_PAGES);
 });
 
 test('rollupState leaves out our own status and reports the worst remaining state', () => {
