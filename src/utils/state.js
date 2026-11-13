@@ -263,13 +263,16 @@ export class StateManager {
   }
 
   // A { min, max } range rolls one target per repository per day, persisted so
-  // every run that day (and `status`) agree on it. Changing the range re-rolls.
+  // every run that day (and `status`) agree on it. Changing the range re-rolls,
+  // and so does a saved value outside the range (hand edit, corruption): a 0
+  // would stop today's commits and a 1000 would commit far past the range.
   getDailyTarget(owner, repo, { min, max }, timezone = 'UTC', now = new Date()) {
     if (min === max) return max;
     const repoState = this.getRepoState(owner, repo);
     const day = this.getPeriodKeys(timezone, now).daily;
     const saved = repoState.dailyTarget;
-    if (saved?.day === day && saved.min === min && saved.max === max && Number.isInteger(saved.value)) {
+    if (saved?.day === day && saved.min === min && saved.max === max
+      && Number.isInteger(saved.value) && saved.value >= min && saved.value <= max) {
       return saved.value;
     }
     const value = crypto.randomInt(min, max + 1);

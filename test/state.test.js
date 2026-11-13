@@ -224,6 +224,28 @@ test('getDailyTarget ignores a malformed saved target', () => {
   assert.ok(target === 2 || target === 3);
 });
 
+test('getDailyTarget re-rolls a saved target outside the configured range and persists the new one', () => {
+  const filePath = tmpStateFile();
+  const now = new Date('2026-10-18T10:00:00Z');
+  for (const value of [0, -1, 1, 4, 1000]) {
+    const sm = new StateManager({ filePath });
+    sm.getRepoState('me', 'demo').dailyTarget = { day: '2026-10-18', min: 2, max: 3, value };
+    const target = sm.getDailyTarget('me', 'demo', { min: 2, max: 3 }, 'UTC', now);
+    assert.ok(target === 2 || target === 3, `saved ${value} gave ${target}`);
+    assert.deepEqual(new StateManager({ filePath }).getRepoState('me', 'demo').dailyTarget,
+      { day: '2026-10-18', min: 2, max: 3, value: target });
+  }
+});
+
+test('getDailyTarget keeps a saved target on either end of the range', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  const now = new Date('2026-10-18T10:00:00Z');
+  for (const value of [2, 5]) {
+    sm.getRepoState('me', 'demo').dailyTarget = { day: '2026-10-18', min: 2, max: 5, value };
+    assert.equal(sm.getDailyTarget('me', 'demo', { min: 2, max: 5 }, 'UTC', now), value);
+  }
+});
+
 test('a repository re-cased in the config keeps its counters', () => {
   const filePath = tmpStateFile();
   const now = new Date(Date.UTC(2025, 0, 6, 10, 0, 0));
