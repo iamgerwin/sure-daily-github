@@ -25,6 +25,15 @@ const FAILED_CONCLUSIONS = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'
 // never mark a PR ready or clear needs-human.
 const PASSING_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
+// The fields normalizePullRequest reads from a review thread, shared by the
+// snapshot and the later-page query so every page is normalized alike
+export const THREAD_FIELDS = `
+  id
+  isResolved
+  opener: comments(first: 1) { nodes { author { login } } }
+  latest: comments(last: 1) { nodes { id } }
+`;
+
 // Paused issues are fetched with every page, but only the first page's are read
 const SNAPSHOT_QUERY = `
   query ($owner: String!, $repo: String!, $cursor: String) {
@@ -45,12 +54,8 @@ const SNAPSHOT_QUERY = `
           author { login }
           labels(first: 50) { nodes { name } }
           reviewThreads(first: 100) {
-            nodes {
-              id
-              isResolved
-              opener: comments(first: 1) { nodes { author { login } } }
-              latest: comments(last: 1) { nodes { id } }
-            }
+            nodes { ${THREAD_FIELDS} }
+            pageInfo { hasNextPage endCursor }
           }
           reviews(last: 50) { nodes { id state author { login } } }
           commits(last: 1) {
@@ -100,6 +105,25 @@ const FRESH_CHECKS_QUERY = `
     }
   }
 `;
+
+// The review threads after the snapshot's first page, for a PR that has more
+// than 100: an unread thread could be unresolved or newly commented
+const REVIEW_THREADS_QUERY = `
+  query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $cursor) {
+          nodes { ${THREAD_FIELDS} }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+// Further thread pages read per PR at most (5,000 threads past the first 100);
+// a PR beyond it is marked incomplete rather than read without end
+export const MAX_THREAD_PAGES = 50;
 
 const PIN_ISSUE_MUTATION = `
   mutation ($issueId: ID!) {
@@ -159,6 +183,9 @@ export function normalizePullRequest(node) {
     mergeStateStatus: node.mergeStateStatus,
     author: node.author?.login || null,
     labels: (node.labels?.nodes || []).map(l => l.name),
+    // Set when a later page of review threads could not be read: the list is
+    // partial, so decide() holds the PR instead of judging it on what was read
+    threadsIncomplete: Boolean(node.reviewThreadsIncomplete),
     reviewThreads: (node.reviewThreads?.nodes || []).map(t => ({
       id: t.id,
       isResolved: Boolean(t.isResolved),
@@ -198,10 +225,42 @@ export class PrMaintGitHub {
         paused = (repository.pausedIssues?.nodes || []).some(issue => String(issue.body || '').includes(MARKERS.dashboard));
         first = false;
       }
-      prs.push(...repository.pullRequests.nodes.map(normalizePullRequest));
+      for (const node of repository.pullRequests.nodes) {
+        await this.readRemainingThreads(owner, repo, node);
+        prs.push(normalizePullRequest(node));
+      }
       cursor = repository.pullRequests.pageInfo.hasNextPage ? repository.pullRequests.pageInfo.endCursor : null;
     } while (cursor);
     return { owner, repo, paused, prs: prs.sort((a, b) => a.number - b.number) };
+  }
+
+  // Appends the review threads past the first page to a snapshot node, so the
+  // fingerprint, the unresolved-thread count and the thread ownership check see
+  // every thread. Costs one query per further 100 threads, only on such PRs.
+  async readRemainingThreads(owner, repo, node) {
+    const threads = node.reviewThreads;
+    let cursor = threads?.pageInfo?.hasNextPage ? threads.pageInfo.endCursor : null;
+    const seen = new Set();
+    while (cursor) {
+      // A cursor that repeats (a malformed response) or a PR past the page cap
+      // would loop on: stop, and mark the list partial so decide() holds it
+      if (seen.has(cursor) || seen.size >= MAX_THREAD_PAGES) {
+        logger.warn('pr-maint review threads not fully read', { repo: `${owner}/${repo}`, pr: node.number, pages: seen.size });
+        node.reviewThreadsIncomplete = true;
+        return;
+      }
+      seen.add(cursor);
+      const data = await this.octokit.graphql(REVIEW_THREADS_QUERY, { owner, repo, number: node.number, cursor });
+      const page = data.repository?.pullRequest?.reviewThreads;
+      // Gone since the snapshot page (deleted, or no longer visible): the list
+      // is partial, so the PR is marked and decide() plans nothing for it
+      if (!page) {
+        node.reviewThreadsIncomplete = true;
+        return;
+      }
+      threads.nodes = [...(threads.nodes || []), ...(page.nodes || [])];
+      cursor = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
+    }
   }
 
   // The head pin: re-read right before a write. Mergeability comes with it;

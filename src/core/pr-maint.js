@@ -191,6 +191,11 @@ function decidePr(pr, repoLedger, opts) {
   if (!(opts.authors || []).some(author => sameLogin(author, pr.author))) {
     return { ...row, skip: 'author', blocker: 'author is not allowlisted' };
   }
+  // A partial thread list could hide an unresolved thread: hold the PR (no
+  // label, sticky or status write, no ledger update) until a full read
+  if (pr.threadsIncomplete) {
+    return { ...row, skip: 'threads', blocker: 'review threads could not all be read' };
+  }
 
   const needsHuman = pr.labels.includes(NEEDS_HUMAN);
   // A pending escalation whose needs-human is already on GitHub was delivered

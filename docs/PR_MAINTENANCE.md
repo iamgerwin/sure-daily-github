@@ -79,6 +79,8 @@ dashboard handler. Shadow mode also never creates labels, and never re-reads PRs
 1 lock       data/pr-maint.lock (exit 0 when held)
 2 gates      prMaint.enabled, conflictFixer repo gate, dashboard issue labeled automation-paused → stop
 3 snapshot   one GraphQL query per 50 open PRs: head, mergeable, labels, review threads, reviews, check contexts
+             (plus one query per further 100 review threads, only for a PR with more than 100;
+             a PR whose threads cannot all be read is skipped as `threads` that tick)
 4 decide     pure decide(snapshot, ledger) → planned actions per PR (babysit PRs first)
 5 execute    every action: policy.check → handler → data/pr-maint-decisions.jsonl
 6 dashboard  re-rendered after the PRs (so a breaker trip this tick shows), read back from GitHub, written only when
