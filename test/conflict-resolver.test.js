@@ -97,10 +97,12 @@ test('locateBlock tolerates a missing newline at end of file', () => {
 });
 
 test('isTestFile matches test directories and .test/.spec files', () => {
-  for (const file of ['test/a.js', 'test/unit/b.txt', '__tests__/c.js', 'src/x.test.js', 'lib/deep/y.spec.js', 'z.test.js']) {
+  for (const file of ['test/a.js', 'test/unit/b.txt', '__tests__/c.js', 'src/x.test.js', 'lib/deep/y.spec.js', 'z.test.js',
+    'a.test.ts', 'src/b.spec.tsx', 'c.test.mjs', 'd.spec.cjs', 'e.test.jsx', 'f.test.mts', 'g.spec.cts']) {
     assert.equal(isTestFile(file), true, file);
   }
-  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'a.test.ts', 'testing/a.js']) {
+  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'testing/a.js',
+    'a.test.json', 'a.test.tsv', 'a.test.d', 'a.ts', 'src/test.ts', 'a.test.js.map']) {
     assert.equal(isTestFile(file), false, file);
   }
 });

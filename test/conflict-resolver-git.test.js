@@ -180,6 +180,21 @@ test('resolveConflicts keeps tests added on both sides of a test file, ours befo
   assert.equal(fs.readFileSync(path.join(dir, 'app.txt'), 'utf8'), numbered({ 2: 'master 2' }));
 });
 
+test('resolveConflicts keeps tests added on both sides of a TypeScript test file', async (t) => {
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.ts': testFile('base') },
+    // Newer-wins would keep only master's test and drop the feature's
+    master: [[{ 'app.test.ts': testFile('base', 'master') }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.ts': testFile('base', 'feature') }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir, sourceHunks: 'escalate' });
+
+  assert.equal(result.resolved, true, result.reason);
+  assert.deepEqual(result.files, [{ file: 'app.test.ts', hunks: ['union'] }]);
+  assert.equal(fs.readFileSync(path.join(dir, 'app.test.ts'), 'utf8'), testFile('base', 'feature', 'master'));
+});
+
 test('resolveConflicts escalates a test hunk where a side modified existing lines', async (t) => {
   const dir = await conflictedRepo(t, {
     base: { 'app.test.js': testFile('base') },
