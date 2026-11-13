@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
+import { createOctokit, attemptSignal, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
 
 // Serves the queued responses in order, recording each request method
@@ -274,6 +274,66 @@ test('each retry of a timed-out GET gets a fresh deadline', async () => {
     server.closeAllConnections();
     server.close();
   }
+});
+
+test('a GET with a caller signal still times out a stalled attempt and retries', async () => {
+  let calls = 0;
+  // First request stalls past the timeout; the second answers immediately
+  const server = http.createServer((req, res) => {
+    if (++calls === 1) return;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ login: 'me' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '200';
+  const controller = new AbortController();
+  try {
+    const octokit = createOctokit({
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+      retry: { baseDelayMs: 5 }
+    });
+    const { data } = await octokit.request('GET /user', { request: { signal: controller.signal } });
+    assert.equal(data.login, 'me');
+    assert.equal(calls, 2);
+    assert.equal(controller.signal.aborted, false);
+  } finally {
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+for (const [name, any] of [['AbortSignal.any', AbortSignal.any], ['the Node 18 fallback', undefined]]) {
+  test(`attemptSignal aborts on the deadline or the caller with ${name}`, async (t) => {
+    const original = Object.getOwnPropertyDescriptor(AbortSignal, 'any');
+    Object.defineProperty(AbortSignal, 'any', { value: any, configurable: true, writable: true });
+    t.after(() => Object.defineProperty(AbortSignal, 'any', original));
+
+    const idle = new AbortController();
+    const timedOut = attemptSignal(idle.signal, 20);
+    await new Promise(resolve => timedOut.addEventListener('abort', resolve, { once: true }));
+    assert.equal(timedOut.reason.name, 'TimeoutError');
+    assert.equal(idle.signal.aborted, false);
+
+    const caller = new AbortController();
+    const reason = new Error('scan canceled');
+    const canceled = attemptSignal(caller.signal, 60000);
+    assert.equal(canceled.aborted, false);
+    caller.abort(reason);
+    assert.equal(canceled.aborted, true);
+    assert.equal(canceled.reason, reason);
+
+    const already = new AbortController();
+    already.abort(reason);
+    assert.equal(attemptSignal(already.signal, 60000).reason, reason);
+  });
+}
+
+test('attemptSignal without a caller signal is the deadline alone', async () => {
+  const signal = attemptSignal(undefined, 20);
+  await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(signal.reason.name, 'TimeoutError');
 });
 
 test('getRetryDelayMs refuses to wait for a distant rate limit reset', () => {

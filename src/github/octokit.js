@@ -107,6 +107,26 @@ export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_R
   return null;
 }
 
+// The per-attempt deadline, combined with the caller's signal when there is one:
+// a caller that may cancel (a babysit scan) still needs the timeout, or a
+// stalled connection hangs until the caller gives up, which may be never.
+// AbortSignal.any is Node 20.3+; package.json allows Node 18.
+export function attemptSignal(callerSignal, timeoutMs) {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  if (!callerSignal) return deadline;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([callerSignal, deadline]);
+  const controller = new AbortController();
+  const forward = signal => () => controller.abort(signal.reason);
+  for (const signal of [callerSignal, deadline]) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener('abort', forward(signal), { once: true, signal: controller.signal });
+  }
+  return controller.signal;
+}
+
 // Every GitHub API call gets an abort deadline (per attempt) so a stalled
 // connection cannot keep a scheduled execution (and the scheduler's overlap
 // guard) stuck, and transient failures are retried with bounded backoff
@@ -125,7 +145,7 @@ export function createOctokit(options = {}) {
 
     for (let attempt = 0; ; attempt++) {
       callerSignal?.throwIfAborted();
-      requestOptions.request.signal = callerSignal || AbortSignal.timeout(timeoutMs);
+      requestOptions.request.signal = attemptSignal(callerSignal, timeoutMs);
 
       let response;
       let failure;
