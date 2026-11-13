@@ -61,6 +61,44 @@ test('acquireRunLock reclaims a lock left by a dead process', (t) => {
   result.release();
 });
 
+test('acquireRunLock reclaims a lock an earlier process left under our own PID', (t) => {
+  // A container restart gives the service the same PID (1) every time, so a
+  // lock from the crashed previous run names this live process
+  const filePath = useTmpLockFile(t);
+  writeForeignLock(filePath, { pid: process.pid, startedAt: Date.now() - 60 * 1000 });
+
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  result.release();
+  assert.equal(fs.existsSync(filePath), false);
+});
+
+test('a lock this process holds stays held against its own second acquire', (t) => {
+  const filePath = useTmpLockFile(t);
+  const first = acquireRunLock({ now: 1000 });
+  assert.equal(first.acquired, true);
+
+  const again = acquireRunLock({ now: Date.now() });
+  assert.equal(again.acquired, false);
+  assert.equal(again.holder.startedAt, 1000);
+  first.release();
+});
+
+test('a stale release handle does not remove a later lock of the same process', (t) => {
+  const filePath = useTmpLockFile(t);
+  const first = acquireRunLock({ now: 1000 });
+  first.release();
+
+  const second = acquireRunLock({ now: 2000 });
+  assert.equal(second.acquired, true);
+  first.release();
+  assert.equal(fs.existsSync(filePath), true, 'the second acquisition still holds the lock');
+  assert.equal(acquireRunLock().acquired, false);
+
+  second.release();
+  assert.equal(fs.existsSync(filePath), false);
+});
+
 test('acquireRunLock reclaims unreadable or expired locks', (t) => {
   const filePath = useTmpLockFile(t);
 
