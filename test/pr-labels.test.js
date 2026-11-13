@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PrMaintGitHub, LABEL_DEFINITIONS, MAX_THREAD_PAGES, THREAD_FIELDS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
-import { decide } from '../src/core/pr-maint.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { decide, fingerprint } from '../src/core/pr-maint.js';
+import { ActionExecutor } from '../src/core/executor.js';
 
 const OWNER = 'iamgerwin';
 
@@ -321,6 +325,56 @@ test('fetchSnapshot stops on a repeated thread cursor and on the page cap, marki
   assert.equal(calls.filter(c => c.params.number === 1).length, 1);
   assert.equal(calls.filter(c => c.params.number === 2).length, MAX_THREAD_PAGES);
   assert.deepEqual(snapshot.prs.map(p => p.threadsIncomplete), [true, true]);
+});
+
+test('an unresolved thread past the first 100 shows in the sticky, moves the fingerprint and may be resolved', async (t) => {
+  const thread = (n, isResolved, comment = `C${n}`) => ({
+    id: `T${n}`, isResolved, opener: { nodes: [{ author: { login: 'coderabbitai' } }] }, latest: { nodes: [{ id: comment }] }
+  });
+  const firstPage = Array.from({ length: 100 }, (_, i) => thread(i + 1, true));
+  const fetch = async (lastComment) => {
+    const node = {
+      number: 7, headRefOid: 'a'.repeat(40), headRefName: 'auto-pr/7', baseRefName: 'master',
+      mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', author: { login: OWNER }, labels: { nodes: [] }, reviews: { nodes: [] },
+      reviewThreads: { nodes: firstPage, pageInfo: { hasNextPage: true, endCursor: 'p1' } }
+    };
+    const { github } = await client({
+      graphql: (vars) => (vars.number === undefined
+        ? { repository: { pausedIssues: { nodes: [] }, pullRequests: { nodes: [node], pageInfo: { hasNextPage: false } } } }
+        : { repository: { pullRequest: { reviewThreads: { nodes: [thread(101, true), thread(120, false, lastComment)], pageInfo: { hasNextPage: false } } } } })
+    });
+    return { github, pr: (await github.fetchSnapshot(OWNER, 'demo')).prs[0] };
+  };
+
+  const { github, pr } = await fetch('C120');
+  assert.equal(pr.reviewThreads.length, 102);
+  // The sticky counts the thread from the second page
+  const [row] = decide({ prs: [pr] }, { prs: {}, escalations: {} }, { mode: 'act', authors: [OWNER], owner: OWNER, now: Date.now(), pr: null }).prs;
+  const body = row.actions.find(a => a.type === 'comment.upsert').payload.body;
+  assert.match(body, /1 unresolved review thread(?!s)/);
+  // A new comment on that thread is a change
+  const { pr: commented } = await fetch('C120-new');
+  assert.notEqual(fingerprint(commented), fingerprint(pr));
+
+  // The ownership check at write time sees it too: the head pin keeps the snapshot's threads
+  github.octokit.rest.pulls = { get: async () => ({ data: { number: 7, state: 'open', head: { sha: 'a'.repeat(40) }, labels: [], mergeable: true, mergeable_state: 'clean' } }) };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-pr-labels-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const resolved = [];
+  const executor = new ActionExecutor({
+    mode: 'act',
+    handlers: { 'thread.resolve:pr': async (a) => { resolved.push(a.payload.threadId); return { written: 1 }; } },
+    fresh: (number) => github.freshPullRequest(OWNER, 'demo', number),
+    state: { writes: [], breaker: null },
+    ctx: { owner: OWNER, authors: [OWNER], caps: { writesPerPrPerTick: 20, writesPerHour: 200 } },
+    repo: `${OWNER}/demo`,
+    now: () => Date.now(),
+    decisionsFile: path.join(dir, 'decisions.jsonl')
+  });
+  const action = { type: 'thread.resolve', scope: 'pr', pr: 7, headSha: 'a'.repeat(40), payload: { threadId: 'T120', outcome: 'fixed' } };
+  const result = await executor.run(action, { snapshotPr: pr });
+  assert.equal(result.status, 'done', JSON.stringify(result.verdict));
+  assert.deepEqual(resolved, ['T120']);
 });
 
 test('rollupState leaves out our own status and reports the worst remaining state', () => {
