@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { PrMaintLedger, emptyState, repoState } from '../src/utils/pr-maint-ledger.js';
+import { recordEscalation } from '../src/core/pr-maint.js';
 
 function tmpLedger(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-pr-maint-ledger-'));
@@ -100,6 +101,46 @@ test('repoState keeps existing well-formed entries untouched', () => {
   const entry = repoState(state, 'me', 'demo');
   assert.equal(entry.prs, prs);
   assert.equal(entry.dashboard.number, 4);
+});
+
+test('repoState drops per-PR records that are not objects and keeps the rest', () => {
+  const state = emptyState();
+  state.repos['me/demo'] = {
+    prs: { 1: 'oops', 2: null, 3: [], 4: { stickyCommentId: 9 } },
+    escalations: { 1: 42, 2: { reason: 'flapping', active: true } }
+  };
+  const entry = repoState(state, 'me', 'demo');
+  assert.deepEqual(entry.prs, { 4: { stickyCommentId: 9 } });
+  assert.deepEqual(entry.escalations, { 2: { reason: 'flapping', active: true } });
+  // pr-maint writes onto these records after a write goes through
+  assert.doesNotThrow(() => { entry.prs['4'].stickyHash = 'h'; });
+});
+
+test('repoState repairs escalation history and clears so the next escalation can be recorded', () => {
+  const now = Date.UTC(2026, 9, 17, 12);
+  const state = emptyState();
+  state.repos['me/demo'] = {
+    escalations: {
+      5: { reason: 'stuck', active: false, history: 'x', clears: { 0: 1 } },
+      6: { reason: 'stuck', active: false, history: [now - 1000, null, 'y'], clears: [now - 500, 'z'] }
+    }
+  };
+  const entry = repoState(state, 'me', 'demo');
+  assert.deepEqual(entry.escalations['5'].history, []);
+  assert.deepEqual(entry.escalations['5'].clears, []);
+  assert.deepEqual(entry.escalations['6'].history, [now - 1000]);
+  assert.deepEqual(entry.escalations['6'].clears, [now - 500]);
+
+  const recorded = recordEscalation(entry.escalations, 5, { reason: 'stuck', headSha: 'a'.repeat(40), now });
+  assert.equal(recorded.active, true);
+  assert.deepEqual(recorded.history, [now]);
+  assert.equal(recordEscalation(entry.escalations, 6, { reason: 'stuck', headSha: 'a'.repeat(40), now }).history.length, 2);
+});
+
+test('repoState leaves escalations without history or clears as they are', () => {
+  const state = emptyState();
+  state.repos['me/demo'] = { escalations: { 7: { reason: 'stuck', active: true } } };
+  assert.deepEqual(repoState(state, 'me', 'demo').escalations['7'], { reason: 'stuck', active: true });
 });
 
 test('a failed save removes its temp file and rethrows', (t) => {
