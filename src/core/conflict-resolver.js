@@ -13,8 +13,10 @@ const CONTEXT_LINES = 3;
 // Same window git uses to decide whether a blob is binary
 const BINARY_SNIFF_CHARS = 8000;
 // Conflicts in these files keep both sides instead of the newer one, so tests
-// added on the older side are never dropped
-const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.test\.js$/, /\.spec\.js$/];
+// added on the older side are never dropped. The .test/.spec suffix covers the
+// JavaScript and TypeScript extensions test runners pick up by default
+// (Jest, Vitest, node --test, Playwright), not only .js
+const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.(?:test|spec)\.[cm]?[jt]sx?$/];
 // A test(...) or it(...) registration at the start of a line: optionally
 // awaited, optionally on a receiver (t.test, suite.it), including chained
 // modifiers (.only/.skip/.todo) and the parameterized and conditional forms

@@ -164,7 +164,7 @@ the result (never forced) only if the repository's own tests pass
 `go test ./...` or `cargo test` for a `go.mod` or `Cargo.toml`). Source
 hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
 `escalate`) can send them to manual review instead. Test files
-(`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
+(`test/**`, `__tests__/**`, `*.test.*`/`*.spec.*` for JS and TS extensions) are merged as a union of
 both sides, and a test-count guard leaves the PR for review if a resolved test
 file has fewer tests than either parent. Nothing runs until a repository is
 allowed in the `conflictFixer:` block (default: empty allowlist). Runs are
