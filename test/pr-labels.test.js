@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, MAX_THREAD_PAGES, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
+import { PrMaintGitHub, LABEL_DEFINITIONS, MAX_THREAD_PAGES, THREAD_FIELDS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
 import { decide } from '../src/core/pr-maint.js';
 
@@ -276,6 +276,8 @@ test('fetchSnapshot reads every review thread of a PR with more than one page of
     { owner: OWNER, repo: 'demo', number: 1, cursor: 't1' },
     { owner: OWNER, repo: 'demo', number: 1, cursor: 't2' }
   ]);
+  // Every page selects the same thread fields, so later pages normalize alike
+  assert.ok(calls.every(c => c.query.includes(THREAD_FIELDS)));
 });
 
 test('fetchSnapshot marks the thread list incomplete when the PR disappears between pages', async () => {

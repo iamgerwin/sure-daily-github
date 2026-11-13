@@ -25,6 +25,15 @@ const FAILED_CONCLUSIONS = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'
 // never mark a PR ready or clear needs-human.
 const PASSING_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
+// The fields normalizePullRequest reads from a review thread, shared by the
+// snapshot and the later-page query so every page is normalized alike
+export const THREAD_FIELDS = `
+  id
+  isResolved
+  opener: comments(first: 1) { nodes { author { login } } }
+  latest: comments(last: 1) { nodes { id } }
+`;
+
 // Paused issues are fetched with every page, but only the first page's are read
 const SNAPSHOT_QUERY = `
   query ($owner: String!, $repo: String!, $cursor: String) {
@@ -45,12 +54,7 @@ const SNAPSHOT_QUERY = `
           author { login }
           labels(first: 50) { nodes { name } }
           reviewThreads(first: 100) {
-            nodes {
-              id
-              isResolved
-              opener: comments(first: 1) { nodes { author { login } } }
-              latest: comments(last: 1) { nodes { id } }
-            }
+            nodes { ${THREAD_FIELDS} }
             pageInfo { hasNextPage endCursor }
           }
           reviews(last: 50) { nodes { id state author { login } } }
@@ -109,12 +113,7 @@ const REVIEW_THREADS_QUERY = `
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
         reviewThreads(first: 100, after: $cursor) {
-          nodes {
-            id
-            isResolved
-            opener: comments(first: 1) { nodes { author { login } } }
-            latest: comments(last: 1) { nodes { id } }
-          }
+          nodes { ${THREAD_FIELDS} }
           pageInfo { hasNextPage endCursor }
         }
       }
