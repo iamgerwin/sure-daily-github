@@ -124,6 +124,19 @@ test('freshPullRequest reads live checks on request, failing closed when they be
   assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, null);
 });
 
+test('freshPullRequest reports pending, not success, when the head has more check contexts than one page', async () => {
+  const passing = { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' };
+  let page = { nodes: [passing], pageInfo: { hasNextPage: true } };
+  const stub = stubOctokit({
+    graphql: () => ({ repository: { pullRequest: { commits: { nodes: [{ commit: { oid: 'h1', statusCheckRollup: { contexts: page } } }] } } } })
+  });
+  stub.octokit.rest.pulls = { get: async () => ({ data: { number: 3, state: 'open', head: { sha: 'h1' }, labels: [], mergeable: true, mergeable_state: 'clean' } }) };
+  const github = new PrMaintGitHub(stub.octokit);
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, 'PENDING');
+  page = { nodes: [passing], pageInfo: { hasNextPage: false } };
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, 'SUCCESS');
+});
+
 test('readDashboard returns null for a deleted, closed, or foreign issue', async () => {
   const issue = { number: 77, state: 'open', body: `${MARKERS.dashboard}\nx`, user: { login: OWNER } };
   let respond = () => ({ data: issue });
@@ -265,4 +278,16 @@ test('rollupState counts only passing conclusions as success; stale and unknown 
     assert.equal(rollupState([run('COMPLETED', 'STALE'), run('COMPLETED', conclusion)]), 'FAILURE', conclusion);
   }
   assert.equal(rollupState([run('COMPLETED', 'STALE'), ctx('ci', 'ERROR')]), 'FAILURE');
+});
+
+test('rollupState never reports success for a truncated context list', () => {
+  const run = (status, conclusion) => ({ __typename: 'CheckRun', name: 'test', status, conclusion });
+  const ctx = (context, state) => ({ __typename: 'StatusContext', context, state });
+  // An unread context beyond the page may have failed
+  assert.equal(rollupState([run('COMPLETED', 'SUCCESS')], { truncated: true }), 'PENDING');
+  assert.equal(rollupState([ctx(MERGE_POLICY_CONTEXT, 'SUCCESS')], { truncated: true }), 'PENDING');
+  assert.equal(rollupState([], { truncated: true }), 'PENDING');
+  // A failure already read is still a failure
+  assert.equal(rollupState([run('COMPLETED', 'SUCCESS'), run('COMPLETED', 'FAILURE')], { truncated: true }), 'FAILURE');
+  assert.equal(rollupState([run('COMPLETED', 'SUCCESS')], { truncated: false }), 'SUCCESS');
 });

@@ -250,6 +250,16 @@ test('fingerprint is stable across label order and unaffected by our own merge-p
   assert.equal(fingerprint(normalizePullRequest(node([ci, ours]))), fingerprint(normalizePullRequest(node([ci]))));
 });
 
+test('normalizePullRequest reports pending checks when the snapshot holds only the first page of contexts', () => {
+  const node = (pageInfo) => ({
+    number: 1, headRefOid: sha('a'), mergeable: 'MERGEABLE', author: { login: OWNER },
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' }], pageInfo } } } }] }
+  });
+  assert.equal(normalizePullRequest(node({ hasNextPage: true })).checks, 'PENDING');
+  assert.equal(normalizePullRequest(node({ hasNextPage: false })).checks, 'SUCCESS');
+  assert.equal(normalizePullRequest(node(undefined)).checks, 'SUCCESS');
+});
+
 // ---- the tick, against a stateful fake GitHub ----
 
 const WRITE_METHODS = new Set([
