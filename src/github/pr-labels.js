@@ -51,6 +51,7 @@ const SNAPSHOT_QUERY = `
               opener: comments(first: 1) { nodes { author { login } } }
               latest: comments(last: 1) { nodes { id } }
             }
+            pageInfo { hasNextPage endCursor }
           }
           reviews(last: 50) { nodes { id state author { login } } }
           commits(last: 1) {
@@ -95,6 +96,26 @@ const FRESH_CHECKS_QUERY = `
               }
             }
           }
+        }
+      }
+    }
+  }
+`;
+
+// The review threads after the snapshot's first page, for a PR that has more
+// than 100: an unread thread could be unresolved or newly commented
+const REVIEW_THREADS_QUERY = `
+  query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $cursor) {
+          nodes {
+            id
+            isResolved
+            opener: comments(first: 1) { nodes { author { login } } }
+            latest: comments(last: 1) { nodes { id } }
+          }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }
@@ -198,10 +219,30 @@ export class PrMaintGitHub {
         paused = (repository.pausedIssues?.nodes || []).some(issue => String(issue.body || '').includes(MARKERS.dashboard));
         first = false;
       }
-      prs.push(...repository.pullRequests.nodes.map(normalizePullRequest));
+      for (const node of repository.pullRequests.nodes) {
+        await this.readRemainingThreads(owner, repo, node);
+        prs.push(normalizePullRequest(node));
+      }
       cursor = repository.pullRequests.pageInfo.hasNextPage ? repository.pullRequests.pageInfo.endCursor : null;
     } while (cursor);
     return { owner, repo, paused, prs: prs.sort((a, b) => a.number - b.number) };
+  }
+
+  // Appends the review threads past the first page to a snapshot node, so the
+  // fingerprint, the unresolved-thread count and the thread ownership check see
+  // every thread. Costs one query per further 100 threads, only on such PRs.
+  async readRemainingThreads(owner, repo, node) {
+    const threads = node.reviewThreads;
+    let cursor = threads?.pageInfo?.hasNextPage ? threads.pageInfo.endCursor : null;
+    while (cursor) {
+      const data = await this.octokit.graphql(REVIEW_THREADS_QUERY, { owner, repo, number: node.number, cursor });
+      const page = data.repository?.pullRequest?.reviewThreads;
+      // Gone since the snapshot page (deleted, or no longer visible): keep what
+      // was read; the open-state policy rule denies writes to a closed PR
+      if (!page) return;
+      threads.nodes = [...(threads.nodes || []), ...(page.nodes || [])];
+      cursor = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
+    }
   }
 
   // The head pin: re-read right before a write. Mergeability comes with it;

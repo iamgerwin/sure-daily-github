@@ -236,6 +236,62 @@ test('fetchSnapshot normalizes every page and detects a paused dashboard', async
   assert.deepEqual(calls.map(c => c.params.cursor), [null, 'c1']);
 });
 
+test('fetchSnapshot reads every review thread of a PR with more than one page of them', async () => {
+  const thread = (id, isResolved) => ({ id, isResolved, opener: { nodes: [{ author: { login: 'coderabbitai' } }] }, latest: { nodes: [{ id: `C${id}` }] } });
+  const pull = (number, reviewThreads) => ({
+    number, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE', author: { login: OWNER },
+    labels: { nodes: [] }, reviewThreads, reviews: { nodes: [] }
+  });
+  const snapshotPage = {
+    repository: {
+      pausedIssues: { nodes: [] },
+      pullRequests: {
+        nodes: [
+          pull(1, { nodes: [thread('T1', true)], pageInfo: { hasNextPage: true, endCursor: 't1' } }),
+          pull(2, { nodes: [thread('T9', false)], pageInfo: { hasNextPage: false, endCursor: 'x' } })
+        ],
+        pageInfo: { hasNextPage: false, endCursor: null }
+      }
+    }
+  };
+  const threadPages = {
+    t1: { nodes: [thread('T2', true)], pageInfo: { hasNextPage: true, endCursor: 't2' } },
+    t2: { nodes: [thread('T3', false)], pageInfo: { hasNextPage: false, endCursor: 't3' } }
+  };
+  const { github, calls } = await client({
+    graphql: (vars) => (vars.number === undefined
+      ? snapshotPage
+      : { repository: { pullRequest: { reviewThreads: threadPages[vars.cursor] } } })
+  });
+
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  // The unresolved thread on the third page is seen
+  assert.deepEqual(snapshot.prs[0].reviewThreads.map(t => [t.id, t.isResolved, t.lastCommentId]),
+    [['T1', true, 'CT1'], ['T2', true, 'CT2'], ['T3', false, 'CT3']]);
+  assert.deepEqual(snapshot.prs[1].reviewThreads.map(t => t.id), ['T9']);
+  // Only the PR with more threads costs extra queries, one per further page
+  assert.deepEqual(calls.map(c => c.params), [
+    { owner: OWNER, repo: 'demo', cursor: null },
+    { owner: OWNER, repo: 'demo', number: 1, cursor: 't1' },
+    { owner: OWNER, repo: 'demo', number: 1, cursor: 't2' }
+  ]);
+});
+
+test('fetchSnapshot keeps the threads already read when the PR disappears between pages', async () => {
+  const node = {
+    number: 4, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE', author: { login: OWNER },
+    labels: { nodes: [] }, reviews: { nodes: [] },
+    reviewThreads: { nodes: [{ id: 'T1', isResolved: false }], pageInfo: { hasNextPage: true, endCursor: 't1' } }
+  };
+  const { github } = await client({
+    graphql: (vars) => (vars.number === undefined
+      ? { repository: { pausedIssues: { nodes: [] }, pullRequests: { nodes: [node], pageInfo: { hasNextPage: false } } } }
+      : { repository: { pullRequest: null } })
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.deepEqual(snapshot.prs[0].reviewThreads.map(t => t.id), ['T1']);
+});
+
 test('rollupState leaves out our own status and reports the worst remaining state', () => {
   const run = (status, conclusion) => ({ __typename: 'CheckRun', name: 'test', status, conclusion });
   const ctx = (context, state) => ({ __typename: 'StatusContext', context, state });
