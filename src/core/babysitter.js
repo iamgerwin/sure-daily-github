@@ -632,12 +632,14 @@ export class Babysitter {
       // A failed triage batch only affects its own comments, also when every
       // batch failed
       const failedBatch = batchFailureMap(triage.batchFailures);
+      const contradicted = new Set(triage.conflicting || []);
       for (const comment of pending) {
         const batch = failedBatch.get(comment.id);
         const decision = byId.get(comment.id);
         if (batch?.infra) retrying.push({ comment, error: `triage failed: ${batch.error}` });
         else if (batch) failures.push({ comment, action: null, error: `triage failed: ${batch.error}` });
         else if (decision) plan.push({ comment, decision });
+        else if (contradicted.has(comment.id)) failures.push({ comment, action: null, error: 'triage gave conflicting actions for this comment' });
         else failures.push({ comment, action: null, error: 'triage returned no decision for this comment' });
       }
     }
