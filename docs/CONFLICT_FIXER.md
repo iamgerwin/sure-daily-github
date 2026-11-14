@@ -27,6 +27,7 @@ Other guarantees:
 
 - Each run uses throwaway clones in the OS temp directory, which are deleted afterwards.
 - Your global and system git config (hooks, signing, merge drivers) is ignored, and every git command runs with `core.hooksPath` pointed at the null device on the command line, so hooks planted by the tested code never run.
+- Repository and config variables in the environment (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and the rest of `git rev-parse --local-env-vars`) are dropped from every git command, so a run started from a git hook or with `GIT_DIR` exported still works only in its throwaway clone, never in the repository those variables point at.
 - The GitHub token never appears in URLs, `.git/config`, the process list or logs. Tests run with only `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_*` and `CI=true` in their environment; every other variable (tokens, cloud credentials) is dropped.
 - After the tests have run, the clone's config is no longer trusted: the authenticated push is made from a fresh repository that receives only the pinned merge commit.
 
