@@ -301,6 +301,10 @@ class ConflictFixer {
           const target = data.find(pull => pull.number === prNumber);
           if (!target && !timedOut) {
             results.push(prResult(repoConfig, { number: prNumber }, 'skipped', { reason: 'not an open pull request' }));
+          } else if (target && !isConflicted(target) && target.mergeable === 'UNKNOWN' && target.isCrossRepository) {
+            // The unknown status above excludes forks, which are never fixed;
+            // without this the run reports no conflicted pull requests at all
+            results.push(prResult(repoConfig, target, 'skipped', { reason: 'fork pull request' }));
           } else if (target && !isConflicted(target) && target.mergeable !== 'UNKNOWN') {
             results.push(prResult(repoConfig, target, 'skipped', { reason: `not conflicted (${target.mergeable})` }));
           }
