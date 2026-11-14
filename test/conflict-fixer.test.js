@@ -377,6 +377,18 @@ test('--pr leaves unknown mergeability to the unknown status', async (t) => {
   assert.deepEqual(result.results.map(r => [r.pr, r.status]), [[7, 'unknown']]);
 });
 
+test('--pr reports a fork pull request whose mergeability is still unknown', async (t) => {
+  const fx = await fixture(t);
+  const pending = { ...fx.pr, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', isCrossRepository: true };
+  const { fixer } = makeFixer(fx, [pending], { git: async () => assert.fail('git must not run') });
+
+  const result = await fixer.run(config(), { repos: ['me/demo'], pr: '7' });
+
+  assert.deepEqual(result.results.map(r => [r.pr, r.status, r.reason]), [[7, 'skipped', 'fork pull request']]);
+  assert.equal(result.summary.skipped, 1);
+  assert.equal(getRunExitCode(result), 0);
+});
+
 // --- Untrusted test code ---
 
 test('hooks planted by the tests never run during the push', async (t) => {
