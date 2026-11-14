@@ -246,7 +246,12 @@ export function buildImplementPrompt({ pr, items, reportFile }) {
 }
 
 // Validates the engine's triage file against the ids it was given. Unknown ids
-// are ignored; ids it did not decide on are reported in `missing`.
+// are ignored; ids it did not decide on are reported in `missing`. An id listed
+// again with the same action keeps its first entry. An id listed with
+// different actions (e.g. `wontfix` and `fix`) has no decision: acting on
+// whichever came first would reply to and settle the comment on a choice the
+// engine also contradicted. Such ids are in `missing` and in `conflicting`,
+// as parseImplementReport does for conflicting statuses.
 export function parseTriage(raw, expectedIds) {
   let parsed;
   try {
@@ -259,20 +264,23 @@ export function parseTriage(raw, expectedIds) {
   }
 
   const expected = new Set(expectedIds);
-  const decisions = [];
-  const seen = new Set();
+  const decided = new Map();
+  const conflicting = new Set();
   for (const entry of parsed.comments) {
     if (!entry || typeof entry !== 'object') continue;
     const id = String(entry.id ?? '');
-    if (!expected.has(id) || seen.has(id)) continue;
+    if (!expected.has(id)) continue;
+    if (decided.has(id)) {
+      if (TRIAGE_ACTIONS.includes(entry.action) && entry.action !== decided.get(id).action) conflicting.add(id);
+      continue;
+    }
     if (!TRIAGE_ACTIONS.includes(entry.action)) {
       return { ok: false, error: `triage action for ${id} must be one of: ${TRIAGE_ACTIONS.join(', ')}` };
     }
     if (typeof entry.reasoning !== 'string' || entry.reasoning.trim() === '') {
       return { ok: false, error: `triage reasoning for ${id} is missing` };
     }
-    seen.add(id);
-    decisions.push({
+    decided.set(id, {
       id,
       action: entry.action,
       reasoning: entry.reasoning.trim(),
@@ -280,7 +288,14 @@ export function parseTriage(raw, expectedIds) {
     });
   }
 
-  return { ok: true, decisions, missing: expectedIds.filter(id => !seen.has(id)) };
+  const decisions = [...decided.values()].filter(d => !conflicting.has(d.id));
+  const settled = new Set(decisions.map(d => d.id));
+  return {
+    ok: true,
+    decisions,
+    missing: expectedIds.filter(id => !settled.has(id)),
+    conflicting: [...conflicting]
+  };
 }
 
 // The report decides which items settle: only ids with an explicit
@@ -349,6 +364,7 @@ function settleBatches(failures, batchCount, result) {
 export async function runTriage({ engine, model, cwd, pr, comments, diff, outputFile, timeoutMs, env, runner }) {
   const decisions = [];
   const missing = [];
+  const conflicting = [];
   const failures = [];
   const batches = batchBySize(comments, commentSize);
   for (let i = 0; i < batches.length; i++) {
@@ -375,8 +391,9 @@ export async function runTriage({ engine, model, cwd, pr, comments, diff, output
     }
     decisions.push(...parsed.decisions);
     missing.push(...parsed.missing);
+    conflicting.push(...parsed.conflicting);
   }
-  return settleBatches(failures, batches.length, { decisions, missing });
+  return settleBatches(failures, batches.length, { decisions, missing, conflicting });
 }
 
 // A missing or unreadable report is an infrastructure failure: nothing can be

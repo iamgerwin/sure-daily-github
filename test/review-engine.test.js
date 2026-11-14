@@ -191,17 +191,60 @@ test('runTriage reports invalid JSON, bad actions, and missing reasoning', async
   }
 });
 
-test('parseTriage reports undecided ids and ignores unknown or duplicate ones', () => {
+test('parseTriage reports undecided ids and ignores unknown or repeated ones', () => {
   const result = parseTriage(JSON.stringify({
     comments: [
       { id: 'review:2', action: 'note', reasoning: 'summary only' },
-      { id: 'review:2', action: 'fix', reasoning: 'dup' },
+      { id: 'review:2', action: 'note', reasoning: 'said again' },
       { id: 'review:999', action: 'fix', reasoning: 'not ours' }
+    ]
+  }), ['review_comment:1', 'review:2']);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.decisions.map(d => [d.id, d.action, d.reasoning]), [['review:2', 'note', 'summary only']]);
+  assert.deepEqual(result.missing, ['review_comment:1']);
+  assert.deepEqual(result.conflicting, []);
+});
+
+test('parseTriage leaves an id with conflicting actions undecided instead of keeping the first', () => {
+  const result = parseTriage(JSON.stringify({
+    comments: [
+      { id: 'review_comment:1', action: 'wontfix', reasoning: 'not a bug' },
+      { id: 'review:2', action: 'note', reasoning: 'summary only' },
+      { id: 'review_comment:1', action: 'fix', reasoning: 'off-by-one in the loop' },
+      // A repeat with an unknown action is ignored, as before
+      { id: 'review:2', action: 'maybe', reasoning: 'unsure' }
     ]
   }), ['review_comment:1', 'review:2']);
   assert.equal(result.ok, true);
   assert.deepEqual(result.decisions.map(d => [d.id, d.action]), [['review:2', 'note']]);
   assert.deepEqual(result.missing, ['review_comment:1']);
+  assert.deepEqual(result.conflicting, ['review_comment:1']);
+});
+
+test('runTriage collects conflicting ids across batches', async () => {
+  const outputFile = path.join(tmpDir(), 'triage.json');
+  const big = 'x'.repeat(60000);
+  const batchComments = [
+    { id: 'review_comment:1', kind: 'review_comment', author: 'a', body: big },
+    { id: 'review_comment:2', kind: 'review_comment', author: 'a', body: big }
+  ];
+  let call = 0;
+  const runner = async () => {
+    call++;
+    const file = call === 1 ? outputFile : outputFile.replace(/\.json$/, '-2.json');
+    const id = `review_comment:${call}`;
+    const comments = call === 1
+      ? [{ id, action: 'note', reasoning: 'ok' }]
+      : [{ id, action: 'defer', reasoning: 'later' }, { id, action: 'fix', reasoning: 'now' }];
+    fs.writeFileSync(file, JSON.stringify({ comments }));
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const triage = await runTriage({ engine: 'opencode', model: 'm', cwd: '/w', pr, comments: batchComments, diff: '', outputFile, runner });
+  assert.equal(call, 2);
+  assert.equal(triage.ok, true);
+  assert.deepEqual(triage.decisions.map(d => d.id), ['review_comment:1']);
+  assert.deepEqual(triage.missing, ['review_comment:2']);
+  assert.deepEqual(triage.conflicting, ['review_comment:2']);
 });
 
 test('runTriage fails on a non-zero exit, a spawn error, or a timeout', async () => {

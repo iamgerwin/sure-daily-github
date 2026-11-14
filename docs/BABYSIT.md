@@ -152,8 +152,11 @@ interpreter gap completely requires running the engine in a container.
 4. **Triage.** The engine gets the comments plus the PR diff and must write
    `{"comments":[{"id","action","reasoning","plan"}]}` to a JSON file. Its
    stdout is never parsed. Each comment gets one action: `fix`, `defer`,
-   `wontfix`, or `note`. Anything the engine changed during triage is
-   discarded.
+   `wontfix`, or `note`. A comment listed twice with the same action keeps
+   its first entry; a comment listed with different actions (say `wontfix`
+   and `fix`) gets no decision, so neither is acted on and it is charged an
+   attempt like any other undecided comment. Anything the engine changed
+   during triage is discarded.
 5. **Implement** (only if there are `fix` items). The engine applies the
    fixes, adds tests, and commits with conventional messages. If it leaves
    uncommitted edits, babysit commits them as
