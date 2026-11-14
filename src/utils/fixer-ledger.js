@@ -36,6 +36,14 @@ function normalizeKeys(entries) {
   return normalized;
 }
 
+// Whether `at` lies within `windowMs` of `now`. Measured as a distance, as the
+// run lock does: after the clock is stepped back (a reboot before NTP sync), a
+// timestamp from the future would otherwise keep a PR skipped, and its entry
+// unpruned, for the whole step on top of the configured window
+function withinWindow(now, at, windowMs) {
+  return Number.isFinite(at) && Math.abs(now - at) < windowMs;
+}
+
 // An entry stops blocking once its in-progress TTL or finished cooldown has
 // passed (and an interrupted one never blocks), so past the longer of the two
 // windows it only takes space; a malformed entry never blocks either
@@ -44,7 +52,7 @@ function pruneExpired(entries, now, { attemptTtlMs, retryCooldownMs }) {
   if (!Number.isFinite(maxAgeMs)) return;
   for (const [key, entry] of Object.entries(entries)) {
     const at = entry && typeof entry === 'object' ? (entry.finishedAt ?? entry.startedAt) : null;
-    if (!Number.isFinite(at) || now - at >= maxAgeMs) delete entries[key];
+    if (!withinWindow(now, at, maxAgeMs)) delete entries[key];
   }
 }
 
@@ -85,10 +93,10 @@ export class FixerLedger {
   skipReason(key, headSha, { now = Date.now(), attemptTtlMs, retryCooldownMs }) {
     const entry = this.load()[key];
     if (!entry || entry.headSha !== headSha) return null;
-    if (entry.status === 'in-progress' && now - entry.startedAt < attemptTtlMs) {
+    if (entry.status === 'in-progress' && withinWindow(now, entry.startedAt, attemptTtlMs)) {
       return 'already-in-progress';
     }
-    if (FINISHED_STATUSES.has(entry.status) && now - entry.finishedAt < retryCooldownMs) {
+    if (FINISHED_STATUSES.has(entry.status) && withinWindow(now, entry.finishedAt, retryCooldownMs)) {
       return 'already-attempted';
     }
     return null;
