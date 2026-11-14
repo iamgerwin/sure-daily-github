@@ -379,6 +379,39 @@ test('getRequestRetries reads GITHUB_REQUEST_RETRIES and falls back on invalid v
   }
 });
 
+test('getRequestRetries keeps the default for a blank value instead of disabling retries', () => {
+  try {
+    for (const blank of ['', ' ', '\t', ' \n ']) {
+      process.env.GITHUB_REQUEST_RETRIES = blank;
+      assert.equal(getRequestRetries(), 2, JSON.stringify(blank));
+    }
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+test('getRequestRetries ignores surrounding whitespace around a whole number', () => {
+  try {
+    process.env.GITHUB_REQUEST_RETRIES = ' 5 ';
+    assert.equal(getRequestRetries(), 5);
+    process.env.GITHUB_REQUEST_RETRIES = '0\n';
+    assert.equal(getRequestRetries(), 0);
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+test('getRequestRetries rejects values that are not plain whole digits', () => {
+  try {
+    for (const raw of ['-1', '1.5', '0x10', '1e3', '+3', '3 retries', '99999999999999999999']) {
+      process.env.GITHUB_REQUEST_RETRIES = raw;
+      assert.equal(getRequestRetries(), 2, raw);
+    }
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
 test('getRequestTimeoutMs caps GITHUB_REQUEST_TIMEOUT_MS at the timer limit', () => {
   process.env.GITHUB_REQUEST_TIMEOUT_MS = '9999999999';
   try {
