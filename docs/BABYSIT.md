@@ -254,8 +254,10 @@ its group leader is still killed.
 `data/babysitter-state.json` (override with `SDG_BABYSITTER_STATE_FILE`)
 records each comment, keyed by repository, PR, and comment id. Each entry
 holds its state, the PR head SHA at handling time, the action, the reply id,
-and the commit SHA. Writes are atomic (write, then rename). A corrupt file is
-backed up to `.bak` and the ledger starts fresh.
+and the commit SHA. Writes are atomic (write, then rename). A corrupt or
+unreadable file is copied to `.bak` and the ledger starts fresh; the error
+line says whether that copy was kept or failed (in which case the next save
+replaces the only copy, and already answered comments may be answered again).
 
 | State       | Meaning | Reprocessed? |
 |-------------|---------|--------------|

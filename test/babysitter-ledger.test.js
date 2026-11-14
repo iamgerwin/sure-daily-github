@@ -104,6 +104,63 @@ test('a corrupt ledger is backed up and replaced with an empty one', (t) => {
   }
 });
 
+test('a corrupt ledger reports that the original was kept at .bak', (t) => {
+  const filePath = tmpLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, '{not json');
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  new BabysitterLedger({ filePath });
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /babysitter ledger/);
+  assert.ok(errors[0].includes(`the original is kept at ${filePath}.bak`), errors[0]);
+});
+
+test('a ledger whose backup cannot be written says the next save replaces it', (t) => {
+  const filePath = tmpLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, '{not json');
+  // A directory at the .bak path makes the copy fail
+  fs.mkdirSync(`${filePath}.bak`);
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  const ledger = new BabysitterLedger({ filePath });
+
+  assert.equal(ledger.shouldProcess(key), true);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /could not be copied/);
+  assert.match(errors[0], /next save replaces it/);
+  assert.doesNotMatch(errors[0], /is kept at/);
+});
+
+test('a ledger path that cannot be read is reported instead of silently starting fresh', (t) => {
+  const filePath = tmpLedgerPath();
+  // A directory where the file should be: exists, but reading it fails
+  fs.mkdirSync(filePath, { recursive: true });
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  const ledger = new BabysitterLedger({ filePath });
+
+  assert.deepEqual(ledger.data, { version: 1, comments: {}, prs: {}, deliveries: {}, pushIntents: {}, cursor: null });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /babysitter ledger/);
+  assert.match(errors[0], /could not be copied/);
+});
+
+test('a missing ledger starts empty without a report', (t) => {
+  const filePath = tmpLedgerPath();
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  assert.deepEqual(new BabysitterLedger({ filePath }).data, { version: 1, comments: {}, prs: {}, deliveries: {}, pushIntents: {}, cursor: null });
+  assert.deepEqual(errors, []);
+  assert.equal(fs.existsSync(`${filePath}.bak`), false);
+});
+
 test('array comments or prs sections are replaced so new records survive a reload', () => {
   const filePath = tmpLedgerPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
