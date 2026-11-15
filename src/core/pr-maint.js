@@ -186,6 +186,10 @@ function decidePr(pr, repoLedger, opts) {
     actions: []
   };
 
+  // A partial label list can hide automation-paused or needs-human (whose
+  // absence ends an escalation as cleared by a human): hold the PR, with no
+  // write and no ledger update, until every label is read
+  if (pr.labelsIncomplete) return { ...row, skip: 'labels', blocker: 'labels could not all be read' };
   if (pr.labels.includes(PAUSED)) return { ...row, skip: 'paused', blocker: `\`${PAUSED}\`` };
   if (pr.isCrossRepository) return { ...row, skip: 'fork', blocker: 'head branch is on a fork' };
   if (!(opts.authors || []).some(author => sameLogin(author, pr.author))) {

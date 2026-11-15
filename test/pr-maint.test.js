@@ -91,6 +91,24 @@ test('decide: automation-paused PRs are skipped with no actions at all', () => {
   assert.deepEqual(row.actions, []);
 });
 
+test('decide: a PR whose labels were not all read is held, even when the read part looks actionable', () => {
+  const [row] = only([pr(6, { mergeable: 'CONFLICTING', labels: ['sdg:waiting'], labelsIncomplete: true })]);
+  assert.equal(row.skip, 'labels');
+  assert.equal(row.blocker, 'labels could not all be read');
+  assert.deepEqual(row.actions, []);
+  assert.equal(row.changed, false);
+});
+
+test('decide: an unread needs-human does not end an active escalation as cleared by a human', () => {
+  const ledger = emptyLedger();
+  ledger.escalations['12'] = { reason: 'attempts', active: true, pending: false, headSha: sha('a'), history: [NOW], clears: [] };
+  // needs-human is still on GitHub, past the labels the snapshot returned
+  const [row] = only([pr(12, { labels: ['sdg:waiting'], labelsIncomplete: true })], ledger);
+  assert.equal(row.humanCleared, false);
+  assert.equal(row.delivered, false);
+  assert.deepEqual(row.actions, []);
+});
+
 test('decide: fork and non-allowlisted PRs are skipped', () => {
   const rows = only([pr(7, { isCrossRepository: true }), pr(8, { author: 'stranger' })]);
   assert.deepEqual(rows.map(r => [r.number, r.skip, r.actions.length]), [[7, 'fork', 0], [8, 'author', 0]]);
