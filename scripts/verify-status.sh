@@ -7,6 +7,9 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${CONFIG_PATH:-$APP_DIR/config/config.yaml}"
 STATE_FILE="${SDG_ISSUE_STATE_FILE:-$APP_DIR/data/issue-state.json}"
 HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
+# A relative path is anchored to the install directory, matching the scheduler,
+# so a run from cron's working directory still finds the service's heartbeat
+case "$HEARTBEAT_FILE" in /*) ;; *) HEARTBEAT_FILE="$APP_DIR/$HEARTBEAT_FILE" ;; esac
 LOG_DIR="$APP_DIR/logs"
 
 echo "=========================================="

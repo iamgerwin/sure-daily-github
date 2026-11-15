@@ -11,6 +11,9 @@ SERVICE_NAME="sure-daily-github"
 APP_DIR="${SDG_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOG_FILE="$APP_DIR/logs/health-check.log"
 HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
+# A relative path is anchored to the install directory, matching the scheduler,
+# so a run from cron's working directory still finds the service's heartbeat
+case "$HEARTBEAT_FILE" in /*) ;; *) HEARTBEAT_FILE="$APP_DIR/$HEARTBEAT_FILE" ;; esac
 HEARTBEAT_MAX_AGE_MINUTES="${HEARTBEAT_MAX_AGE_MINUTES:-0}"
 # Touched on every hang restart; a heartbeat not newer than it means the
 # restarted scheduler never wrote one, so another restart would not help

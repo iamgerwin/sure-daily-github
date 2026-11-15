@@ -5,10 +5,18 @@ import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root so scripts/health-check.sh finds it without config
-const DEFAULT_HEARTBEAT_FILE = path.join(__dirname, '../../data/scheduler-heartbeat.json');
+const PROJECT_ROOT = path.join(__dirname, '../..');
+const DEFAULT_HEARTBEAT_FILE = path.join(PROJECT_ROOT, 'data/scheduler-heartbeat.json');
 
+// The service and the health check must agree on this path, but they start in
+// different working directories (systemd's WorkingDirectory vs. cron's home
+// directory). A relative SDG_HEARTBEAT_FILE is therefore anchored to the
+// project root, as the scripts anchor it to their install directory.
+// Surrounding whitespace is ignored and a blank value keeps the default.
 export function heartbeatFilePath() {
-  return process.env.SDG_HEARTBEAT_FILE || DEFAULT_HEARTBEAT_FILE;
+  const text = String(process.env.SDG_HEARTBEAT_FILE ?? '').trim();
+  if (!text) return DEFAULT_HEARTBEAT_FILE;
+  return path.resolve(PROJECT_ROOT, text);
 }
 
 // Minutes an execution may stay in flight before skipped ticks stop refreshing

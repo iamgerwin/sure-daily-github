@@ -17,13 +17,14 @@ function makeAppDir() {
   return dir;
 }
 
-function run(appDir, env = {}) {
+function run(appDir, env = {}, cwd = undefined) {
   const baseEnv = { ...process.env };
   delete baseEnv.CONFIG_PATH;
   delete baseEnv.SDG_ISSUE_STATE_FILE;
   delete baseEnv.SDG_HEARTBEAT_FILE;
   return execFileSync('bash', [path.join(appDir, 'scripts/verify-status.sh')], {
     encoding: 'utf8',
+    cwd,
     // systemctl and pgrep complaints on hosts without systemd are not under test
     stdio: ['ignore', 'pipe', 'ignore'],
     env: { ...baseEnv, ...env }
@@ -128,4 +129,21 @@ test('verify-status honors SDG_HEARTBEAT_FILE', (t) => {
   const output = run(appDir, { SDG_HEARTBEAT_FILE: heartbeatFile });
 
   assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z \(0 minutes ago\)/);
+});
+
+test('verify-status resolves a relative SDG_HEARTBEAT_FILE against the app tree', (t) => {
+  const appDir = makeAppDir();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-verify-cwd-'));
+  t.after(() => {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  fs.mkdirSync(path.join(appDir, 'run'));
+  fs.writeFileSync(path.join(appDir, 'run/heartbeat.json'), JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+
+  const output = run(appDir, { SDG_HEARTBEAT_FILE: 'run/heartbeat.json' }, elsewhere);
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z/);
+  assert.doesNotMatch(output, /No scheduler heartbeat/);
 });
