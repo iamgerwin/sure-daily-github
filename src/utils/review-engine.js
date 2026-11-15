@@ -34,8 +34,14 @@ export function opencodePolicy() {
     bash[command] = 'deny';
     bash[`${command} *`] = 'deny';
   }
-  // Absolute paths sidestep the prefix match (/usr/bin/git push)
+  // Absolute or relative paths sidestep the prefix match (/usr/bin/git push,
+  // /usr/bin/curl, ./bin/gh): every denied command is also denied by path.
+  // One git rule covers every git subcommand and global option.
   bash['*/git *'] = 'deny';
+  for (const command of [...DENIED_COMMANDS, ...DENIED_WRAPPERS]) {
+    if (command.startsWith('git ')) continue;
+    bash[`*/${command} *`] = 'deny';
+  }
   return {
     permission: {
       edit: 'allow',

@@ -81,6 +81,21 @@ test('the opencode policy denies network, push, credential, and wrapper commands
   assert.equal(permission.websearch, 'deny');
 });
 
+test('the opencode policy denies network, credential and wrapper commands run by path', () => {
+  const { permission } = opencodePolicy();
+  // /usr/bin/curl or ./gh would otherwise miss the bare-name prefix rules
+  for (const command of ['gh', 'curl', 'wget', 'ssh', 'scp', 'sftp', 'rsync', 'nc', 'ncat', 'socat', 'telnet', 'ftp', 'sudo',
+    'env', 'exec', 'command', 'xargs', 'bash -c', 'sh -c', 'zsh -c']) {
+    assert.equal(permission.bash[`*/${command} *`], 'deny', `*/${command} *`);
+  }
+  // Every git form is already covered by the single */git rule
+  assert.ok(Object.keys(permission.bash).every(key => !/^\*\/git ./.test(key) || key === '*/git *'));
+  assert.equal(Object.keys(permission.bash)[0], '*');
+  for (const [key, value] of Object.entries(permission.bash)) {
+    if (key !== '*') assert.equal(value, 'deny', key);
+  }
+});
+
 test('the claude policy only allows file tools and local git, and denies push, gh, and network', () => {
   assert.ok(CLAUDE_ALLOWED_TOOLS.every(tool => !/push|pull|fetch|remote|config|gh|curl|ssh/.test(tool)), CLAUDE_ALLOWED_TOOLS.join());
   for (const tool of ['Bash(git push:*)', 'Bash(gh:*)', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(ssh:*)', 'Bash(scp:*)', 'Bash(git config:*)', 'WebFetch', 'WebSearch']) {
