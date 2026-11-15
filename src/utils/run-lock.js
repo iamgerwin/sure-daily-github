@@ -1,12 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { clampTimerMs } from './process.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root so the service and a manual `cli.js run` share it
 const DEFAULT_LOCK_FILE = path.join(__dirname, '../../data/run.lock');
 // Fallback for PID reuse: a lock older than this is reclaimed even if its PID is alive
 const DEFAULT_STALE_MS = 2 * 60 * 60 * 1000;
+// A held lock is refreshed this often (at most), well inside the stale window
+const MAX_REFRESH_MS = 10 * 60 * 1000;
+const MIN_REFRESH_MS = 1000;
 
 function lockFilePath() {
   return process.env.SDG_RUN_LOCK_FILE || DEFAULT_LOCK_FILE;
@@ -47,16 +51,26 @@ function readLock(filePath) {
   return parseLock(readRaw(filePath));
 }
 
+// How often a held lock rewrites its refreshedAt: a quarter of the stale
+// window, so a live holder is never judged stale by its age
+function refreshIntervalMs() {
+  return clampTimerMs(Math.max(MIN_REFRESH_MS, Math.min(Math.floor(staleMs() / 4), MAX_REFRESH_MS)));
+}
+
 // The age fallback covers a reused PID, so it must not depend on startedAt
 // being sane: a missing or non-numeric value has no age (stale), and a value
 // further ahead than the limit (the clock was stepped back, e.g. a reboot
 // before NTP sync) is measured as distance, otherwise the lock would block
-// every run until the clock caught up with it
+// every run until the clock caught up with it. A live holder keeps
+// refreshedAt current, so its age is measured from the last refresh: a babysit
+// or fix-conflicts run longer than the window keeps its lock, while a lock
+// whose PID was reused by an unrelated process stops being refreshed and ages out.
 function isStale(holder, now) {
   if (!holder || !Number.isInteger(holder.pid)) return true;
   if (!isProcessAlive(holder.pid)) return true;
   if (!Number.isFinite(holder.startedAt)) return true;
-  return Math.abs(now - holder.startedAt) > staleMs();
+  const lastSeen = Number.isFinite(holder.refreshedAt) ? holder.refreshedAt : holder.startedAt;
+  return Math.abs(now - lastSeen) > staleMs();
 }
 
 // Filesystems without hard links; fall back to a plain exclusive create there
@@ -107,17 +121,51 @@ function reclaimStaleLock(filePath, staleRaw) {
   }
 }
 
+// Rewrites refreshedAt on a lock this process still holds, replacing it with a
+// rename so readers never see a partial file. A lock that changed since our
+// last write (reclaimed, or taken by another process) is left alone. Never
+// throws: it runs from a timer, and a failed refresh only shortens the lock's life.
+function refreshLock(filePath, held, now = Date.now()) {
+  if (readRaw(filePath) !== held.raw) return false;
+  const contents = JSON.stringify({ pid: process.pid, startedAt: held.startedAt, refreshedAt: now });
+  const tmpFile = `${filePath}.${process.pid}.${Date.now()}.refresh.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, contents, { flag: 'wx' });
+    fs.renameSync(tmpFile, filePath);
+    held.raw = contents;
+    return true;
+  } catch (_) {
+    try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
+    return false;
+  }
+}
+
 // Acquires an exclusive cross-process lock so concurrent executions (e.g. the
 // scheduler service plus a manual `run`) cannot race on the state files.
-// Returns { acquired: true, release } or { acquired: false, holder }.
+// Returns { acquired: true, release, refresh } or { acquired: false, holder }.
+// While held, the lock is refreshed every `refreshMs` so a run longer than
+// SDG_RUN_LOCK_STALE_MS is not mistaken for a reused PID; release stops it.
 // `filePath` selects a separate lock (pr-maint ticks must not wait on `run`).
-export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } = {}) {
+export function acquireRunLock({ now = Date.now(), filePath = lockFilePath(), refreshMs = refreshIntervalMs() } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      createLockFile(filePath, JSON.stringify({ pid: process.pid, startedAt: now }));
-      return { acquired: true, release: () => releaseRunLock(filePath) };
+      const raw = JSON.stringify({ pid: process.pid, startedAt: now });
+      createLockFile(filePath, raw);
+      const held = { raw, startedAt: now };
+      const refresh = (at) => refreshLock(filePath, held, at);
+      // Unref'd: a held lock must not keep a finished process alive
+      const timer = setInterval(() => refresh(), refreshMs);
+      timer.unref();
+      return {
+        acquired: true,
+        refresh,
+        release: () => {
+          clearInterval(timer);
+          releaseRunLock(filePath);
+        }
+      };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
     }

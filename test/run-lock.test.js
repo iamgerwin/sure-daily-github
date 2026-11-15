@@ -105,6 +105,66 @@ test('acquireRunLock ages a lock dated ahead of the clock by its distance', (t) 
   result.release();
 });
 
+test('a held lock is refreshed so a long run outlives the stale window', (t) => {
+  const filePath = useTmpLockFile(t);
+  process.env.SDG_RUN_LOCK_STALE_MS = '1000';
+
+  // Taken 5 seconds ago: without a refresh its age alone would reclaim it
+  const lock = acquireRunLock({ now: Date.now() - 5000 });
+  assert.equal(lock.acquired, true);
+  assert.equal(lock.refresh(), true);
+
+  const contents = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(contents.pid, process.pid);
+  assert.ok(Date.now() - contents.refreshedAt < 1000, 'refreshedAt is current');
+  assert.ok(Date.now() - contents.startedAt >= 5000, 'startedAt keeps the acquisition time');
+
+  const second = acquireRunLock();
+  assert.equal(second.acquired, false, 'a refreshed live lock is not reclaimed');
+  lock.release();
+  assert.equal(fs.existsSync(filePath), false, 'release still removes a refreshed lock');
+});
+
+test('acquireRunLock ages a live-PID lock from its last refresh', (t) => {
+  const filePath = useTmpLockFile(t);
+  process.env.SDG_RUN_LOCK_STALE_MS = '1000';
+
+  // Old start, recent refresh: the holder is still working
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ pid: process.ppid, startedAt: Date.now() - 60000, refreshedAt: Date.now() }));
+  assert.equal(acquireRunLock().acquired, false);
+
+  // Refreshes stopped (a reused PID no longer refreshes): reclaimed
+  fs.writeFileSync(filePath, JSON.stringify({ pid: process.ppid, startedAt: Date.now() - 60000, refreshedAt: Date.now() - 5000 }));
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  result.release();
+});
+
+test('refresh leaves a lock that now belongs to someone else untouched', (t) => {
+  const filePath = useTmpLockFile(t);
+
+  const lock = acquireRunLock();
+  writeForeignLock(filePath, { startedAt: 12345 });
+  assert.equal(lock.refresh(), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')), { pid: process.ppid, startedAt: 12345 });
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock'], 'no temp file left behind');
+  lock.release();
+  assert.equal(fs.existsSync(filePath), true);
+});
+
+test('the refresh timer runs while the lock is held and stops on release', async (t) => {
+  const filePath = useTmpLockFile(t);
+
+  const lock = acquireRunLock({ refreshMs: 20 });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.ok(Number.isFinite(JSON.parse(fs.readFileSync(filePath, 'utf8')).refreshedAt), 'timer refreshed the lock');
+
+  lock.release();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(fs.existsSync(filePath), false, 'no refresh recreates a released lock');
+});
+
 test('release does not remove a lock that now belongs to someone else', (t) => {
   const filePath = useTmpLockFile(t);
 

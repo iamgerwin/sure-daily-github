@@ -63,7 +63,7 @@ The other commands' state files have their own overrides, documented with each c
 
 Every execution holds an exclusive lock file (`data/run.lock`) for its whole duration, so the scheduler service and a manual `node src/cli.js run` cannot update the state files at the same time. If another live process holds the lock, the run is skipped: `run` exits with an error that shows the holder's PID, and the scheduler logs a warning and waits for the next tick.
 
-A lock left behind by a crashed process is reclaimed automatically when its PID is no longer alive. A lock older than 2 hours is also reclaimed, in case the PID has been reused. The age is the distance between the lock's start time and the clock, so a lock dated more than 2 hours in the future (the system clock was stepped back) is reclaimed too, as is a lock with no numeric start time.
+A lock left behind by a crashed process is reclaimed automatically when its PID is no longer alive. A lock older than 2 hours is also reclaimed, in case the PID has been reused. While a process holds the lock it rewrites a `refreshedAt` time in it every quarter of that window (at most every 10 minutes), and the age is measured from the last refresh, so a run that legitimately takes longer than 2 hours (a babysit scan or a fix-conflicts pass with long test suites) keeps its lock; a reused PID belongs to a process that never refreshes it, so that lock still ages out. The age is the distance between the lock's last refresh (or its start time, before the first refresh) and the clock, so a lock dated more than 2 hours in the future (the system clock was stepped back) is reclaimed too, as is a lock with no numeric start time.
 
 ```bash
 export SDG_RUN_LOCK_FILE=/var/lib/sure-daily-github/run.lock   # lock location
