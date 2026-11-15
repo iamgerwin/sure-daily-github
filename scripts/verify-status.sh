@@ -43,11 +43,25 @@ else
 fi
 echo ""
 
-# Check configuration; anchored so commented-out keys are not reported
+# Prints the first `key:` line inside the top-level `block:` section of a YAML
+# file, without its indentation. Anchored so commented-out keys are skipped.
+yaml_block_key() {
+  awk -v block="$2" -v key="$3" '
+    /^[^[:space:]#]/ { in_block = ($0 ~ "^" block ":") }
+    in_block && $0 ~ "^[[:space:]]+" key ":" { sub(/^[[:space:]]*/, ""); print; exit }
+  ' "$1"
+}
+
+# Check configuration. The cron fires in schedule.timezone, falling back to
+# general.timezone and then UTC (as the scheduler does), so the first
+# timezone: in the file (usually general's) is not necessarily the cron's.
 echo "4️⃣  Configuration:"
 if [ -f "$CONFIG_FILE" ]; then
-  echo "   Cron Schedule: $(grep -E '^[[:space:]]*cron:' "$CONFIG_FILE" | head -1 | sed 's/^[[:space:]]*/   /')"
-  echo "   Timezone: $(grep -E '^[[:space:]]*timezone:' "$CONFIG_FILE" | head -1 | sed 's/^[[:space:]]*/   /')"
+  CRON_LINE=$(yaml_block_key "$CONFIG_FILE" schedule cron)
+  TZ_LINE=$(yaml_block_key "$CONFIG_FILE" schedule timezone)
+  [ -z "$TZ_LINE" ] && TZ_LINE=$(yaml_block_key "$CONFIG_FILE" general timezone)
+  echo "   Cron Schedule:    ${CRON_LINE:-not set}"
+  echo "   Timezone:    ${TZ_LINE:-not set (UTC)}"
 else
   echo "   ❌ Config file not found: $CONFIG_FILE"
 fi
