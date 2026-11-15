@@ -440,7 +440,7 @@ These tests cover:
 
 ## Limits Enforcement
 
-In issue mode with fixed targets (the simple issue handler), when `timeVariations.enabled` is true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When disabled, the repository `dailyTarget` (fixed or range) acts as the daily cap, as it always does in commit mode and in the advanced issue handler. See docs/STATE.md for details.
+In issue mode with fixed targets (the simple issue handler), when `randomization.enabled` and `timeVariations.enabled` are both true, the `max` values for `hourly`, `daily`, and `weekly` are treated as hard caps by the state manager. When either is disabled, no hourly or weekly cap applies and the repository `dailyTarget` (fixed or range) acts as the daily cap, as it always does in commit mode and in the advanced issue handler. See docs/STATE.md for details.
 
 ## Troubleshooting
 

@@ -302,6 +302,48 @@ test('disabled randomization keeps the repository dailyTarget as the daily cap',
   assert.equal(handler.checkLimits(fixedRepo('rand-off'), config).limits.dailyMax, 1);
 });
 
+test('disabled randomization does not apply timeVariations hourly or weekly caps', async () => {
+  const { handler, calls } = createHandler();
+  const config = {
+    randomization: {
+      enabled: false,
+      timeVariations: { enabled: true, hourly: { min: 1, max: 1 }, weekly: { min: 1, max: 1 } }
+    }
+  };
+
+  const results = await handler.processRepositories([repoConfig('rand-off-caps')], {}, false, config);
+
+  // The repository dailyTarget of 3 is the only limit
+  assert.equal(calls.length, 3);
+  assert.equal(results[0].successful, 3);
+  const { limits } = handler.checkLimits(repoConfig('rand-off-caps'), config);
+  assert.deepEqual(limits, { hourlyMax: Infinity, dailyMax: 3, weeklyMax: Infinity });
+});
+
+test('disabled randomization ignores an unvalidated timeVariations cap that would block every issue', () => {
+  const { handler } = createHandler();
+  // Validation skips timeVariations while randomization is disabled, so a zero
+  // max reaches checkLimits; it must not hold the repository at zero issues
+  const config = {
+    randomization: { enabled: false, timeVariations: { enabled: true, hourly: { min: 0, max: 0 } } }
+  };
+
+  assert.equal(handler.checkLimits(fixedRepo('rand-off-zero'), config).allowed, true);
+});
+
+test('enabled randomization with time variations off applies no hourly or weekly cap', () => {
+  const { handler } = createHandler();
+  const config = {
+    randomization: {
+      enabled: true,
+      issueCount: { min: 2, max: 2 },
+      timeVariations: { enabled: false, hourly: { min: 1, max: 1 }, weekly: { min: 1, max: 1 } }
+    }
+  };
+
+  assert.deepEqual(handler.checkLimits(fixedRepo('rand-tv-off'), config).limits, { hourlyMax: Infinity, dailyMax: 2, weeklyMax: Infinity });
+});
+
 test('an unwritable state file fails the run before any issue is created', async (t) => {
   const { handler, calls } = createHandler();
   t.mock.method(fs, 'renameSync', () => { throw new Error('read-only file system'); });
