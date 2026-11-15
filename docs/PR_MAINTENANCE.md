@@ -112,6 +112,8 @@ copied (for example it cannot be read at all), the report says so instead of nam
 | `data/pr-maint.lock` (tick lock) | `SDG_PR_MAINT_LOCK_FILE` |
 | `data/pr-maint-decisions.jsonl` (decisions log) | `SDG_PR_MAINT_DECISIONS_FILE` |
 
+A relative `SDG_PR_MAINT_LOCK_FILE` is resolved against the project root (like `SDG_RUN_LOCK_FILE`, see [STATE.md](STATE.md#concurrent-runs)), so ticks started from different working directories still exclude each other.
+
 ### Label state machine
 
 Labels are created (or repaired, for the AI-owned ones) on the first `act` tick. Each of those writes is admitted like an

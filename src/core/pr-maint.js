@@ -5,7 +5,7 @@ import GitHubClient from '../github/client.js';
 import { PrMaintGitHub } from '../github/pr-labels.js';
 import config from '../config/loader.js';
 import logger from '../utils/logger.js';
-import { acquireRunLock } from '../utils/run-lock.js';
+import { acquireRunLock, resolveLockPath } from '../utils/run-lock.js';
 import { PrMaintLedger, repoState } from '../utils/pr-maint-ledger.js';
 import { ActionExecutor, effectiveMode } from './executor.js';
 import { isConflicted, selectRepositories, gateReason } from './conflict-fixer.js';
@@ -28,7 +28,7 @@ const retryable = (outcome) => outcome.status === 'error'
   || (outcome.status === 'denied' && RETRY_RULES.has(outcome.verdict.rule));
 
 export function prMaintLockFile() {
-  return process.env.SDG_PR_MAINT_LOCK_FILE || DEFAULT_LOCK_FILE;
+  return resolveLockPath(process.env.SDG_PR_MAINT_LOCK_FILE, DEFAULT_LOCK_FILE);
 }
 
 export const sha1 = (value) => crypto.createHash('sha1').update(String(value)).digest('hex');

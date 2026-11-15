@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   PrMaint, decide, fingerprint, recordEscalation, renderDashboard, prMaintLockFile, getPrMaintExitCode, sha1, renderSticky,
   MAX_DASHBOARD_ROWS
@@ -636,6 +637,15 @@ test('pr-maint holds its own lock, separate from run.lock', async (t) => {
 
 test('the default pr-maint lock file is data/pr-maint.lock', () => {
   delete process.env.SDG_PR_MAINT_LOCK_FILE;
+  assert.match(prMaintLockFile(), /data[\\/]pr-maint\.lock$/);
+});
+
+test('a relative SDG_PR_MAINT_LOCK_FILE resolves under the project root whatever the working directory', (t) => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  process.env.SDG_PR_MAINT_LOCK_FILE = ' locks/pr-maint.lock ';
+  t.after(() => { delete process.env.SDG_PR_MAINT_LOCK_FILE; });
+  assert.equal(prMaintLockFile(), path.join(root, 'locks', 'pr-maint.lock'));
+  process.env.SDG_PR_MAINT_LOCK_FILE = '  ';
   assert.match(prMaintLockFile(), /data[\\/]pr-maint\.lock$/);
 });
 
