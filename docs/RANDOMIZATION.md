@@ -113,7 +113,7 @@ The system automatically selects the appropriate time period based on your sched
 
 ## Issue Content Templates
 
-The advanced issue handler (issue mode with range targets or `intervalMinutes`) does not use the single `contentTemplate` block. Each issue instead uses one entry picked at random from the top-level `contentTemplates` list:
+The advanced issue handler (issue mode with range targets or `intervalMinutes`) picks one entry at random from the top-level `contentTemplates` list for each issue. When that list is missing or empty, it uses the single `contentTemplate` block instead (see below):
 
 ```yaml
 contentTemplates:
@@ -134,7 +134,8 @@ randomization:
   perfTitles: ["Slow dashboard query"]
 ```
 
-- `title` and `body` are optional strings. Without a list (or for a missing field), the issue is titled `Automated Issue - <date> <time>` and gets a short default body naming the repository.
+- `title` and `body` are optional strings. A field the picked template leaves out gets the default: the title `Automated Issue - <date> <time>`, and a short body naming the repository.
+- Without a `contentTemplates` list (or with an empty one), the configured `contentTemplate` is used: its `title` and `body`, with every placeholder below, but not its `labels`. Without either, both fields get the defaults above. `contentTemplates` takes precedence when both are set.
 - `labels` are added to the issue together with the repository's `labels` (default `["automated"]`). A label listed in both is sent once (names compare case-insensitively, as on GitHub; the first spelling wins).
 - `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` feed the `${randomBug…}` style placeholders below. A missing or empty list falls back to `General bug`, `General feature`, `General documentation` and `General performance`.
 
@@ -155,7 +156,7 @@ Placeholders filled in `title` and `body`:
 
 Values are inserted literally, and any other `${name}` is left as written.
 
-The simple issue handler (fixed targets) and commit mode use `contentTemplate` instead, which supports only `${date}`, `${time}`, `${timestamp}` and `${repo}`.
+The simple issue handler (fixed targets) and commit mode use only `contentTemplate`, and there it supports only `${date}`, `${time}`, `${timestamp}` and `${repo}`.
 
 ## Repository Selection Strategies
 
