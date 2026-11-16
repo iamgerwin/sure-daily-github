@@ -264,3 +264,29 @@ test('pruning runs once per day, not on every line', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a line written across midnight UTC goes to the file of the day it is stamped with', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  const RealDate = globalThis.Date;
+  // Every argument-less clock read moves past midnight, as the real clock can
+  // between two reads made for the same line
+  const readings = [Date.parse('2026-11-16T23:59:59.999Z'), Date.parse('2026-11-17T00:00:00.000Z')];
+  let reads = 0;
+  globalThis.Date = class extends RealDate {
+    constructor(...args) {
+      if (args.length > 0) super(...args);
+      else super(readings[Math.min(reads++, readings.length - 1)]);
+    }
+  };
+  try {
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    captureConsole(() => withLogLevel('info', () => fileLogger.info('at midnight')));
+    globalThis.Date = RealDate;
+    const files = fs.readdirSync(dir);
+    assert.deepEqual(files, ['2026-11-16.log']);
+    assert.match(fs.readFileSync(path.join(dir, files[0]), 'utf8'), /^\[2026-11-16T23:59:59\.999Z\] \[INFO\] at midnight/);
+  } finally {
+    globalThis.Date = RealDate;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
