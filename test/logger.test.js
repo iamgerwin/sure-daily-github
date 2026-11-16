@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import logger, { Logger, resolveLogLevel, resolveRetentionDays, shouldUseColor } from '../src/utils/logger.js';
 
@@ -89,6 +90,30 @@ test('an unusable log directory falls back to console output without throwing', 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('describeDestination names the log directory, or console only when it is unusable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  const blocker = path.join(dir, 'not-a-dir');
+  fs.writeFileSync(blocker, '');
+  try {
+    const usable = path.join(dir, 'logs');
+    assert.equal(new Logger({ logDir: usable }).describeDestination(), usable);
+
+    const broken = path.join(blocker, 'logs');
+    let destination;
+    captureConsole(() => {
+      destination = new Logger({ logDir: broken }).describeDestination();
+    });
+    assert.equal(destination, `console only (${broken} is not writable)`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the default log directory is the install directory, not the working directory', () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  assert.equal(logger.logDir, path.join(root, 'logs'));
 });
 
 test('a log directory removed after startup is recreated', () => {
