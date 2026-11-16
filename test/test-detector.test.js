@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { detectTestCommand, runTestCommand, tailLines } from '../src/utils/test-detector.js';
+import { execFileSync } from 'node:child_process';
+import { detectTestCommand, runTestCommand, tailLines, MAKE_TEST_COMMAND } from '../src/utils/test-detector.js';
 
 function repoDir(t, files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-detect-'));
@@ -102,7 +103,7 @@ test('detectTestCommand runs npm install without writing a lockfile when depende
     'package.json': JSON.stringify({ name: 'x', devDependencies: { prettier: '^3.0.0' } }),
     Makefile: 'test:\n\techo ok\n'
   });
-  assert.deepEqual(detectTestCommand(makeOnly), { install: null, test: 'make test' });
+  assert.deepEqual(detectTestCommand(makeOnly), { install: null, test: MAKE_TEST_COMMAND });
 });
 
 test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) => {
@@ -123,7 +124,7 @@ test('detectTestCommand prefers npm when a repo ships several lockfiles', (t) =>
 
 test('detectTestCommand does not install for a Makefile-only repo with a lockfile', (t) => {
   const dir = repoDir(t, { 'yarn.lock': '', Makefile: 'test:\n\t./run\n' });
-  assert.deepEqual(detectTestCommand(dir), { install: null, test: 'make test' });
+  assert.deepEqual(detectTestCommand(dir), { install: null, test: MAKE_TEST_COMMAND });
 });
 
 test('detectTestCommand ignores the npm init stub test script', (t) => {
@@ -133,13 +134,13 @@ test('detectTestCommand ignores the npm init stub test script', (t) => {
 
 test('detectTestCommand falls back to a Makefile test target', (t) => {
   const dir = repoDir(t, { 'package.json': '{not json', Makefile: 'build:\n\tcc x.c\n\ntest: build\n\t./run\n' });
-  assert.deepEqual(detectTestCommand(dir), { install: null, test: 'make test' });
+  assert.deepEqual(detectTestCommand(dir), { install: null, test: MAKE_TEST_COMMAND });
 });
 
 test('detectTestCommand finds test in a multi-target or double-colon rule', (t) => {
   for (const rule of ['unit test: build', 'test lint:', 'test::', 'test :']) {
     const dir = repoDir(t, { Makefile: `build:\n\tcc x.c\n\n${rule}\n\t./run\n` });
-    assert.deepEqual(detectTestCommand(dir), { install: null, test: 'make test' }, rule);
+    assert.deepEqual(detectTestCommand(dir), { install: null, test: MAKE_TEST_COMMAND }, rule);
   }
 });
 
@@ -155,7 +156,43 @@ test('detectTestCommand reads only the makefile that make itself would use', (t)
   assert.equal(detectTestCommand(shadowed), null);
 
   const gnu = repoDir(t, { GNUmakefile: 'test:\n\t./run\n', Makefile: 'build:\n\tcc x.c\n' });
-  assert.deepEqual(detectTestCommand(gnu), { install: null, test: 'make test' });
+  assert.deepEqual(detectTestCommand(gnu), { install: null, test: MAKE_TEST_COMMAND });
+});
+
+const hasMake = (() => {
+  try {
+    return execFileSync('make', ['--version'], { stdio: 'pipe' }).toString().startsWith('GNU Make');
+  } catch (_) {
+    return false;
+  }
+})();
+
+test('the detected make command runs a non-phony test rule when a test directory exists', { skip: !hasMake && 'GNU make not installed' }, async (t) => {
+  // Without .PHONY, plain `make test` sees the test/ directory, reports it up
+  // to date and exits 0 without running the failing recipe
+  const dir = repoDir(t, { Makefile: 'test:\n\t@echo ran; exit 3\n' });
+  fs.mkdirSync(path.join(dir, 'test'));
+
+  const plain = await runTestCommand('make test', { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.equal(plain.code, 0, 'precondition: plain make skips the recipe');
+  assert.doesNotMatch(plain.output, /ran/);
+
+  const { test: command } = detectTestCommand(dir);
+  const failing = await runTestCommand(command, { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.notEqual(failing.code, 0);
+  assert.match(failing.output, /ran/);
+
+  // Prerequisites are still built first
+  fs.writeFileSync(path.join(dir, 'Makefile'), 'build:\n\t@echo built\n\ntest: build\n\t@echo tested\n');
+  const withPrereq = await runTestCommand(command, { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.equal(withPrereq.code, 0);
+  assert.equal(withPrereq.output, 'built\ntested\n');
+
+  // A makefile that already declares the target phony still passes
+  fs.writeFileSync(path.join(dir, 'Makefile'), '.PHONY: test\ntest:\n\t@echo ok\n');
+  const passing = await runTestCommand(command, { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.equal(passing.code, 0);
+  assert.equal(passing.output, 'ok\n');
 });
 
 test('detectTestCommand runs go test for a Go module and cargo test for a Cargo package', (t) => {
@@ -174,7 +211,7 @@ test('detectTestCommand prefers testCommand, npm test and make test over Go and 
   assert.deepEqual(detectTestCommand(npm), { install: null, test: 'npm test' });
 
   const make = repoDir(t, { 'Cargo.toml': '[package]\n', Makefile: 'test:\n\tcargo test --all\n' });
-  assert.deepEqual(detectTestCommand(make), { install: null, test: 'make test' });
+  assert.deepEqual(detectTestCommand(make), { install: null, test: MAKE_TEST_COMMAND });
 
   // A makefile without a test rule does not hide the manifest
   const noRule = repoDir(t, { 'go.mod': 'module x\n', Makefile: 'build:\n\tgo build\n' });
