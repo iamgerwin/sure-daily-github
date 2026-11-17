@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import yaml from 'js-yaml';
-import config, { readGitHubToken, MAX_LABEL_NAME_LENGTH } from '../src/config/loader.js';
+import config, { readGitHubToken, MAX_LABEL_NAME_LENGTH, MAX_COUNT_RANGE_VALUE } from '../src/config/loader.js';
 
 process.env.GITHUB_TOKEN = 'ghp_test';
 
@@ -321,6 +321,35 @@ test('validate rejects invalid randomization.timeVariations ranges when enabled'
     () => config.validate(withTimeVariations({ weekly: { min: 50 } })),
     /randomization\.timeVariations\.weekly must have min and max values/
   );
+});
+
+test('validate rejects randomization counts too large for randomInt instead of crashing at run time', async () => {
+  const randomizer = (await import('../src/utils/randomizer.js')).default;
+  const tooLarge = { min: 1, max: MAX_COUNT_RANGE_VALUE + 1 };
+  // The value the validator now rejects is one the run would crash on
+  assert.throws(() => randomizer.getRandomCount(tooLarge), RangeError);
+
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount: tooLarge } }),
+    /randomization\.issueCount values must be at most 281474976710655/
+  );
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount: { min: 1e20, max: 1e20 } } }),
+    /randomization\.issueCount values must be at most/
+  );
+  assert.throws(
+    () => config.validate({
+      repositories: [baseRepo],
+      randomization: { enabled: true, timeVariations: { enabled: true, weekly: { min: 5, max: Number.MAX_SAFE_INTEGER } } }
+    }),
+    /randomization\.timeVariations\.weekly values must be at most/
+  );
+
+  // The largest accepted range still draws a count
+  const largest = { min: 1, max: MAX_COUNT_RANGE_VALUE };
+  assert.doesNotThrow(() => config.validate({ repositories: [baseRepo], randomization: { enabled: true, issueCount: largest } }));
+  const count = randomizer.getRandomCount(largest);
+  assert.ok(count >= 1 && count <= MAX_COUNT_RANGE_VALUE);
 });
 
 test('validate accepts valid randomization ranges and ignores disabled sections', () => {
