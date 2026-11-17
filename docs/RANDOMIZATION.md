@@ -187,7 +187,6 @@ Randomly select repositories each execution:
 ```yaml
 repositorySelection:
   strategy: "random"
-  randomizeOrder: true
   maxPerExecution: 2  # Process 2 random repos
 ```
 
@@ -218,7 +217,7 @@ Weights are relative and do not need to add up to 100 (a repository without a `w
 
 > Without `maxPerExecution` (or with a value at or above the number of ready repositories), every repository is selected on every run and the weights only decide the processing order.
 
-> `randomizeOrder` only affects the `sequential` strategy. `random` always shuffles, `weighted` orders repositories by its weighted draws, and `round-robin` keeps the rotation order, so setting `randomizeOrder` with those strategies has no effect.
+> `randomizeOrder` only affects the `sequential` strategy. `random` always shuffles, `weighted` orders repositories by its weighted draws, and `round-robin` keeps the rotation order, so setting `randomizeOrder` with those strategies has no effect. Likewise, a repository `weight` is only read by the `weighted` strategy. `validate` prints a warning for either setting when the configured strategy ignores it.
 
 ### Round-Robin
 
@@ -284,7 +283,6 @@ randomization:
 
 repositorySelection:
   strategy: "weighted"
-  randomizeOrder: true
   maxPerExecution: 2
 
 repositories:

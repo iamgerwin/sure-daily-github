@@ -82,3 +82,17 @@ test('validate does not warn when conflictFixer list entries match configured re
   assert.doesNotMatch(validate('1', ['conflictFixer:', '  allowlist: ["ME/Demo"]']), UNMATCHED);
   assert.doesNotMatch(validate('1'), UNMATCHED);
 });
+
+const IGNORED_SELECTION = /^ {3}⚠️ {2}repository(Selection\.randomizeOrder| weight) has no effect/m;
+
+test('validate warns about selection settings the strategy ignores', () => {
+  const output = validate('1', ['    weight: 40', 'repositorySelection:', '  strategy: "random"', '  randomizeOrder: true']);
+  assert.match(output, /^ {3}⚠️ {2}repositorySelection\.randomizeOrder has no effect with the "random" strategy \(only "sequential" uses it\)$/m);
+  assert.match(output, /^ {3}⚠️ {2}repository weight has no effect with the "random" strategy \(only "weighted" uses it\): me\/demo$/m);
+});
+
+test('validate does not warn when the strategy uses its selection settings', () => {
+  assert.doesNotMatch(validate('1', ['    weight: 40', 'repositorySelection:', '  strategy: "weighted"']), IGNORED_SELECTION);
+  assert.doesNotMatch(validate('1', ['repositorySelection:', '  strategy: "sequential"', '  randomizeOrder: true']), IGNORED_SELECTION);
+  assert.doesNotMatch(validate('1'), IGNORED_SELECTION);
+});

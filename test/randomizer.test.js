@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import randomizer from '../src/utils/randomizer.js';
+import randomizer, { ignoredSelectionSettings } from '../src/utils/randomizer.js';
 
 test('randomInt returns min when min == max', () => {
   assert.equal(randomizer.randomInt(5, 5), 5);
@@ -369,4 +369,34 @@ test('selectRepositories round-robin ignores disabled repositories in the rotati
   const selected = randomizer.selectRepositories(rotation, { strategy: 'round-robin', maxPerExecution: 1 }, store, { rotation });
   assert.deepEqual(selected.map(r => r.id), ['b']);
   assert.equal(store.index, 0);
+});
+
+const repo = (name, weight = 1) => ({ owner: 'me', repo: name, weight });
+
+test('ignoredSelectionSettings flags randomizeOrder with a strategy that ignores it', () => {
+  for (const strategy of ['random', 'weighted', 'round-robin']) {
+    const [message] = ignoredSelectionSettings({ strategy, randomizeOrder: true }, [repo('a')]);
+    assert.match(message, new RegExp(`randomizeOrder has no effect with the "${strategy}" strategy`));
+  }
+});
+
+test('ignoredSelectionSettings accepts randomizeOrder with the sequential strategy, explicit or default', () => {
+  assert.deepEqual(ignoredSelectionSettings({ strategy: 'sequential', randomizeOrder: true }, [repo('a')]), []);
+  assert.deepEqual(ignoredSelectionSettings({ randomizeOrder: true }, [repo('a')]), []);
+  assert.deepEqual(ignoredSelectionSettings({ strategy: 'random', randomizeOrder: false }, [repo('a')]), []);
+});
+
+test('ignoredSelectionSettings names repositories whose weight the strategy ignores', () => {
+  const repos = [repo('a', 50), repo('b'), repo('c', 0.5)];
+  assert.deepEqual(ignoredSelectionSettings({ strategy: 'round-robin' }, repos), [
+    'repository weight has no effect with the "round-robin" strategy (only "weighted" uses it): me/a, me/c'
+  ]);
+  // No repositorySelection block means sequential
+  assert.equal(ignoredSelectionSettings(undefined, repos).length, 1);
+});
+
+test('ignoredSelectionSettings accepts weights with the weighted strategy and default weights anywhere', () => {
+  assert.deepEqual(ignoredSelectionSettings({ strategy: 'weighted' }, [repo('a', 50), repo('b', 30)]), []);
+  assert.deepEqual(ignoredSelectionSettings({ strategy: 'random' }, [repo('a'), { owner: 'me', repo: 'b' }]), []);
+  assert.deepEqual(ignoredSelectionSettings(null, undefined), []);
 });
