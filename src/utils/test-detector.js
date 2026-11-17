@@ -6,9 +6,23 @@ import { clampTimerMs } from './process.js';
 // Keep only the end of the output: that is where test runners print failures
 const MAX_OUTPUT_CHARS = 64 * 1024;
 
-function readPackageJson(dir) {
+// The clone holds PR code, so a manifest may be a directory, a FIFO or a
+// symlink to a device. Reading a FIFO or /dev/zero blocks the whole process
+// before any test timeout starts, and a directory throws EISDIR out of the
+// gate; only a regular file (after following symlinks) is read.
+function readRegularFile(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    return fs.statSync(filePath).isFile() ? fs.readFileSync(filePath, 'utf8') : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function readPackageJson(dir) {
+  const text = readRegularFile(path.join(dir, 'package.json'));
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
   } catch (_) {
     return null;
   }
@@ -22,7 +36,8 @@ function hasMakeTestTarget(dir) {
   // make reads only the first of these that exists, so a test target in a
   // later one is never reachable by `make test`
   const name = ['GNUmakefile', 'makefile', 'Makefile'].find(file => fs.existsSync(path.join(dir, file)));
-  return Boolean(name) && MAKE_TEST_RULE.test(fs.readFileSync(path.join(dir, name), 'utf8'));
+  const text = name ? readRegularFile(path.join(dir, name)) : null;
+  return text !== null && MAKE_TEST_RULE.test(text);
 }
 
 // The first lockfile found picks the install command, so npm keeps precedence
