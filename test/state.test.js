@@ -297,6 +297,27 @@ test('getPeriodKeys leaves spring-forward and offset-free hours unchanged', () =
   assert.equal(sm.getPeriodKeys('Asia/Manila', new Date('2026-11-01T05:10:00Z')).hourly, '2026-11-01T13');
 });
 
+test('getPeriodKeys keys the midnight hour as 00, not 24', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  for (const [tz, instant, key] of [
+    ['UTC', '2026-10-15T00:30:00Z', '2026-10-15T00'],
+    ['Asia/Manila', '2026-10-14T16:00:00Z', '2026-10-15T00'],
+    ['America/Los_Angeles', '2026-10-15T07:59:59Z', '2026-10-15T00']
+  ]) {
+    const keys = sm.getPeriodKeys(tz, new Date(instant));
+    assert.equal(keys.hourly, key, tz);
+    assert.equal(keys.daily, key.slice(0, 10), tz);
+  }
+});
+
+test('the hourly window opened just after midnight is stored under the 00 key', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  sm.recordAction('me', 'demo', { timezone: 'UTC', now: new Date('2026-10-14T23:30:00Z') });
+  const after = sm.isWithinLimits('me', 'demo', { hourlyMax: 1 }, 'UTC', new Date('2026-10-15T00:10:00Z'));
+  assert.equal(after.allowed, true);
+  assert.equal(sm.getRepoState('me', 'demo').counters.hourly.key, '2026-10-15T00');
+});
+
 test('hourly cap applies to each real hour when clocks fall back', () => {
   const sm = new StateManager({ filePath: tmpStateFile() });
   const tz = 'America/New_York';

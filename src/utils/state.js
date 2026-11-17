@@ -110,9 +110,11 @@ export class StateManager {
 
   // Compute period keys respecting timezone
   getPeriodKeys(timezone = 'UTC', now = new Date()) {
-    // Use Intl to format parts in timezone
+    // Use Intl to format parts in timezone. hourCycle 'h23', not hour12: false:
+    // Node 18 and 20 resolve hour12: false for en-CA to h24 and print the
+    // midnight hour as "24", so its key would be YYYY-MM-DDT24 there
     const fmt = (opts) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, ...opts });
-    const parts = Object.fromEntries(fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false }).formatToParts(now).map(p => [p.type, p.value]));
+    const parts = Object.fromEntries(fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(now).map(p => [p.type, p.value]));
     const y = parts.year;
     const m = parts.month;
     const d = parts.day;
@@ -157,7 +159,7 @@ export class StateManager {
       const other = new Date(now.getTime() + deltaMin * 60 * 1000);
       if (this.getUtcOffset(timezone, other) === offset) continue;
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
+        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23'
       }).formatToParts(other).map(p => [p.type, p.value]));
       if (`${parts.year}-${parts.month}-${parts.day}T${parts.hour}` === hourKey) return true;
     }
