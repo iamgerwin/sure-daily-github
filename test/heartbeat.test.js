@@ -242,6 +242,26 @@ test('health-check resolves a relative SDG_HEARTBEAT_FILE against the install di
   assert.doesNotMatch(log, /No scheduler heartbeat/);
 });
 
+test('health-check drops whitespace around a relative SDG_HEARTBEAT_FILE, as the scheduler does', (t) => {
+  const dir = tmpDir(t);
+  const { calls, log } = runHealthCheck(t, {
+    dir, heartbeatAgeMinutes: 120, maxAge: 90,
+    heartbeat: path.join(dir, 'run', 'heartbeat.json'),
+    env: { SDG_HEARTBEAT_FILE: ' run/heartbeat.json ' }
+  });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+});
+
+test('health-check keeps the default heartbeat for a blank SDG_HEARTBEAT_FILE, as the scheduler does', (t) => {
+  const { calls, log } = runHealthCheck(t, {
+    heartbeatAgeMinutes: 120, maxAge: 90,
+    env: { SDG_HEARTBEAT_FILE: '   ' }
+  });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+});
+
 test('health-check leaves a running service with a fresh heartbeat alone', (t) => {
   const { calls } = runHealthCheck(t, { heartbeatAgeMinutes: 10, maxAge: 90 });
   assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
