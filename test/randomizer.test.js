@@ -273,18 +273,6 @@ test('selectRepositories weighted picks the last repo when rounding leaves a rem
   }
 });
 
-test('selectRoundRobinRepositories rotates from index', () => {
-  const repos = [
-    { id: 'a' },
-    { id: 'b' },
-    { id: 'c' },
-    { id: 'd' }
-  ];
-  const selected = randomizer.selectRoundRobinRepositories(repos, 2, 1);
-  assert.deepEqual(selected.map(r => r.id), ['b', 'c']);
-});
-
-
 function memoryCursorStore(index = 0) {
   return {
     index,
@@ -293,10 +281,20 @@ function memoryCursorStore(index = 0) {
   };
 }
 
-test('selectRoundRobinRepositories never selects a repository twice', () => {
-  const repos = [{ id: 'a' }, { id: 'b' }];
-  const selected = randomizer.selectRoundRobinRepositories(repos, 5, 1);
+test('selectRepositories round-robin rotates from the stored cursor', () => {
+  const repos = ['a', 'b', 'c', 'd'].map(id => ({ id, enabled: true }));
+  const store = memoryCursorStore(1);
+  const selected = randomizer.selectRepositories(repos, { strategy: 'round-robin', maxPerExecution: 2 }, store);
+  assert.deepEqual(selected.map(r => r.id), ['b', 'c']);
+  assert.equal(store.index, 3);
+});
+
+test('selectRepositories round-robin never selects a repository twice', () => {
+  const repos = ['a', 'b'].map(id => ({ id, enabled: true }));
+  const store = memoryCursorStore(1);
+  const selected = randomizer.selectRepositories(repos, { strategy: 'round-robin', maxPerExecution: 5 }, store);
   assert.deepEqual(selected.map(r => r.id), ['b', 'a']);
+  assert.equal(store.index, 1);
 });
 
 test('selectRepositories round-robin advances the cursor across runs', () => {

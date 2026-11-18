@@ -227,28 +227,6 @@ class Randomizer {
 
     return { selected, nextIndex: (lastPosition + 1) % ring.length };
   }
-
-  /**
-   * Select repositories in round-robin fashion
-   * Starting at currentIndex, each repository is picked at most once per call
-   */
-  selectRoundRobinRepositories(repositories, maxCount, currentIndex = 0) {
-    if (!repositories || repositories.length === 0) {
-      return [];
-    }
-
-    const selected = [];
-    const count = maxCount && maxCount < repositories.length
-      ? maxCount
-      : repositories.length;
-
-    for (let i = 0; i < count; i++) {
-      const index = (currentIndex + i) % repositories.length;
-      selected.push(repositories[index]);
-    }
-
-    return selected;
-  }
 }
 
 export default new Randomizer();
