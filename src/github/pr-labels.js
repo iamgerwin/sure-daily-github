@@ -43,7 +43,7 @@ const SNAPSHOT_QUERY = `
           mergeable
           mergeStateStatus
           author { login }
-          labels(first: 50) { nodes { name } }
+          labels(first: 100) { totalCount nodes { name } }
           reviewThreads(first: 100) {
             nodes {
               id
@@ -148,6 +148,8 @@ export function mergePolicyState(contexts = []) {
 
 export function normalizePullRequest(node) {
   const contexts = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
+  const labelNodes = node.labels?.nodes || [];
+  const labelTotal = node.labels?.totalCount;
   return {
     number: node.number,
     isDraft: Boolean(node.isDraft),
@@ -158,7 +160,12 @@ export function normalizePullRequest(node) {
     mergeable: node.mergeable,
     mergeStateStatus: node.mergeStateStatus,
     author: node.author?.login || null,
-    labels: (node.labels?.nodes || []).map(l => l.name),
+    labels: labelNodes.map(l => l.name),
+    // GitHub allows at most 100 labels on a PR, so the first 100 are all of
+    // them; should the snapshot still return fewer than the PR carries, a
+    // missing needs-human would read as a human clear and a missing
+    // automation-paused as no kill switch, so decide() holds the PR instead
+    labelsIncomplete: Number.isInteger(labelTotal) && labelTotal > labelNodes.length,
     reviewThreads: (node.reviewThreads?.nodes || []).map(t => ({
       id: t.id,
       isResolved: Boolean(t.isResolved),

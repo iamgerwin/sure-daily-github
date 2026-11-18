@@ -236,6 +236,29 @@ test('fetchSnapshot normalizes every page and detects a paused dashboard', async
   assert.deepEqual(calls.map(c => c.params.cursor), [null, 'c1']);
 });
 
+test('fetchSnapshot reads up to 100 labels per PR and flags a PR whose labels were not all returned', async () => {
+  const labels = (count, totalCount) => ({ totalCount, nodes: Array.from({ length: count }, (_, i) => ({ name: `l${i}` })) });
+  const { github, calls } = await client({
+    graphql: () => ({
+      repository: {
+        pausedIssues: { nodes: [] },
+        pullRequests: {
+          nodes: [
+            { number: 1, author: { login: OWNER }, labels: labels(100, 100) },
+            { number: 2, author: { login: OWNER }, labels: labels(100, 101) },
+            // A response without totalCount (older fixture shape) is taken as complete
+            { number: 3, author: { login: OWNER }, labels: { nodes: [{ name: 'babysit' }] } }
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null }
+        }
+      }
+    })
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.match(calls[0].query, /labels\(first: 100\) \{ totalCount nodes \{ name \} \}/);
+  assert.deepEqual(snapshot.prs.map(p => [p.number, p.labels.length, p.labelsIncomplete]), [[1, 100, false], [2, 100, true], [3, 1, false]]);
+});
+
 test('rollupState leaves out our own status and reports the worst remaining state', () => {
   const run = (status, conclusion) => ({ __typename: 'CheckRun', name: 'test', status, conclusion });
   const ctx = (context, state) => ({ __typename: 'StatusContext', context, state });

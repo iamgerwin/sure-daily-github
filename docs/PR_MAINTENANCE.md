@@ -78,7 +78,8 @@ dashboard handler. Shadow mode also never creates labels, and never re-reads PRs
 ```
 1 lock       data/pr-maint.lock (exit 0 when held)
 2 gates      prMaint.enabled, conflictFixer repo gate, dashboard issue labeled automation-paused → stop
-3 snapshot   one GraphQL query per 50 open PRs: head, mergeable, labels, review threads, reviews, check contexts
+3 snapshot   one GraphQL query per 50 open PRs: head, mergeable, labels (up to 100, GitHub's per-PR maximum), review
+             threads, reviews, check contexts
 4 decide     pure decide(snapshot, ledger) → planned actions per PR (babysit PRs first)
 5 execute    every action: policy.check → handler → data/pr-maint-decisions.jsonl
 6 dashboard  re-rendered after the PRs (so a breaker trip this tick shows), read back from GitHub, written only when
@@ -131,6 +132,7 @@ action (hourly cap, breaker, decisions log as `type: setup`); a setup cut short 
 Transitions in this release:
 
 ```
+labels not all read (more than the snapshot's 100) ⇒ skipped as `labels`, no actions
 [automation-paused] on the PR                  ⇒ skipped, no actions
 fork head branch / author not in prMaint.authors ⇒ skipped
 mergeable CONFLICTING or mergeState DIRTY      ⇒ sdg:conflict (other lifecycle labels removed first)
