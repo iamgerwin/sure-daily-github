@@ -414,6 +414,43 @@ test('status does not report a legacy target outside the configured dailyTarget 
   assert.equal(status.todayTarget, 'Not set');
 });
 
+test('re-rolls a stored target outside its recorded and configured range', async () => {
+  for (const todayTarget of [0, -1, 1, 5, 1000]) {
+    const { handler, created } = createHandler();
+    writeState(handler, {
+      lastDailyReset: new Date().toISOString(),
+      repositories: {
+        'me/demo': { issuesCreatedToday: 0, lastIssueTime: null, todayTarget, targetRange: { min: 2, max: 4 }, nextIssueTime: null }
+      }
+    });
+    const ranged = repo({ dailyTarget: { min: 2, max: 4 } });
+
+    const { repositories: [status] } = await handler.getStatus([ranged], 'UTC');
+    assert.equal(status.todayTarget, 'Not set', `stored ${todayTarget}`);
+
+    await handler.processRepositories([ranged], {}, false, config);
+    const saved = readState(handler).repositories['me/demo'];
+    assert.ok(saved.todayTarget >= 2 && saved.todayTarget <= 4, `stored ${todayTarget} gave ${saved.todayTarget}`);
+    assert.deepEqual(saved.targetRange, { min: 2, max: 4 });
+    assert.equal(created.length, 1, `stored ${todayTarget}`);
+  }
+});
+
+test('keeps a stored target on either end of its recorded range', async () => {
+  for (const todayTarget of [2, 4]) {
+    const { handler } = createHandler();
+    writeState(handler, {
+      lastDailyReset: new Date().toISOString(),
+      repositories: {
+        'me/demo': { issuesCreatedToday: 0, lastIssueTime: null, todayTarget, targetRange: { min: 2, max: 4 }, nextIssueTime: null }
+      }
+    });
+
+    await handler.processRepositories([repo({ dailyTarget: { min: 2, max: 4 } })], {}, false, config);
+    assert.equal(readState(handler).repositories['me/demo'].todayTarget, todayTarget);
+  }
+});
+
 test('status keeps reporting a rolled target while its dailyTarget range is unchanged', async () => {
   const { handler } = createHandler();
   writeState(handler, {

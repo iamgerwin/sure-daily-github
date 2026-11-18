@@ -137,6 +137,7 @@ export async function runEngine(engine, model, { cwd, prompt, timeoutMs = 0, env
   }
   return {
     code: result.code,
+    signal: result.signal || null,
     stdout: result.stdout || '',
     stderr: result.stderr || '',
     timedOut: Boolean(result.timedOut),
@@ -173,7 +174,12 @@ function describeEngineFailure(engine, result) {
   if (result.timedOut) return `${engine} timed out`;
   if (result.error) return `${engine} could not be started: ${result.error.message}`;
   const tail = (result.stderr || result.stdout).trim().split('\n').slice(-3).join(' | ');
-  return `${engine} exited with code ${result.code}${tail ? `: ${tail}` : ''}`;
+  // A process killed by a signal (the OOM killer, a manual kill) has no exit
+  // code; "exited with code null" would hide why the engine stopped
+  const how = result.code === null && result.signal
+    ? `was killed by ${result.signal}`
+    : `exited with code ${result.code}`;
+  return `${engine} ${how}${tail ? `: ${tail}` : ''}`;
 }
 
 function truncate(text, max) {

@@ -4,6 +4,7 @@ import http from 'node:http';
 import scheduler from '../src/core/scheduler.js';
 import executor from '../src/core/executor.js';
 import babysitter from '../src/core/babysitter.js';
+import cron from 'node-cron';
 import { createOctokit } from '../src/github/octokit.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -223,4 +224,113 @@ test('babysitter.isRunning reflects whether a scan holds the lock', () => {
   } finally {
     babysitter.lock = null;
   }
+});
+
+// Replaces node-cron's schedule() with a recorder, so start() can be checked
+// without a real timer firing; the scheduler is stopped after the test
+function stubCronSchedule(t) {
+  const original = cron.schedule;
+  const scheduled = [];
+  cron.schedule = (expression, callback, options) => {
+    const task = { stopped: false, stop() { this.stopped = true; } };
+    scheduled.push({ expression, callback, options, task });
+    return task;
+  };
+  t.after(() => {
+    if (scheduler.isRunning()) scheduler.stop();
+    cron.schedule = original;
+  });
+  return scheduled;
+}
+
+test('start schedules nothing when the schedule is disabled or missing', (t) => {
+  const scheduled = stubCronSchedule(t);
+
+  assert.equal(scheduler.start({ schedule: { enabled: false, cron: '0 9 * * *' }, general: {} }), false);
+  assert.equal(scheduler.start({ general: {} }), false);
+  assert.equal(scheduler.isRunning(), false);
+  assert.equal(scheduled.length, 0);
+});
+
+test('start rejects an invalid cron expression and stays stopped', (t) => {
+  const scheduled = stubCronSchedule(t);
+
+  assert.throws(
+    () => scheduler.start({ schedule: { enabled: true, cron: 'every morning' }, general: {} }),
+    /Invalid cron expression: every morning/
+  );
+  assert.equal(scheduler.isRunning(), false);
+  assert.equal(scheduler.task, null);
+  assert.equal(scheduled.length, 0);
+});
+
+test('start refuses a second schedule while running and can start again after stop', (t) => {
+  const scheduled = stubCronSchedule(t);
+  const cfg = { schedule: { enabled: true, cron: '0 9 * * *' }, general: {} };
+
+  assert.equal(scheduler.start(cfg), true);
+  assert.equal(scheduler.isRunning(), true);
+  assert.equal(scheduler.start(cfg), false);
+  assert.equal(scheduled.length, 1, 'a second start must not add another cron task');
+
+  assert.equal(scheduler.stop(), true);
+  assert.equal(scheduled[0].task.stopped, true);
+  assert.equal(scheduler.isRunning(), false);
+  assert.equal(scheduler.task, null);
+  assert.equal(scheduler.stop(), false, 'stopping twice is a no-op');
+
+  assert.equal(scheduler.start(cfg), true);
+  assert.equal(scheduled.length, 2);
+});
+
+test('start fires in schedule.timezone, then general.timezone, then UTC', (t) => {
+  const scheduled = stubCronSchedule(t);
+  const cases = [
+    [{ timezone: 'Asia/Manila' }, { timezone: 'Europe/Berlin' }, 'Asia/Manila'],
+    [{}, { timezone: 'Europe/Berlin' }, 'Europe/Berlin'],
+    [{}, {}, 'UTC']
+  ];
+
+  for (const [schedule, general, expected] of cases) {
+    assert.equal(scheduler.start({ schedule: { enabled: true, cron: '*/30 * * * *', ...schedule }, general }), true);
+    scheduler.stop();
+    assert.equal(scheduled.at(-1).options.timezone, expected);
+    assert.equal(scheduled.at(-1).expression, '*/30 * * * *');
+  }
+});
+
+test('each cron tick runs a scheduled execution with the started config', async (t) => {
+  const scheduled = stubCronSchedule(t);
+  const originalExecute = executor.execute;
+  const seen = [];
+  executor.execute = async (cfg) => { seen.push(cfg); return { success: true }; };
+  t.after(() => { executor.execute = originalExecute; });
+  const cfg = { schedule: { enabled: true, cron: '0 9 * * *' }, general: {} };
+
+  assert.equal(scheduler.start(cfg), true);
+  assert.deepEqual(await scheduled[0].callback(), { success: true });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0], cfg);
+});
+
+test('runScheduledTask returns a locked or failed execution result unchanged', async (t) => {
+  const originalExecute = executor.execute;
+  const originalBabysit = babysitter.execute;
+  let babysitRuns = 0;
+  babysitter.execute = async () => { babysitRuns++; return { success: true, summary: { failed: 0 } }; };
+  t.after(() => {
+    executor.execute = originalExecute;
+    babysitter.execute = originalBabysit;
+  });
+
+  const locked = { success: false, locked: true, error: 'Run lock held by PID 1' };
+  executor.execute = async () => locked;
+  assert.equal(await scheduler.runScheduledTask({}), locked);
+
+  const failed = { success: false, error: 'config gone' };
+  executor.execute = async () => failed;
+  assert.equal(await scheduler.runScheduledTask({ babysit: { enabled: true } }), failed);
+  // The babysit scan is independent of the execution outcome
+  assert.equal(babysitRuns, 1);
+  assert.equal(scheduler.executing, false);
 });
