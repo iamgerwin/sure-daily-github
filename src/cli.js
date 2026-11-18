@@ -10,6 +10,7 @@ import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
 import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
 import { getTemplateDateParts, formatNextIssueTime } from './utils/template-date.js';
+import { ignoredSelectionSettings } from './utils/randomizer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -427,6 +428,9 @@ program
       
       if (cfg.repositorySelection?.strategy) {
         console.log(`   Strategy: ${cfg.repositorySelection.strategy}`);
+      }
+      for (const message of ignoredSelectionSettings(cfg.repositorySelection, cfg.repositories)) {
+        console.log(`   ⚠️  ${message}`);
       }
 
       // A mistyped entry validates but never matches, so fix-conflicts would

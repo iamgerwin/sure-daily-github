@@ -2,6 +2,28 @@ import crypto from 'crypto';
 import logger from './logger.js';
 import state from './state.js';
 
+// Selection settings the configured strategy never reads. Both validate fine,
+// so a config that sets them (expecting shuffled or weighted picks) would
+// otherwise run with a different selection than intended and no hint why.
+// `repositories` are loader-normalized, where an unset weight reads as 1.
+// Returns one message per ignored setting, for `validate` to print.
+export function ignoredSelectionSettings(selectionConfig, repositories = []) {
+  const strategy = selectionConfig?.strategy || 'sequential';
+  const messages = [];
+  if (selectionConfig?.randomizeOrder === true && strategy !== 'sequential') {
+    messages.push(`repositorySelection.randomizeOrder has no effect with the "${strategy}" strategy (only "sequential" uses it)`);
+  }
+  if (strategy !== 'weighted') {
+    const weighted = (repositories || [])
+      .filter(repo => repo.weight !== undefined && repo.weight !== null && repo.weight !== 1)
+      .map(repo => `${repo.owner}/${repo.repo}`);
+    if (weighted.length > 0) {
+      messages.push(`repository weight has no effect with the "${strategy}" strategy (only "weighted" uses it): ${weighted.join(', ')}`);
+    }
+  }
+  return messages;
+}
+
 class Randomizer {
   /**
    * Generate a random integer between min and max (inclusive)
