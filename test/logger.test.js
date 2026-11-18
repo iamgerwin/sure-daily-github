@@ -356,8 +356,12 @@ test('a LOG_RETENTION_DAYS past the representable date range keeps every file an
       });
     });
     assert.ok(fs.existsSync(path.join(dir, '2000-01-01.log')), 'nothing is pruned');
-    const today = `${new Date().toISOString().split('T')[0]}.log`;
-    assert.match(fs.readFileSync(path.join(dir, today), 'utf8'), /still logged/);
+    // Read back whichever daily file write() chose instead of re-reading the
+    // clock, which could name the next day's file across midnight UTC
+    const written = fs.readdirSync(dir).filter(name => name !== '2000-01-01.log');
+    assert.equal(written.length, 1);
+    assert.match(written[0], /^\d{4}-\d{2}-\d{2}\.log$/);
+    assert.match(fs.readFileSync(path.join(dir, written[0]), 'utf8'), /still logged/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
