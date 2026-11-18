@@ -6,6 +6,8 @@
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${CONFIG_PATH:-$APP_DIR/config/config.yaml}"
 STATE_FILE="${SDG_ISSUE_STATE_FILE:-$APP_DIR/data/issue-state.json}"
+# A relative override is resolved against the install directory, as the app does
+case "$STATE_FILE" in /*) ;; *) STATE_FILE="$APP_DIR/$STATE_FILE" ;; esac
 HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
 LOG_DIR="$APP_DIR/logs"
 

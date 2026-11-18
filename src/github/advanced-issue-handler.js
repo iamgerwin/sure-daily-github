@@ -2,6 +2,7 @@ import { createOctokit } from './octokit.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
+import { resolveDataPath } from '../utils/data-path.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
 import { DEFAULT_CONTENT_TEMPLATE } from '../config/loader.js';
 import fs from 'fs/promises';
@@ -37,7 +38,7 @@ class AdvancedIssueHandler {
   constructor(token) {
     this.token = token;
     this.client = null;
-    this.stateFile = process.env.SDG_ISSUE_STATE_FILE || DEFAULT_STATE_FILE;
+    this.stateFile = resolveDataPath(process.env.SDG_ISSUE_STATE_FILE, DEFAULT_STATE_FILE);
     // Persists the round-robin cursor shared with the simple issue handler
     this.cursorStore = stateManager;
   }

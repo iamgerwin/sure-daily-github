@@ -85,6 +85,26 @@ test('verify-status honors CONFIG_PATH and SDG_ISSUE_STATE_FILE', (t) => {
   assert.match(output, /Last reset: 2026-10-30T16:00:00\.000Z/);
 });
 
+test('verify-status resolves a relative SDG_ISSUE_STATE_FILE against the app directory', (t) => {
+  const appDir = makeAppDir();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-verify-cwd-'));
+  t.after(() => {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+  fs.mkdirSync(path.join(appDir, 'state'));
+  fs.writeFileSync(path.join(appDir, 'state/issues.json'), JSON.stringify({ lastDailyReset: '2026-10-29T16:00:00.000Z' }, null, 2));
+
+  const output = execFileSync('bash', [path.join(appDir, 'scripts/verify-status.sh')], {
+    cwd: elsewhere,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, CONFIG_PATH: '', SDG_HEARTBEAT_FILE: '', SDG_ISSUE_STATE_FILE: 'state/issues.json' }
+  });
+
+  assert.match(output, /Last reset: 2026-10-29T16:00:00\.000Z/);
+});
+
 test('verify-status names the paths it looked at when files are missing', (t) => {
   const appDir = makeAppDir();
   t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
