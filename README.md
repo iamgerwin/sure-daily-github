@@ -287,7 +287,7 @@ repositorySelection:
 | `enabled` | boolean | ❌ | Enable/disable repository (default: true) |
 | `branch` | string | ❌ | Target branch (default: the repository's default branch) |
 | `dailyTarget` | number or range | ❌ | Override global target |
-| `path` | string | ❌ | Path for commits (default: daily-updates; leading, trailing, and repeated slashes are ignored) |
+| `path` | string | ❌ | Path for commits (default: daily-updates; surrounding whitespace and leading, trailing, and repeated slashes are ignored) |
 | `commitMessage` | string | ❌ | Commit message template (`${date}`, `${time}` in `general.timezone`, `${timestamp}` UTC ISO, `${repo}`) |
 | `labels` | array | ❌ | Labels to apply (issue mode); each name at most 50 characters, as GitHub requires |
 | `intervalMinutes` | range | ❌ | Issue mode: wait a random `{ min, max }` whole number of minutes between issues (default: no wait) |
