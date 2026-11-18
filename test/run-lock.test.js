@@ -199,6 +199,31 @@ test('refresh leaves a lock that now belongs to someone else untouched', (t) => 
   assert.equal(fs.existsSync(filePath), true);
 });
 
+test('refresh never throws and keeps a lock it cannot read', (t) => {
+  const filePath = useTmpLockFile(t);
+  const warn = t.mock.method(logger, 'warn', () => {});
+
+  const lock = acquireRunLock();
+  const before = fs.readFileSync(filePath, 'utf8');
+  fs.chmodSync(filePath, 0o000);
+  t.after(() => fs.rmSync(path.dirname(filePath), { recursive: true, force: true }));
+  // Root reads the file regardless of its mode, so the refresh just succeeds
+  const unreadable = (() => { try { fs.readFileSync(filePath); return false; } catch (_) { return true; } })();
+
+  let result;
+  assert.doesNotThrow(() => { result = lock.refresh(); });
+  fs.chmodSync(filePath, 0o644);
+  if (unreadable) {
+    assert.equal(result, false);
+    assert.equal(lock.lost, false, 'an unreadable lock is not treated as taken over');
+    assert.equal(fs.readFileSync(filePath, 'utf8'), before, 'the lock is put back unchanged');
+    assert.equal(warn.mock.callCount(), 1);
+  }
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock'], 'no temp file left behind');
+  lock.release();
+  assert.equal(fs.existsSync(filePath), false);
+});
+
 test('refresh never overwrites a lock another process takes mid-refresh', (t) => {
   const filePath = useTmpLockFile(t);
 

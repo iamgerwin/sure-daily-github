@@ -143,12 +143,23 @@ function refreshLock(filePath, held, now = Date.now()) {
   } catch (error) {
     return error.code === 'ENOENT' ? 'lost' : 'failed';
   }
+  // Puts the moved file back unchanged, unless the path was taken meanwhile
+  const putBack = () => {
+    try {
+      fs.linkSync(moved, filePath);
+    } catch (error) {
+      if (NO_LINK_CODES.has(error.code) && !fs.existsSync(filePath)) fs.renameSync(moved, filePath);
+    }
+  };
   try {
     const raw = readRaw(moved);
+    if (raw === null) {
+      // Unreadable (e.g. EACCES): we cannot tell whose it is, so keep it
+      putBack();
+      return 'failed';
+    }
     if (raw !== held.raw) {
-      if (raw !== null) {
-        try { createLockFile(filePath, raw); } catch (_) {}
-      }
+      putBack();
       return 'lost';
     }
     const contents = JSON.stringify({ pid: process.pid, startedAt: held.startedAt, refreshedAt: now });
@@ -157,7 +168,7 @@ function refreshLock(filePath, held, now = Date.now()) {
     } catch (error) {
       if (error.code === 'EEXIST') return 'lost';
       // Could not publish the refresh: restore the lock as it was
-      try { createLockFile(filePath, raw); } catch (_) {}
+      putBack();
       return readRaw(filePath) === raw ? 'failed' : 'lost';
     }
     if (heldLocks.get(filePath) === held.raw) heldLocks.set(filePath, contents);
