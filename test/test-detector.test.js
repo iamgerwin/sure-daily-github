@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { detectTestCommand, runTestCommand, tailLines } from '../src/utils/test-detector.js';
 
 function repoDir(t, files = {}) {
@@ -201,6 +202,29 @@ test('detectTestCommand prefers testCommand, npm test and make test over Go and 
 test('detectTestCommand returns null without a runnable suite', (t) => {
   assert.equal(detectTestCommand(repoDir(t, { Makefile: 'build:\n\tcc x.c\n' })), null);
   assert.equal(detectTestCommand(repoDir(t)), null);
+});
+
+test('detectTestCommand skips a makefile or package.json that is not a regular file', (t) => {
+  const dirs = repoDir(t, { 'go.mod': 'module x\n' });
+  fs.mkdirSync(path.join(dirs, 'Makefile'));
+  fs.mkdirSync(path.join(dirs, 'package.json'));
+  assert.deepEqual(detectTestCommand(dirs), { install: null, test: 'go test ./...' });
+
+  // A symlink to a regular file is still read
+  const linked = repoDir(t, { 'real.mk': 'test:\n\techo ok\n' });
+  fs.symlinkSync('real.mk', path.join(linked, 'Makefile'));
+  assert.deepEqual(detectTestCommand(linked), { install: null, test: 'make test' });
+});
+
+test('detectTestCommand does not block on a FIFO or device planted as a makefile or package.json', (t) => {
+  if (process.platform === 'win32') return t.skip('no FIFOs or /dev/zero on Windows');
+  const dir = repoDir(t, { 'Cargo.toml': '[package]\n' });
+  fs.symlinkSync('/dev/zero', path.join(dir, 'Makefile'));
+  const fifo = path.join(dir, 'package.json');
+  const made = spawnSync('mkfifo', [fifo]);
+  if (made.status !== 0) return t.skip('mkfifo unavailable');
+  // Opening the FIFO or reading /dev/zero would hang (or exhaust memory) here
+  assert.deepEqual(detectTestCommand(dir), { install: null, test: 'cargo test' });
 });
 
 test('runTestCommand reports exit code and output', async (t) => {
