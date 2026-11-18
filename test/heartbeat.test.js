@@ -57,6 +57,11 @@ test('heartbeatFilePath anchors a relative SDG_HEARTBEAT_FILE to the project roo
   assert.equal(heartbeatFilePath(), path.join(root, 'run', 'heartbeat.json'));
 });
 
+test('heartbeatFilePath uses an absolute SDG_HEARTBEAT_FILE exactly as given, trailing spaces included', (t) => {
+  useHeartbeatFile(t, '/tmp/custom heartbeat.json  ');
+  assert.equal(heartbeatFilePath(), '/tmp/custom heartbeat.json  ');
+});
+
 test('heartbeatFilePath keeps the default for a blank SDG_HEARTBEAT_FILE', (t) => {
   useHeartbeatFile(t, '   ');
   assert.equal(heartbeatFilePath(), path.join(root, 'data', 'scheduler-heartbeat.json'));
