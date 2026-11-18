@@ -213,7 +213,12 @@ export function acquireRunLock({ now = Date.now(), filePath = lockFilePath(), re
         }
         return outcome === 'refreshed';
       };
-      // Unref'd: a held lock must not keep a finished process alive
+      // Unref'd: a held lock must not keep a finished process alive.
+      // The timer only fires while the event loop is free, so every long wait
+      // in a locked run (installs, test suites, git, gh) must stay async: a
+      // spawnSync/execSync would block refreshes until the lock aged out.
+      // test/run-lock.test.js fails if src/ starts using those; code that must
+      // block for long should call lock.refresh() around the wait instead.
       timer = setInterval(() => refresh(), refreshMs);
       timer.unref();
       return {

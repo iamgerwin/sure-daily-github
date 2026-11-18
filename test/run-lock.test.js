@@ -411,3 +411,22 @@ test('acquireRunLock leaves no moved-aside file after reclaiming a stale lock', 
   assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
   result.release();
 });
+
+// The refresh timer cannot fire while the event loop is blocked, so a locked
+// run that waits on a synchronous child process would lose its lock after the
+// stale window, as before refreshes existed
+test('src never blocks the event loop on a synchronous child process', () => {
+  const srcDir = path.join(path.dirname(new URL(import.meta.url).pathname), '../src');
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.js') && /\b(spawnSync|execSync|execFileSync)\s*\(/.test(fs.readFileSync(full, 'utf8'))) {
+        offenders.push(path.relative(srcDir, full));
+      }
+    }
+  };
+  walk(srcDir);
+  assert.deepEqual(offenders, []);
+});
