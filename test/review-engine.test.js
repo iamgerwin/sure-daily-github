@@ -94,6 +94,7 @@ test('runEngine sends the prompt on stdin, never in argv, in the PR workdir', as
   const result = await runEngine('opencode', 'm', { cwd: '/tmp/work', prompt, timeoutMs: 1000, runner, env: { A: '1' } });
 
   assert.equal(result.code, 0);
+  assert.equal(result.signal, null);
   assert.equal(result.stdout, 'ok');
   assert.equal(calls[0].cmd, 'opencode');
   assert.ok(!calls[0].args.includes(prompt));
@@ -204,10 +205,11 @@ test('parseTriage reports undecided ids and ignores unknown or duplicate ones', 
   assert.deepEqual(result.missing, ['review_comment:1']);
 });
 
-test('runTriage fails on a non-zero exit, a spawn error, or a timeout', async () => {
+test('runTriage fails on a non-zero exit, a spawn error, a signal, or a timeout', async () => {
   const outputFile = path.join(tmpDir(), 'triage.json');
   const cases = [
     [{ code: 2, stdout: '', stderr: 'model not found' }, /exited with code 2: model not found/],
+    [{ code: null, signal: 'SIGKILL', stdout: '', stderr: 'partial output' }, /^opencode was killed by SIGKILL: partial output$/],
     [{ code: null, stdout: '', stderr: '', error: new Error('spawn opencode ENOENT') }, /could not be started: spawn opencode ENOENT/],
     [{ code: null, stdout: '', stderr: '', timedOut: true }, /timed out/]
   ];
@@ -506,19 +508,57 @@ test('killActiveEngines terminates running engine groups including grandchildren
   }
 });
 
-test('killActiveEngines still kills a background grandchild after its group leader exited', async () => {
+// Waits for a killed process to be reaped (it is reparented to init)
+async function waitGone(pid, ms = 5000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return true; }
+    await new Promise(r => setTimeout(r, 20));
+  }
+  return false;
+}
+
+test('runProcess kills a background grandchild once its group leader exits', async () => {
   const pidFile = path.join(tmpDir(), 'pid');
   // The leader starts a same-group grandchild and exits right away
   const script = `
     const { spawn } = require('child_process');
-    const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    const g = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(g.pid));
     g.unref();`;
   const result = await runProcess(process.execPath, ['-e', script]);
   assert.equal(result.code, 0);
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-  assert.doesNotThrow(() => process.kill(pid, 0), 'grandchild outlives its leader');
+  assert.ok(await waitGone(pid), 'grandchild does not outlive its leader');
 
+  // Nothing is left for an interrupt to kill
   await killActiveEngines({ graceMs: 300 });
-  assert.throws(() => process.kill(pid, 0), /ESRCH/, 'grandchild is gone');
+});
+
+test('runProcess returns when the command exits even if a grandchild holds its stdout', async () => {
+  const pidFile = path.join(tmpDir(), 'pid');
+  // The grandchild inherits stdout, so 'close' would wait for it to exit
+  const script = `
+    const { spawn } = require('child_process');
+    const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' });
+    require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(g.pid));
+    g.unref();
+    console.log('done');`;
+  const started = Date.now();
+  const result = await runProcess(process.execPath, ['-e', script], { timeoutMs: 20000 });
+  assert.equal(result.timedOut, false);
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), 'done');
+  assert.ok(Date.now() - started < 10000, 'returned without waiting for the timeout');
+  assert.ok(await waitGone(Number(fs.readFileSync(pidFile, 'utf8'))), 'grandchild is gone');
+});
+
+test('runImplement names the signal that killed the engine instead of a null exit code', async () => {
+  const reportFile = path.join(tmpDir(), 'implement.json');
+  const items = [{ comment: comments[0], decision: { action: 'fix', reasoning: 'r', plan: 'p' } }];
+  const { runner } = stubRunner({ result: { code: null, signal: 'SIGTERM', stdout: '', stderr: '' } });
+  const result = await runImplement({ engine: 'claude', model: 'm', cwd: '/w', pr, items, reportFile, runner });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'claude was killed by SIGTERM');
+  assert.doesNotMatch(result.error, /code null/);
 });

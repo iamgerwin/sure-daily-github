@@ -14,6 +14,14 @@ export function normalizeRepoPath(filePath) {
   return segments.join('/');
 }
 
+// The error for a failed validate() (or advanced issue handler init). The bare
+// "GitHub authentication failed" is all `run` and `fix-conflicts` print, so it
+// carries the reason: a revoked token, a timeout and a rate limit need
+// different fixes. Same format as babysit's authentication error.
+export function authFailureMessage(result) {
+  return `GitHub authentication failed: ${result?.error || 'unknown error'}`;
+}
+
 const OPEN_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $repo: String!, $cursor: String) {
     repository(owner: $owner, name: $repo) {

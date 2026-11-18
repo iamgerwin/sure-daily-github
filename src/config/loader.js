@@ -106,14 +106,24 @@ function repoNameText(value) {
 }
 
 // The commit path is checked by normalizeRepoPath only when a commit is made,
-// so "./updates" or "../x" would pass `validate` and then fail every commit
+// so "./updates" or "../x" would pass `validate` and then fail every commit.
+// Surrounding whitespace is trimmed (see repoPathText); a path of nothing but
+// whitespace would be kept as a folder named "  " instead of the default.
 function validateRepoPath(repoPath, label, errors) {
   if (repoPath === undefined || repoPath === null) return;
   if (typeof repoPath !== 'string' && typeof repoPath !== 'number') {
     errors.push(`${label} must be a directory path string`);
-  } else if (String(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
+  } else if (typeof repoPath === 'string' && repoPath !== '' && !repoPath.trim()) {
+    errors.push(`${label} must not be blank`);
+  } else if (repoPathText(repoPath).split('/').some(segment => segment === '.' || segment === '..')) {
     errors.push(`${label} must not contain "." or ".." segments`);
   }
+}
+
+// A quoted " daily-updates " would otherwise commit into a folder whose name
+// starts and ends with a space, beside the intended one
+function repoPathText(repoPath) {
+  return typeof repoPath === 'string' ? repoPath.trim() : String(repoPath);
 }
 
 // Template text is run through String#replace at commit/issue time, so a YAML
@@ -200,7 +210,8 @@ function validateBabysit(babysit, errors) {
     errors.push(`babysit.engine must be one of: ${BABYSIT_ENGINES.join(', ')}`);
   }
   // The model is passed as a CLI argument, so a leading dash would be read as a flag
-  if (babysit.model !== undefined && (!isNonEmptyString(babysit.model) || babysit.model.startsWith('-'))) {
+  // Checked after trimming, which is how the value is used
+  if (babysit.model !== undefined && (!isNonEmptyString(babysit.model) || babysit.model.trim().startsWith('-'))) {
     errors.push('babysit.model must be a non-empty string not starting with "-"');
   }
   for (const key of ['maxPrsPerRun', 'testTimeoutMinutes', 'engineTimeoutMinutes']) {
@@ -208,6 +219,15 @@ function validateBabysit(babysit, errors) {
       errors.push(`babysit.${key} must be a positive whole number`);
     }
   }
+}
+
+// Validation accepts a label or model whose trimmed text is non-empty, so a
+// quoted " babysit" or "opus " must be trimmed too: the padded label would
+// be sent as the PR label filter and the padded model as the engine's
+// --model argument, neither of which matches the real name
+function normalizeBabysit(babysit) {
+  const settings = { ...BABYSIT_DEFAULTS, ...(babysit || {}) };
+  return { ...settings, label: settings.label.trim(), model: settings.model.trim() };
 }
 
 export const PR_MAINT_MODES = MODES;
@@ -377,6 +397,12 @@ class ConfigLoader {
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
         validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
         validateTemplateText(repo.commitMessage, `Repository ${idx}: commitMessage`, errors);
+        // An empty message falls back to the default one, but a whitespace-only
+        // message is truthy and would be sent as is, so every daily commit would
+        // carry a blank message (plain `git commit` refuses one outright)
+        if (typeof repo.commitMessage === 'string' && repo.commitMessage !== '' && !repo.commitMessage.trim()) {
+          errors.push(`Repository ${idx}: commitMessage must not be blank`);
+        }
         // A YAML-unquoted branch such as `2024` reads as a number and is
         // stringified below; anything else is not a branch name
         if (repo.branch !== undefined && repo.branch !== null
@@ -606,7 +632,7 @@ class ConfigLoader {
           // every commit target a branch that does not exist
           branch: repo.branch === undefined || repo.branch === null ? null : String(repo.branch).trim(),
           dailyTarget: normalizeDailyTarget(repoTarget),
-          path: repo.path || 'daily-updates',
+          path: (typeof repo.path === 'string' ? repo.path.trim() : repo.path) || 'daily-updates',
           commitMessage: repo.commitMessage || 'docs: daily update ${date}',
           labels: repo.labels || ['automated'],
           weight: repo.weight || 1,
@@ -632,7 +658,7 @@ class ConfigLoader {
         allowlist: conflictFixer.allowlist ?? [],
         denylist: conflictFixer.denylist ?? []
       },
-      babysit: { ...BABYSIT_DEFAULTS, ...(config.babysit || {}) },
+      babysit: normalizeBabysit(config.babysit),
       prMaint: {
         ...PR_MAINT_DEFAULTS,
         ...(config.prMaint || {}),

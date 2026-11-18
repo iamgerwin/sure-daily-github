@@ -245,9 +245,12 @@ On `SIGINT`/`SIGTERM`, babysit:
 
 A second signal is ignored. Nothing is pushed after the interrupt, and
 replies for an already pushed fix stay queued in the ledger (or in its push
-intent, when the interrupt came right after the push). Process groups stay
-tracked until every member has exited, so a background grandchild outliving
-its group leader is still killed.
+intent, when the interrupt came right after the push). An engine run does not
+leave background processes behind: when the engine exits, anything still
+running in its process group (a backgrounded server or watcher) is killed, as
+for the test gate, so it cannot hold the engine's output open until
+`engineTimeoutMinutes` (which would report a finished run as timed out) or
+change the work tree after the engine is done.
 
 ## Per-comment memory (ledger)
 
