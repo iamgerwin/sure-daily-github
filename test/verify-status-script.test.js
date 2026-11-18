@@ -129,3 +129,60 @@ test('verify-status honors SDG_HEARTBEAT_FILE', (t) => {
 
   assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z \(0 minutes ago\)/);
 });
+
+// The scheduler runs the cron in schedule.timezone || general.timezone || UTC;
+// general comes first in the file, so the first timezone: is the wrong one
+test('verify-status reports the timezone the cron fires in, not the first one in the file', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(appDir, 'config/config.yaml'), [
+    'general:',
+    '  timezone: "UTC"',
+    'schedule:',
+    '  enabled: true',
+    '  # timezone: "Europe/Berlin"',
+    '  cron: "0 9 * * *"',
+    '  timezone: "Asia/Manila"',
+    ''
+  ].join('\n'));
+
+  const output = run(appDir);
+
+  assert.match(output, /Cron Schedule: +cron: "0 9 \* \* \*"/);
+  assert.match(output, /Timezone: +timezone: "Asia\/Manila"/);
+  assert.doesNotMatch(output, /timezone: "UTC"/);
+  assert.doesNotMatch(output, /Europe\/Berlin/);
+});
+
+test('verify-status ignores cron and timezone keys outside their sections', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(appDir, 'config/config.yaml'), [
+    'babysit:',
+    '  cron: "1 1 * * *"',
+    '  timezone: "America/New_York"',
+    'general:',
+    '  timezone: "Asia/Tokyo"',
+    'schedule:',
+    '  cron: "*/30 * * * *"',
+    ''
+  ].join('\n'));
+
+  const output = run(appDir);
+
+  assert.match(output, /Cron Schedule: +cron: "\*\/30 \* \* \* \*"/);
+  // No schedule.timezone: the scheduler falls back to general.timezone
+  assert.match(output, /Timezone: +timezone: "Asia\/Tokyo"/);
+  assert.doesNotMatch(output, /1 1 \* \* \*|America\/New_York/);
+});
+
+test('verify-status says when cron and timezone are not set', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(appDir, 'config/config.yaml'), 'repositories: []\n');
+
+  const output = run(appDir);
+
+  assert.match(output, /Cron Schedule: +not set/);
+  assert.match(output, /Timezone: +not set \(UTC\)/);
+});
