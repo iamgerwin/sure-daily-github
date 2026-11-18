@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 // The default instance below reads SDG_STATE_FILE on import, before the config loader runs
 import '../config/env.js';
+import { resolveDataPath } from './data-path.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/state.json');
@@ -13,7 +14,7 @@ const isCount = (value) => Number.isInteger(value) && value >= 0;
 
 export class StateManager {
   constructor(options = {}) {
-    this.filePath = options.filePath || process.env.SDG_STATE_FILE || DEFAULT_STATE_FILE;
+    this.filePath = options.filePath || resolveDataPath(process.env.SDG_STATE_FILE, DEFAULT_STATE_FILE);
     this.state = this.load();
   }
 
