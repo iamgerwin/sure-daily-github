@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { acquireRunLock } from '../src/utils/run-lock.js';
 import executor from '../src/core/executor.js';
+import logger from '../src/utils/logger.js';
 
 function useTmpLockFile(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-lock-'));
@@ -182,9 +183,16 @@ test('acquireRunLock ages a live-PID lock from its last refresh', (t) => {
 test('refresh leaves a lock that now belongs to someone else untouched', (t) => {
   const filePath = useTmpLockFile(t);
 
+  const warn = t.mock.method(logger, 'warn', () => {});
   const lock = acquireRunLock();
   writeForeignLock(filePath, { startedAt: 12345 });
+  assert.equal(lock.lost, false);
   assert.equal(lock.refresh(), false);
+  assert.equal(lock.lost, true, 'the handle reports the lock as lost');
+  assert.equal(warn.mock.callCount(), 1);
+  assert.match(warn.mock.calls[0].arguments[0], /taken over/);
+  assert.equal(lock.refresh(), false, 'a lost lock is not refreshed again');
+  assert.equal(warn.mock.callCount(), 1, 'the loss is warned about once');
   assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')), { pid: process.ppid, startedAt: 12345 });
   assert.deepEqual(lockDirEntries(filePath), ['run.lock'], 'no temp file left behind');
   lock.release();

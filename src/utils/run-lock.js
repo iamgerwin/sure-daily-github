@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { clampTimerMs } from './process.js';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root so the service and a manual `cli.js run` share it
@@ -171,7 +172,9 @@ function refreshLock(filePath, held, now = Date.now()) {
 
 // Acquires an exclusive cross-process lock so concurrent executions (e.g. the
 // scheduler service plus a manual `run`) cannot race on the state files.
-// Returns { acquired: true, release, refresh } or { acquired: false, holder }.
+// Returns { acquired: true, release, refresh, lost } or { acquired: false, holder }.
+// `lost` turns true (with a warning, and refreshing stops) once a refresh finds
+// the lock removed or taken over, so a caller can decide whether to stop.
 // While held, the lock is refreshed every `refreshMs` so a run longer than
 // SDG_RUN_LOCK_STALE_MS is not mistaken for a reused PID; release stops it.
 // `filePath` selects a separate lock (pr-maint ticks must not wait on `run`).
@@ -183,14 +186,30 @@ export function acquireRunLock({ now = Date.now(), filePath = lockFilePath(), re
       const raw = JSON.stringify({ pid: process.pid, startedAt: now });
       createLockFile(filePath, raw);
       heldLocks.set(filePath, raw);
-      const held = { raw, startedAt: now };
-      const refresh = (at) => refreshLock(filePath, held, at) === 'refreshed';
+      const held = { raw, startedAt: now, lost: false };
+      let timer = null;
+      const refresh = (at) => {
+        if (held.lost) return false;
+        const outcome = refreshLock(filePath, held, at);
+        if (outcome === 'lost') {
+          // Another run may now be working on the state files: stop refreshing
+          // and say so, since nothing else would surface it
+          held.lost = true;
+          clearInterval(timer);
+          logger.warn('Run lock was removed or taken over while held; this run no longer holds it', { lockFile: filePath, pid: process.pid });
+        } else if (outcome === 'failed') {
+          logger.warn('Could not refresh the run lock; it ages out if this keeps failing', { lockFile: filePath });
+        }
+        return outcome === 'refreshed';
+      };
       // Unref'd: a held lock must not keep a finished process alive
-      const timer = setInterval(() => refresh(), refreshMs);
+      timer = setInterval(() => refresh(), refreshMs);
       timer.unref();
       return {
         acquired: true,
         refresh,
+        // True once a refresh found the lock gone or someone else's
+        get lost() { return held.lost; },
         release: () => {
           clearInterval(timer);
           releaseRunLock(filePath, held.raw);
