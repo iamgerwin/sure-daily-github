@@ -8,8 +8,22 @@ const DEFAULT_LOCK_FILE = path.join(__dirname, '../../data/run.lock');
 // Fallback for PID reuse: a lock older than this is reclaimed even if its PID is alive
 const DEFAULT_STALE_MS = 2 * 60 * 60 * 1000;
 
+const PROJECT_ROOT = path.join(__dirname, '../..');
+
+// A lock only excludes processes that agree on its path. A relative override
+// would resolve against each process's working directory, so the service (run
+// from its WorkingDirectory) and a manual `cli.js run` started elsewhere would
+// take different locks and race on the state files. Relative values are
+// anchored to the project root like the default; surrounding whitespace (a
+// systemd Environment= line) is ignored, and a blank value keeps the default.
+export function resolveLockPath(value, defaultPath) {
+  const text = String(value ?? '').trim();
+  if (!text) return defaultPath;
+  return path.resolve(PROJECT_ROOT, text);
+}
+
 function lockFilePath() {
-  return process.env.SDG_RUN_LOCK_FILE || DEFAULT_LOCK_FILE;
+  return resolveLockPath(process.env.SDG_RUN_LOCK_FILE, DEFAULT_LOCK_FILE);
 }
 
 function staleMs() {

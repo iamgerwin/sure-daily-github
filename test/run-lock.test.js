@@ -3,8 +3,13 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { acquireRunLock } from '../src/utils/run-lock.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { acquireRunLock, resolveLockPath } from '../src/utils/run-lock.js';
 import executor from '../src/core/executor.js';
+
+const execFileP = promisify(execFile);
 
 function useTmpLockFile(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-lock-'));
@@ -298,4 +303,43 @@ test('acquireRunLock leaves no moved-aside file after reclaiming a stale lock', 
   assert.equal(result.acquired, true);
   assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
   result.release();
+});
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+test('resolveLockPath anchors a relative override to the project root, not the working directory', () => {
+  const fallback = path.join(projectRoot, 'data', 'run.lock');
+  assert.equal(resolveLockPath('tmp/run.lock', fallback), path.join(projectRoot, 'tmp', 'run.lock'));
+  assert.equal(resolveLockPath('  tmp/run.lock\n', fallback), path.join(projectRoot, 'tmp', 'run.lock'));
+  assert.equal(resolveLockPath('/var/lib/sdg/run.lock', fallback), '/var/lib/sdg/run.lock');
+  assert.equal(resolveLockPath(undefined, fallback), fallback);
+  assert.equal(resolveLockPath('', fallback), fallback);
+  assert.equal(resolveLockPath('   ', fallback), fallback);
+});
+
+test('a relative SDG_RUN_LOCK_FILE excludes processes started from different directories', async (t) => {
+  const relative = `data/test-relative-${process.pid}-${Date.now()}.lock`;
+  const absolute = path.join(projectRoot, relative);
+  process.env.SDG_RUN_LOCK_FILE = relative;
+  t.after(() => {
+    delete process.env.SDG_RUN_LOCK_FILE;
+    fs.rmSync(absolute, { force: true });
+  });
+
+  const lock = acquireRunLock();
+  assert.equal(lock.acquired, true);
+  assert.ok(fs.existsSync(absolute), 'lock is created under the project root');
+  try {
+    // A second process with another working directory must see the same lock
+    const script = `import { acquireRunLock } from ${JSON.stringify(path.join(projectRoot, 'src/utils/run-lock.js'))};
+      const r = acquireRunLock(); console.log(JSON.stringify({ acquired: r.acquired, pid: r.holder?.pid }));
+      if (r.acquired) r.release();`;
+    const { stdout } = await execFileP(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: os.tmpdir(),
+      env: { ...process.env, SDG_RUN_LOCK_FILE: relative }
+    });
+    assert.deepEqual(JSON.parse(stdout), { acquired: false, pid: process.pid });
+  } finally {
+    lock.release();
+  }
 });
