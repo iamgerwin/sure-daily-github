@@ -136,9 +136,15 @@ export class Logger {
       debug: '\x1b[90m'
     };
     const reset = '\x1b[0m';
-    // Detected on every call, like the level, so NO_COLOR from .env applies
-    const color = this.color ?? shouldUseColor();
-    console.log(color ? `${colors[level]}${formatted}${reset}` : formatted);
+    // Errors and warnings go to stderr, as console.error and console.warn do, so
+    // `2>errors.log`, pm2's error_file and other stderr captures receive them
+    const toStderr = level === 'error' || level === 'warn';
+    // Detected on every call, like the level, so NO_COLOR from .env applies;
+    // checked on the stream the line is written to
+    const color = this.color ?? shouldUseColor(toStderr ? process.stderr : process.stdout);
+    const line = color ? `${colors[level]}${formatted}${reset}` : formatted;
+    if (toStderr) console.error(line);
+    else console.log(line);
 
     // File output
     const now = new Date();
