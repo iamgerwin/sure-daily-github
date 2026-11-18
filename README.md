@@ -451,7 +451,7 @@ Contributions are welcome! Please ensure:
 
 For issues, questions, or contributions:
 - Open an issue on GitHub
-- Check logs in `./logs/` directory
+- Check logs in the `logs/` directory of the install (the path `start` prints), wherever the command was run from
 - Review configuration with `validate` command
 
 ## Release Notes

@@ -113,6 +113,15 @@ export class Logger {
     console.error(`Log file output unavailable (${this.logDir}), logging to console only: ${error.message}`);
   }
 
+  // Where log lines are written, for the `start` banner: the absolute log
+  // directory (anchored to the install, not the working directory), or a note
+  // that file output was unavailable and lines go to the console only
+  describeDestination() {
+    return this.fileErrorReported
+      ? `console only (${this.logDir} is not writable)`
+      : this.logDir;
+  }
+
   // Read on every call: this module is imported before loader.js runs
   // dotenv.config(), so LOG_LEVEL from .env is not set at construction time
   // A LOG_LEVEL that names no level is reported once per distinct value
