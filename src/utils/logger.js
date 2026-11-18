@@ -131,8 +131,8 @@ export class Logger {
     return LOG_LEVELS[level] <= LOG_LEVELS[this.level];
   }
 
-  format(level, message, meta = {}) {
-    const timestamp = new Date().toISOString();
+  format(level, message, meta = {}, now = new Date()) {
+    const timestamp = now.toISOString();
     let metaStr = '';
     if (meta && Object.keys(meta).length > 0) {
       try {
@@ -144,10 +144,14 @@ export class Logger {
     return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
   }
 
+  // One clock reading stamps the line and names its daily file, so a line
+  // written across midnight UTC is not stamped with one day and appended to
+  // the next day's file
   write(level, message, meta = {}) {
     if (!this.shouldLog(level)) return;
 
-    const formatted = this.format(level, message, meta);
+    const now = new Date();
+    const formatted = this.format(level, message, meta, now);
 
     // Console output with colors
     const colors = {
@@ -168,7 +172,6 @@ export class Logger {
     else console.log(line);
 
     // File output
-    const now = new Date();
     this.pruneIfDue(now);
     const logFile = path.join(this.logDir, `${now.toISOString().split('T')[0]}.log`);
     try {
