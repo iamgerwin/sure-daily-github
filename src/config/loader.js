@@ -366,6 +366,12 @@ class ConfigLoader {
         validateLabels(repo.labels, `Repository ${idx}: labels`, errors);
         validateRepoPath(repo.path, `Repository ${idx}: path`, errors);
         validateTemplateText(repo.commitMessage, `Repository ${idx}: commitMessage`, errors);
+        // An empty message falls back to the default one, but a whitespace-only
+        // message is truthy and would be sent as is, so every daily commit would
+        // carry a blank message (plain `git commit` refuses one outright)
+        if (typeof repo.commitMessage === 'string' && repo.commitMessage !== '' && !repo.commitMessage.trim()) {
+          errors.push(`Repository ${idx}: commitMessage must not be blank`);
+        }
         // A YAML-unquoted branch such as `2024` reads as a number and is
         // stringified below; anything else is not a branch name
         if (repo.branch !== undefined && repo.branch !== null
