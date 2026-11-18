@@ -125,23 +125,47 @@ function reclaimStaleLock(filePath, staleRaw) {
   }
 }
 
-// Rewrites refreshedAt on a lock this process still holds, replacing it with a
-// rename so readers never see a partial file. A lock that changed since our
-// last write (reclaimed, or taken by another process) is left alone. Never
-// throws: it runs from a timer, and a failed refresh only shortens the lock's life.
+// Rewrites refreshedAt on a lock this process still holds. Checking the file
+// and then overwriting it would race a reclaim in between (the overwrite could
+// replace a lock another process just took, leaving two holders), so like
+// reclaimStaleLock it moves the lock aside atomically, checks that what it
+// moved is still ours, and publishes the refreshed lock with an exclusive
+// create: if anyone took the path meanwhile, theirs wins and ours is lost.
+// A lock that is not ours is put back untouched. Never throws: it runs from a
+// timer, and a failed refresh only shortens the lock's life.
+// Returns 'refreshed', 'lost' (the lock is gone or someone else's) or 'failed'
+// (a filesystem error left our lock as it was).
 function refreshLock(filePath, held, now = Date.now()) {
-  if (readRaw(filePath) !== held.raw) return false;
-  const contents = JSON.stringify({ pid: process.pid, startedAt: held.startedAt, refreshedAt: now });
-  const tmpFile = `${filePath}.${process.pid}.${Date.now()}.refresh.tmp`;
+  const moved = `${filePath}.${process.pid}.${Date.now()}.refresh`;
   try {
-    fs.writeFileSync(tmpFile, contents, { flag: 'wx' });
-    fs.renameSync(tmpFile, filePath);
+    fs.renameSync(filePath, moved);
+  } catch (error) {
+    return error.code === 'ENOENT' ? 'lost' : 'failed';
+  }
+  try {
+    const raw = readRaw(moved);
+    if (raw !== held.raw) {
+      if (raw !== null) {
+        try { createLockFile(filePath, raw); } catch (_) {}
+      }
+      return 'lost';
+    }
+    const contents = JSON.stringify({ pid: process.pid, startedAt: held.startedAt, refreshedAt: now });
+    try {
+      createLockFile(filePath, contents);
+    } catch (error) {
+      if (error.code === 'EEXIST') return 'lost';
+      // Could not publish the refresh: restore the lock as it was
+      try { createLockFile(filePath, raw); } catch (_) {}
+      return readRaw(filePath) === raw ? 'failed' : 'lost';
+    }
     if (heldLocks.get(filePath) === held.raw) heldLocks.set(filePath, contents);
     held.raw = contents;
-    return true;
+    return 'refreshed';
   } catch (_) {
-    try { fs.rmSync(tmpFile, { force: true }); } catch (_) {}
-    return false;
+    return 'failed';
+  } finally {
+    try { fs.rmSync(moved, { force: true }); } catch (_) {}
   }
 }
 
@@ -160,7 +184,7 @@ export function acquireRunLock({ now = Date.now(), filePath = lockFilePath(), re
       createLockFile(filePath, raw);
       heldLocks.set(filePath, raw);
       const held = { raw, startedAt: now };
-      const refresh = (at) => refreshLock(filePath, held, at);
+      const refresh = (at) => refreshLock(filePath, held, at) === 'refreshed';
       // Unref'd: a held lock must not keep a finished process alive
       const timer = setInterval(() => refresh(), refreshMs);
       timer.unref();

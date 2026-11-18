@@ -191,6 +191,25 @@ test('refresh leaves a lock that now belongs to someone else untouched', (t) => 
   assert.equal(fs.existsSync(filePath), true);
 });
 
+test('refresh never overwrites a lock another process takes mid-refresh', (t) => {
+  const filePath = useTmpLockFile(t);
+
+  const lock = acquireRunLock();
+  // Another process reclaims the path while ours is moved aside
+  const link = fs.linkSync;
+  t.mock.method(fs, 'linkSync', (from, to) => {
+    if (to === filePath && !fs.existsSync(filePath)) writeForeignLock(filePath, { startedAt: 777 });
+    return link(from, to);
+  });
+  assert.equal(lock.refresh(), false);
+  t.mock.restoreAll();
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')), { pid: process.ppid, startedAt: 777 });
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock'], 'no temp file left behind');
+  lock.release();
+  assert.equal(fs.existsSync(filePath), true, 'release leaves the other holder alone');
+});
+
 test('the refresh timer runs while the lock is held and stops on release', async (t) => {
   const filePath = useTmpLockFile(t);
 
