@@ -98,6 +98,8 @@ cp .env.example .env
 echo "GITHUB_TOKEN=ghp_your_token_here" > .env
 ```
 
+The `.env` in the current directory is read first; the `.env` in the install directory then fills any variable still unset, so `node /path/to/sure-daily-github/src/cli.js run` works from any directory. Variables already set in the environment (e.g. systemd `Environment=`) always take precedence.
+
 ### 4. Test
 
 ```bash
