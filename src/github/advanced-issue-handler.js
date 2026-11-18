@@ -182,10 +182,11 @@ class AdvancedIssueHandler {
     const target = repoState?.todayTarget;
     const saved = repoState?.targetRange;
     // State written before targetRange was recorded keeps its target if it still fits the range
-    const sameRange = saved
-      ? saved.min === min && saved.max === max
-      : target >= min && target <= max;
-    return Number.isInteger(target) && sameRange;
+    const sameRange = !saved || (saved.min === min && saved.max === max);
+    // A rolled target always lies in the range; one outside it (hand edit,
+    // corruption) is re-rolled even under a matching targetRange: a 0 would
+    // stop today's issues and a 1000 would create far past the range
+    return Number.isInteger(target) && sameRange && target >= min && target <= max;
   }
 
   getRandomElement(array) {

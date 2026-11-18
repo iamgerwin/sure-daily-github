@@ -57,7 +57,7 @@ test('every documented issue template placeholder is filled', () => {
 
 // The section once said the advanced handler ignores contentTemplate after the
 // handler had started falling back to it, so users kept a template that applied
-test('the issue content template docs describe the contentTemplate fallback the advanced handler uses', () => {
+test('the issue content template docs say the configured contentTemplate is used without a contentTemplates list', () => {
   const section = templatesSection();
   assert.doesNotMatch(section, /does not use the single `contentTemplate`/);
   assert.match(section, /Without a `contentTemplates` list \(or with an empty one\), the configured `contentTemplate` is used/);
@@ -71,4 +71,28 @@ test('the issue content template docs describe the contentTemplate fallback the 
     assert.equal(title, 'Single Crash');
     assert.equal(body, 'Body for demo');
   }
+});
+
+// The section once said the advanced handler never reads contentTemplate, which
+// stopped being true when it learned to fall back to it; pin both the docs and
+// the behavior they describe
+test('the issue content template docs describe the contentTemplate fallback the advanced handler uses', () => {
+  const section = templatesSection();
+  assert.doesNotMatch(section, /does not use the single `contentTemplate`/);
+  assert.match(section, /missing or empty, it falls back to the single `contentTemplate` block/);
+
+  const repo = { owner: 'me', repo: 'demo', labels: ['automated'] };
+  const now = new Date('2026-10-15T00:00:00Z');
+  const handler = createHandler();
+  const single = { title: 'Bug in ${repo}: ${randomBugTitle}', body: 'Priority ${priority}', labels: ['ignored'] };
+
+  for (const contentTemplates of [undefined, []]) {
+    const issue = handler.generateIssueContent(repo, { contentTemplate: single, contentTemplates }, now);
+    assert.equal(issue.title, 'Bug in demo: General bug');
+    assert.match(issue.body, /^Priority (Low|Medium|High)$/);
+    assert.deepEqual(issue.labels, ['automated']);
+  }
+
+  const listed = handler.generateIssueContent(repo, { contentTemplate: single, contentTemplates: [{ title: 'From list' }] }, now);
+  assert.equal(listed.title, 'From list');
 });
