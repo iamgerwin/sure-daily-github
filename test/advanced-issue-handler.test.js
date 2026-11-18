@@ -738,6 +738,25 @@ test('inserts configured titles literally, without replacement patterns or neste
   assert.equal(body, `${bugTitle} in shop`);
 });
 
+test('fits a title that a long random title entry pushes past the GitHub limit', async () => {
+  const { handler, created } = createHandler();
+  const config = {
+    general: { timezone: 'UTC' },
+    randomization: { bugTitles: ['b'.repeat(300)] },
+    contentTemplates: [{ title: 'Bug: ${randomBugTitle}', body: '${randomBugTitle}' }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo(), config);
+  assert.equal([...title].length, 256);
+  assert.equal(title, 'Bug: ' + 'b'.repeat(250) + '…');
+  // Only the title has a limit; the body keeps the whole entry
+  assert.equal(body, 'b'.repeat(300));
+
+  await handler.processRepositories([repo()], null, false, config);
+  assert.equal(created.length, 1);
+  assert.equal([...created[0].title].length, 256);
+});
+
 test('falls back to the default random titles when a title list is empty', () => {
   const { handler } = createHandler();
   const config = {

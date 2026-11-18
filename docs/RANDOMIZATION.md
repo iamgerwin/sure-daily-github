@@ -156,6 +156,8 @@ Placeholders filled in `title` and `body`:
 
 Values are inserted literally, and any other `${name}` is left as written.
 
+GitHub rejects an issue title longer than 256 characters, so a filled-in title past that limit (in either issue handler) is cut to 255 characters followed by `…`. The body is never shortened.
+
 The simple issue handler (fixed targets) and commit mode always use `contentTemplate`, and there it supports only `${date}`, `${time}`, `${timestamp}` and `${repo}`.
 
 ## Repository Selection Strategies

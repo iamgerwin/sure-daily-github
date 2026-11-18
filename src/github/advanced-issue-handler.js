@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
+import { fitIssueTitle } from '../utils/issue-title.js';
 import { DEFAULT_CONTENT_TEMPLATE } from '../config/loader.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -254,7 +255,8 @@ class AdvancedIssueHandler {
     // placeholders are left as written.
     const fill = text => text.replace(/\$\{(\w+)\}/g, (match, key) =>
       Object.hasOwn(replacements, key) ? String(replacements[key]) : match);
-    title = fill(title);
+    // Fitted after filling: a long random title entry can push it past the limit
+    title = fitIssueTitle(fill(title));
     body = fill(body);
     
     return {

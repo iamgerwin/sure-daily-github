@@ -3,6 +3,7 @@ import state from '../utils/state.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import { getTemplateDateParts } from '../utils/template-date.js';
+import { fitIssueTitle } from '../utils/issue-title.js';
 
 class IssueHandler {
   // Without a token only the local-state methods (getStatus) are usable
@@ -40,7 +41,8 @@ class IssueHandler {
       return repo ? rendered.replace(/\$\{repo\}/g, repo) : rendered;
     };
 
-    return { title: fill(title), body: fill(body) };
+    // Fitted after rendering, so the dry-run preview shows the title GitHub accepts
+    return { title: fitIssueTitle(fill(title)), body: fill(body) };
   }
 
   async createIssue(owner, repo, title, body, labels = []) {

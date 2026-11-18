@@ -196,6 +196,17 @@ test('createDailyIssue fills ${repo} in the issue title and body', async () => {
   assert.equal(calls[0].body, 'Repo: shop, shop');
 });
 
+test('createDailyIssue fits a rendered title past the GitHub limit and keeps the body whole', async () => {
+  const { handler, calls } = createHandler();
+  const long = 'u'.repeat(300);
+  const result = await handler.createDailyIssue(repoConfig('long-title'), { title: '${repo}: ' + long, body: long }, false, null, {});
+
+  assert.equal(result.success, true);
+  assert.equal([...calls[0].title].length, 256);
+  assert.equal(calls[0].title, 'long-title: ' + 'u'.repeat(243) + '…');
+  assert.equal(calls[0].body, long);
+});
+
 test('generateIssueContent leaves ${repo} as written when no repository is given', () => {
   const { handler } = createHandler();
 
