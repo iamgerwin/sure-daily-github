@@ -89,6 +89,9 @@ system**, not by the prompt:
   - `sudo`
   - bypass forms: `git -c/-C/--git-dir/--work-tree/...`, `*/git …`, `env`,
     `eval`, `exec`, `command`, `xargs`, `bash/sh/zsh -c`
+  - every denied command above run by path (`*/curl …`, `*/gh …`,
+    `*/bash -c …`), so `/usr/bin/curl` or `./gh` does not slip past the
+    bare-name rules
 
   `edit` is allowed, `external_directory` is denied (edits and reads stay in
   the checkout), and `webfetch` and `websearch` are denied.
