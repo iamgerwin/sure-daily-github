@@ -759,6 +759,35 @@ test('when every triage batch fails, an infrastructure batch stays pending while
   assert.equal(ledger['me/demo#7/review_comment:12'].attempts, 1);
 });
 
+test('a comment the triage decides two different ways is charged and not replied to, while the others proceed', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const { client, calls } = stubClient({ pulls: { 7: pull(remote.headSha) }, reviewComments: [inlineAlice, inlineBot] });
+  const runner = async (cmd, args, { input }) => {
+    const file = /write your decisions as JSON to this file[^:]*: (\S+)/i.exec(input)[1];
+    fs.writeFileSync(file, JSON.stringify({
+      comments: [
+        { id: 'review_comment:11', action: 'wontfix', reasoning: 'not a bug' },
+        { id: 'review_comment:12', action: 'note', reasoning: 'acknowledged' },
+        { id: 'review_comment:11', action: 'fix', reasoning: 'off-by-one' }
+      ]
+    }));
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const engine = createReviewEngine({ engine: 'opencode', model: 'm', runner });
+
+  const result = await babysitter(remote, client, engine).execute(makeConfig());
+  const pr = result.results[0];
+  assert.deepEqual(pr.failures.map(f => f.id), ['review_comment:11']);
+  assert.match(pr.failures[0].error, /triage gave conflicting actions for this comment/);
+  assert.equal(pr.counts.wontfix, 0, 'the first of the two actions is not acted on');
+  assert.equal(pr.counts.noted, 1);
+  assert.ok(!calls.replies.some(r => r.commentId === 11 && /wontfix|not a bug/i.test(r.body)), 'no wontfix reply');
+  const ledger = state.ledger().comments;
+  assert.equal(ledger['me/demo#7/review_comment:11'].attempts, 1);
+  assert.equal(remote.remote('rev-parse', 'refs/heads/feature'), remote.headSha, 'nothing pushed');
+});
+
 test('when every implement batch fails, an infrastructure batch stays pending while a genuine one is charged', async (t) => {
   const state = useTmpState(t);
   const remote = setupRemote();
