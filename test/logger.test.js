@@ -68,7 +68,7 @@ test('an unknown LOG_LEVEL is warned about once per value, in the console and th
       withLogLevel('verbose', () => fileLogger.info('third'));
       withLogLevel('debug', () => fileLogger.info('fourth'));
     });
-    const warnings = lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line));
+    const warnings = lines.error.filter(line => /Ignoring LOG_LEVEL/.test(line));
     assert.equal(warnings.length, 2);
     assert.match(warnings[0], /\[WARN\].*logging at info.*"value":"deubg"/);
     assert.match(warnings[1], /"value":"verbose"/);
@@ -89,7 +89,7 @@ test('a valid or unset LOG_LEVEL is not warned about', () => {
       withLogLevel('', () => fileLogger.info('blank'));
       withLogLevel(' INFO ', () => fileLogger.info('padded'));
     });
-    assert.equal(lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
+    assert.equal(lines.error.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
     assert.equal(lines.log.length, 3);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -338,6 +338,30 @@ test('pruneOldLogs on a missing directory returns nothing without throwing', () 
     const fileLogger = new Logger({ logDir: dir });
     fs.rmSync(dir, { recursive: true });
     assert.deepEqual(fileLogger.pruneOldLogs(1), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a LOG_RETENTION_DAYS past the representable date range keeps every file and never throws', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    seedLogs(dir, ['2000-01-01.log']);
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    assert.deepEqual(fileLogger.pruneOldLogs(999999999, new Date('2026-10-30T12:00:00Z')), []);
+
+    captureConsole(() => {
+      withRetention('999999999', () => {
+        assert.doesNotThrow(() => new Logger({ logDir: dir, color: false }).error('still logged'));
+      });
+    });
+    assert.ok(fs.existsSync(path.join(dir, '2000-01-01.log')), 'nothing is pruned');
+    // Read back whichever daily file write() chose instead of re-reading the
+    // clock, which could name the next day's file across midnight UTC
+    const written = fs.readdirSync(dir).filter(name => name !== '2000-01-01.log');
+    assert.equal(written.length, 1);
+    assert.match(written[0], /^\d{4}-\d{2}-\d{2}\.log$/);
+    assert.match(fs.readFileSync(path.join(dir, written[0]), 'utf8'), /still logged/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
