@@ -362,3 +362,9 @@ test('a commit-mode dry run previews the file path and message a real run would 
   });
   assert.equal(state.getCounts('me', 'preview', 'UTC', now).daily, 0);
 });
+
+test('init reports why GitHub authentication failed', async () => {
+  const handler = new CommitHandler('ghp_test');
+  handler.client.validate = async () => ({ success: false, error: 'Bad credentials' });
+  await assert.rejects(() => handler.init(), { message: 'GitHub authentication failed: Bad credentials' });
+});
