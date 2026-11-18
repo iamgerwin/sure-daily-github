@@ -17,6 +17,13 @@ export function resolveLogLevel(value) {
   return Object.hasOwn(LOG_LEVELS, level) ? level : 'info';
 }
 
+// The raw LOG_LEVEL when it is set but names no level, so the logger can warn
+// that a typo ("deubg") is running at info; else null
+export function invalidLogLevel(value) {
+  const level = String(value ?? '').trim().toLowerCase();
+  return level === '' || Object.hasOwn(LOG_LEVELS, level) ? null : value;
+}
+
 // Color escapes only help a terminal: under systemd, pm2, cron or a pipe they
 // land in the captured output as literal "[36m" noise. A non-empty NO_COLOR
 // (https://no-color.org) turns them off on a terminal too.
@@ -48,16 +55,17 @@ export class Logger {
     this.color = color;
     this.fileErrorReported = false;
     this.lastPrunedDay = null;
+    this.reportedInvalidLevel = null;
     this.ensureLogDir();
   }
 
   // Deletes daily log files more than `days` days old. File names (and today)
   // are UTC dates, matching the names write() gives them. Never throws.
   pruneOldLogs(days, now = new Date()) {
-    // A window reaching past the earliest representable date (a huge
-    // LOG_RETENTION_DAYS) keeps every file; toISOString on that Invalid Date
-    // would throw out of write() and break every log call
     const cutoffDate = new Date(now.getTime() - (days - 1) * DAY_MS);
+    // A retention so long (e.g. 999999999 days) that the cutoff falls outside
+    // the Date range covers every possible file: keep them all instead of
+    // letting toISOString() throw out of every log write
     if (Number.isNaN(cutoffDate.getTime())) return [];
     const cutoff = cutoffDate.toISOString().split('T')[0];
     let entries;
@@ -107,16 +115,24 @@ export class Logger {
 
   // Read on every call: this module is imported before loader.js runs
   // dotenv.config(), so LOG_LEVEL from .env is not set at construction time
+  // A LOG_LEVEL that names no level is reported once per distinct value
+  // (marked before writing, since write() reads the level again)
   get level() {
-    return resolveLogLevel(process.env.LOG_LEVEL);
+    const raw = process.env.LOG_LEVEL;
+    const invalid = invalidLogLevel(raw);
+    if (invalid !== null && invalid !== this.reportedInvalidLevel) {
+      this.reportedInvalidLevel = invalid;
+      this.write('warn', 'Ignoring LOG_LEVEL (expected error, warn, info or debug); logging at info', { value: invalid });
+    }
+    return resolveLogLevel(raw);
   }
 
   shouldLog(level) {
     return LOG_LEVELS[level] <= LOG_LEVELS[this.level];
   }
 
-  format(level, message, meta = {}) {
-    const timestamp = new Date().toISOString();
+  format(level, message, meta = {}, now = new Date()) {
+    const timestamp = now.toISOString();
     let metaStr = '';
     if (meta && Object.keys(meta).length > 0) {
       try {
@@ -128,10 +144,14 @@ export class Logger {
     return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
   }
 
+  // One clock reading stamps the line and names its daily file, so a line
+  // written across midnight UTC is not stamped with one day and appended to
+  // the next day's file
   write(level, message, meta = {}) {
     if (!this.shouldLog(level)) return;
 
-    const formatted = this.format(level, message, meta);
+    const now = new Date();
+    const formatted = this.format(level, message, meta, now);
 
     // Console output with colors
     const colors = {
@@ -141,12 +161,17 @@ export class Logger {
       debug: '\x1b[90m'
     };
     const reset = '\x1b[0m';
-    // Detected on every call, like the level, so NO_COLOR from .env applies
-    const color = this.color ?? shouldUseColor();
-    console.log(color ? `${colors[level]}${formatted}${reset}` : formatted);
+    // Errors and warnings go to stderr, as console.error and console.warn do, so
+    // `2>errors.log`, pm2's error_file and other stderr captures receive them
+    const toStderr = level === 'error' || level === 'warn';
+    // Detected on every call, like the level, so NO_COLOR from .env applies;
+    // checked on the stream the line is written to
+    const color = this.color ?? shouldUseColor(toStderr ? process.stderr : process.stdout);
+    const line = color ? `${colors[level]}${formatted}${reset}` : formatted;
+    if (toStderr) console.error(line);
+    else console.log(line);
 
     // File output
-    const now = new Date();
     this.pruneIfDue(now);
     const logFile = path.join(this.logDir, `${now.toISOString().split('T')[0]}.log`);
     try {
