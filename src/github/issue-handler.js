@@ -83,17 +83,22 @@ class IssueHandler {
     const { owner, repo, dailyTarget } = repoConfig;
     const timezone = config?.general?.timezone || 'UTC';
     const randomization = config?.randomization;
-    const timeVar = randomization?.timeVariations;
+    // Time variations belong to randomization: with randomization switched off
+    // their ranges are neither validated nor used for the issue count, so their
+    // hourly and weekly caps must not silently throttle issues either
+    const timeVar = randomization?.enabled && randomization.timeVariations?.enabled
+      ? randomization.timeVariations
+      : null;
 
     // Randomization replaces the repository dailyTarget as the daily cap, so a
     // rolled issueCount above it is not cut off after the first issue
     const randomTarget = randomization?.enabled
-      ? (timeVar?.enabled ? timeVar.daily : null) ?? randomization.issueCount
+      ? timeVar?.daily ?? randomization.issueCount
       : null;
     const actualTarget = targetCount || randomTarget || dailyTarget;
     const dailyMax = typeof actualTarget === 'object' ? actualTarget.max : actualTarget;
-    const hourlyMax = timeVar?.enabled ? timeVar?.hourly?.max : undefined;
-    const weeklyMax = timeVar?.enabled ? timeVar?.weekly?.max : undefined;
+    const hourlyMax = timeVar?.hourly?.max;
+    const weeklyMax = timeVar?.weekly?.max;
 
     return state.isWithinLimits(owner, repo, { hourlyMax, dailyMax, weeklyMax }, timezone, now);
   }
