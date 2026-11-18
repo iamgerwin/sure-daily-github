@@ -266,6 +266,26 @@ test('validate keeps valid repository paths and defaults a missing path', () => 
   assert.deepEqual(cfg.repositories.map(repo => repo.path), ['notes/daily', 'daily-updates/', '/', '.github/notes', 2024, 'daily-updates']);
 });
 
+test('validate trims whitespace around a repository path so commits land in the intended folder', () => {
+  const repos = [' daily-updates ', '\tnotes/daily\n', ' / '].map((repoPath, i) => ({ owner: 'me', repo: `r${i}`, path: repoPath }));
+  const cfg = config.validate({ repositories: repos });
+  assert.deepEqual(cfg.repositories.map(repo => repo.path), ['daily-updates', 'notes/daily', '/']);
+});
+
+test('validate rejects a whitespace-only repository path and checks "." segments after trimming', () => {
+  for (const repoPath of [' ', '\t\n']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, path: repoPath }] }),
+      /Repository 0: path must not be blank/,
+      `path ${JSON.stringify(repoPath)} should be rejected`
+    );
+  }
+  assert.throws(
+    () => config.validate({ repositories: [{ ...baseRepo, path: ' ./updates' }] }),
+    /Repository 0: path must not contain "\." or "\.\." segments/
+  );
+});
+
 test('validate rejects random title lists that are not lists of non-empty strings, even with randomization off', () => {
   for (const key of ['bugTitles', 'featureTitles', 'docTitles', 'perfTitles']) {
     for (const value of ['Login fails', ['ok', ''], ['ok', 3], { a: 'b' }]) {
@@ -404,6 +424,22 @@ test('validate keeps configured babysit settings and fills in the rest', () => {
   assert.equal(cfg.babysit.maxPrsPerRun, 2);
   assert.equal(cfg.babysit.testTimeoutMinutes, 15);
   assert.equal(cfg.repositories[0].testCommand, 'npm ci && npm test');
+});
+
+test('validate trims whitespace around babysit label and model', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    babysit: { label: '  please-babysit ', model: ' anthropic/opus\t' }
+  });
+  assert.equal(cfg.babysit.label, 'please-babysit');
+  assert.equal(cfg.babysit.model, 'anthropic/opus');
+});
+
+test('validate rejects a babysit model that starts with a dash after trimming', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], babysit: { model: '  --dangerously-skip-permissions' } }),
+    /babysit\.model must be a non-empty string not starting with "-"/
+  );
 });
 
 test('validate rejects invalid babysit settings', () => {
@@ -718,6 +754,22 @@ test('validate rejects a repository commitMessage that is not a string instead o
       `commitMessage ${JSON.stringify(commitMessage)} should be rejected`
     );
   }
+});
+
+test('validate rejects a whitespace-only repository commitMessage instead of committing with a blank message', () => {
+  for (const commitMessage of ['   ', '\n', '\t \n']) {
+    assert.throws(
+      () => config.validate({ repositories: [{ ...baseRepo, commitMessage }] }),
+      /Repository 0: commitMessage must not be blank/,
+      `commitMessage ${JSON.stringify(commitMessage)} should be rejected`
+    );
+  }
+});
+
+test('validate still accepts an empty commitMessage, which falls back to the default', () => {
+  const cfg = config.validate({ repositories: [{ ...baseRepo, commitMessage: '' }, { owner: 'me', repo: 'other', commitMessage: ' chore: ${date} ' }] });
+  assert.equal(cfg.repositories[0].commitMessage, 'docs: daily update ${date}');
+  assert.equal(cfg.repositories[1].commitMessage, ' chore: ${date} ');
 });
 
 test('validate rejects string on/off flags for randomization and schedule', () => {

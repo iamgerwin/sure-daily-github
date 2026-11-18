@@ -44,11 +44,19 @@ export class StateManager {
     return { repositories: {}, meta: { version: 2 } };
   }
 
+  // The next save replaces the file with the reset state, so the message says
+  // whether the original survived: a file that cannot be read (permissions)
+  // cannot be copied either, and keeping quiet about it would hide that every
+  // counter is about to be lost
   backup(message) {
+    const backupFile = `${this.filePath}.bak`;
+    let kept = `the original is kept at ${backupFile}`;
     try {
-      fs.copyFileSync(this.filePath, `${this.filePath}.bak`);
-    } catch (_) {}
-    console.error(message);
+      fs.copyFileSync(this.filePath, backupFile);
+    } catch (error) {
+      kept = `the original could not be copied to ${backupFile} (${error.message}) and the next save replaces it`;
+    }
+    console.error(`${message}; ${kept}`);
   }
 
   // Throws on failure: a commit or issue whose count cannot be persisted would

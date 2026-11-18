@@ -158,6 +158,23 @@ test('detectTestCommand reads only the makefile that make itself would use', (t)
   assert.deepEqual(detectTestCommand(gnu), { install: null, test: 'make test' });
 });
 
+test('detectTestCommand treats an unreadable first makefile as no make test target', (t) => {
+  // make stops on a GNUmakefile directory, so the Makefile behind it is unreachable
+  const shadowed = repoDir(t, { Makefile: 'test:\n\t./run\n' });
+  fs.mkdirSync(path.join(shadowed, 'GNUmakefile'));
+  assert.equal(detectTestCommand(shadowed), null);
+
+  // Detection still falls through to the toolchain manifest
+  const go = repoDir(t, { 'go.mod': 'module x\n' });
+  fs.mkdirSync(path.join(go, 'Makefile'));
+  assert.deepEqual(detectTestCommand(go), { install: null, test: 'go test ./...' });
+
+  // Still preferred over make: an npm test script is unaffected
+  const npm = repoDir(t, { 'package.json': pkg({ test: 'node --test' }) });
+  fs.mkdirSync(path.join(npm, 'makefile'));
+  assert.deepEqual(detectTestCommand(npm), { install: null, test: 'npm test' });
+});
+
 test('detectTestCommand runs go test for a Go module and cargo test for a Cargo package', (t) => {
   const go = repoDir(t, { 'go.mod': 'module example.com/x\n\ngo 1.22\n' });
   assert.deepEqual(detectTestCommand(go), { install: null, test: 'go test ./...' });
