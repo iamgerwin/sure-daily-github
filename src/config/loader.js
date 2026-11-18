@@ -194,6 +194,17 @@ function validateBabysit(babysit, errors) {
   }
   if (babysit.label !== undefined && !isNonEmptyString(babysit.label)) {
     errors.push('babysit.label must be a non-empty string');
+  } else if (babysit.label !== undefined) {
+    // The scan passes the label as GitHub's comma-separated `labels` filter, so
+    // a comma splits it into several labels a PR must all carry, and a name
+    // longer than GitHub allows can never be on a PR: either way every scan
+    // would silently find nothing to babysit
+    if (babysit.label.includes(',')) {
+      errors.push('babysit.label must be a single label name without commas');
+    }
+    if ([...babysit.label.trim()].length > MAX_LABEL_NAME_LENGTH) {
+      errors.push(`babysit.label must be at most ${MAX_LABEL_NAME_LENGTH} characters`);
+    }
   }
   if (babysit.engine !== undefined && !BABYSIT_ENGINES.includes(babysit.engine)) {
     errors.push(`babysit.engine must be one of: ${BABYSIT_ENGINES.join(', ')}`);

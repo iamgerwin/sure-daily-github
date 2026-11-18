@@ -426,6 +426,13 @@ test('validate keeps configured babysit settings and fills in the rest', () => {
   assert.equal(cfg.repositories[0].testCommand, 'npm ci && npm test');
 });
 
+test('validate accepts a babysit label at the GitHub length limit, counted in characters', () => {
+  for (const label of ['x'.repeat(50), '🔥'.repeat(50), 'needs: babysit']) {
+    const cfg = config.validate({ repositories: [baseRepo], babysit: { label } });
+    assert.equal(cfg.babysit.label, label);
+  }
+});
+
 test('validate trims whitespace around babysit label and model', () => {
   const cfg = config.validate({
     repositories: [baseRepo],
@@ -448,6 +455,8 @@ test('validate rejects invalid babysit settings', () => {
     [{ enabled: 'yes' }, /babysit\.enabled must be true or false/],
     [{ ownPRsOnly: 1 }, /babysit\.ownPRsOnly must be true or false/],
     [{ label: '' }, /babysit\.label must be a non-empty string/],
+    [{ label: 'babysit,urgent' }, /babysit\.label must be a single label name without commas/],
+    [{ label: 'x'.repeat(51) }, /babysit\.label must be at most 50 characters/],
     [{ engine: 'gpt' }, /babysit\.engine must be one of: opencode, claude/],
     [{ model: '' }, /babysit\.model must be a non-empty string/],
     [{ model: '--dangerously-skip-permissions' }, /babysit\.model must be a non-empty string not starting with "-"/],

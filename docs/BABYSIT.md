@@ -35,7 +35,7 @@ runs a babysit scan after the regular commit/issue execution, on the same cron.
 ```yaml
 babysit:
   enabled: false              # scheduler opt-in (the CLI command works regardless)
-  label: babysit              # label that marks a PR for babysitting
+  label: babysit              # label that marks a PR (one name, no commas, max 50 chars)
   engine: opencode            # opencode | claude
   model: openai/gpt-6.1-sol   # engine model
   ownPRsOnly: true            # only PRs authored by the token's user
