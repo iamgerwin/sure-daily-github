@@ -74,6 +74,35 @@ test('a finished attempt on the same SHA is skipped during the retry cooldown', 
   assert.equal(ledger.load()[KEY].status, 'failed');
 });
 
+test('an attempt timestamped ahead of a clock stepped back blocks for no longer than its window', (t) => {
+  const { ledger } = tmpLedger(t);
+  const recorded = 10000 * MINUTE;
+  ledger.start(KEY, 'sha1', recorded);
+
+  // Stepped back by less than the TTL: still in progress
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now: recorded - 59 * MINUTE, ...windows }), 'already-in-progress');
+  // Stepped back by a day: previously skipped until the clock caught up
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now: recorded - 24 * 60 * MINUTE, ...windows }), null);
+
+  ledger.finish(KEY, 'error', recorded);
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now: recorded - 239 * MINUTE, ...windows }), 'already-attempted');
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now: recorded - 240 * MINUTE, ...windows }), null);
+});
+
+test('starting an attempt prunes entries timestamped further ahead than the longer window', (t) => {
+  const { ledger } = tmpLedger(t);
+  const now = 1000 * MINUTE;
+  ledger.save({
+    'me/demo#1': { headSha: 'a', status: 'fixed', startedAt: 0, finishedAt: now + 24 * 60 * MINUTE },
+    'me/demo#2': { headSha: 'b', status: 'in-progress', startedAt: now + 240 * MINUTE, finishedAt: null },
+    'me/demo#3': { headSha: 'c', status: 'failed', startedAt: 0, finishedAt: now + 239 * MINUTE }
+  });
+
+  ledger.start(KEY, 'sha1', now, windows);
+
+  assert.deepEqual(Object.keys(ledger.load()).sort(), ['me/demo#3', KEY].sort());
+});
+
 test('a different head SHA is always eligible', (t) => {
   const { ledger } = tmpLedger(t);
   ledger.start(KEY, 'sha1', 1000);
