@@ -40,7 +40,7 @@ The restarted scheduler writes a fresh heartbeat on start, so a heartbeat that i
 |----------|---------|---------|
 | `HEARTBEAT_MAX_AGE_MINUTES` | `0` (off) | Heartbeat age, in whole minutes, after which a running service is restarted |
 | `SDG_MAX_EXECUTION_MINUTES` | unset (off) | Set on the service: minutes an execution may stay in flight before skipped ticks stop refreshing the heartbeat |
-| `SDG_HEARTBEAT_FILE` | `data/scheduler-heartbeat.json` | Heartbeat location; set the same value for the service and the health check |
+| `SDG_HEARTBEAT_FILE` | `data/scheduler-heartbeat.json` | Heartbeat location; set the same value for the service and the health check. When it is not in the health check's environment, the script reads it from the app's `.env` as the service does, and a relative path is resolved against the app directory |
 | `SDG_APP_DIR` | the script's parent directory | Install directory holding `logs/` and `data/` |
 
 ### 4. Daily Reset
