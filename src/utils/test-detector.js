@@ -36,7 +36,11 @@ function hasMakeTestTarget(dir) {
   // make reads only the first of these that exists, so a test target in a
   // later one is never reachable by `make test`
   const name = ['GNUmakefile', 'makefile', 'Makefile'].find(file => fs.existsSync(path.join(dir, file)));
-  const text = name ? readRegularFile(path.join(dir, name)) : null;
+  if (!name) return false;
+  // The repository is PR code: a makefile that is a directory or unreadable
+  // stops make itself ("Is a directory. Stop."), so there is no reachable test
+  // target, and throwing here would end the attempt as an error instead
+  const text = readRegularFile(path.join(dir, name));
   return text !== null && MAKE_TEST_RULE.test(text);
 }
 

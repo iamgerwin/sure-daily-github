@@ -261,6 +261,21 @@ test('listOpenPullRequests keeps the first page when the budget expires before p
   assert.deepEqual(result.data, [{ number: 1 }]);
 });
 
+test('authFailureMessage names the reason validate() reported', async () => {
+  const { authFailureMessage } = await import('../src/github/client.js');
+  assert.equal(authFailureMessage({ success: false, error: 'Bad credentials' }), 'GitHub authentication failed: Bad credentials');
+  assert.equal(authFailureMessage({ success: false }), 'GitHub authentication failed: unknown error');
+  assert.equal(authFailureMessage(undefined), 'GitHub authentication failed: unknown error');
+});
+
+test('validate() reports the API error that authFailureMessage passes on', async () => {
+  const client = new GitHubClient('ghp_test');
+  client.octokit = { rest: { users: { getAuthenticated: async () => { throw Object.assign(new Error('Bad credentials'), { status: 401 }); } } } };
+  const result = await client.validate();
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'Bad credentials');
+});
+
 function apiError(message, status) {
   const error = new Error(message);
   error.status = status;

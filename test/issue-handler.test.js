@@ -335,3 +335,9 @@ test('a simple issue-mode dry run previews the default labels when none are conf
   assert.match(result.preview.title, /^Daily Update - \d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(result.preview.labels, ['automated']);
 });
+
+test('init reports why GitHub authentication failed', async () => {
+  const handler = new IssueHandler('ghp_test');
+  handler.client.validate = async () => ({ success: false, error: 'Request timed out' });
+  await assert.rejects(() => handler.init(), { message: 'GitHub authentication failed: Request timed out' });
+});
