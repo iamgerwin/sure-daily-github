@@ -199,6 +199,63 @@ test('refresh leaves a lock that now belongs to someone else untouched', (t) => 
   assert.equal(fs.existsSync(filePath), true);
 });
 
+test('a lock deleted externally is reported lost and the timer stops refreshing it', async (t) => {
+  const filePath = useTmpLockFile(t);
+  const warn = t.mock.method(logger, 'warn', () => {});
+
+  const lock = acquireRunLock({ refreshMs: 20 });
+  fs.rmSync(filePath);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(lock.lost, true);
+  assert.equal(fs.existsSync(filePath), false, 'a refresh never recreates a deleted lock');
+  assert.equal(warn.mock.callCount(), 1, 'the timer stopped after the first lost refresh');
+  assert.equal(lock.refresh(), false);
+  lock.release();
+});
+
+test('a refresh that fails on a read-only directory keeps the lock and retries', (t) => {
+  const filePath = useTmpLockFile(t);
+  const warn = t.mock.method(logger, 'warn', () => {});
+  const dir = path.dirname(filePath);
+
+  const lock = acquireRunLock();
+  const before = fs.readFileSync(filePath, 'utf8');
+  fs.chmodSync(dir, 0o555);
+  t.after(() => fs.chmodSync(dir, 0o755));
+  // Root ignores directory permissions, so there is no failure to observe
+  let writable = true;
+  try { fs.writeFileSync(path.join(dir, 'probe'), ''); fs.rmSync(path.join(dir, 'probe')); } catch (_) { writable = false; }
+
+  const result = lock.refresh();
+  if (!writable) {
+    assert.equal(result, false);
+    assert.equal(lock.lost, false, 'a filesystem error does not give the lock up');
+    assert.equal(fs.readFileSync(filePath, 'utf8'), before);
+    assert.match(warn.mock.calls[0].arguments[0], /Could not refresh/);
+  }
+  fs.chmodSync(dir, 0o755);
+  assert.equal(lock.refresh(), true, 'the next refresh succeeds once the directory is writable');
+  assert.deepEqual(lockDirEntries(filePath), ['run.lock'], 'no temp file left behind');
+  lock.release();
+  assert.equal(fs.existsSync(filePath), false);
+});
+
+test('acquireRunLock ages a refreshedAt dated ahead of the clock by its distance', (t) => {
+  const filePath = useTmpLockFile(t);
+  process.env.SDG_RUN_LOCK_STALE_MS = '1000';
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+  // Slightly ahead (clock skew): still held
+  fs.writeFileSync(filePath, JSON.stringify({ pid: process.ppid, startedAt: Date.now(), refreshedAt: Date.now() + 500 }));
+  assert.equal(acquireRunLock().acquired, false);
+
+  // Far ahead (clock stepped back): reclaimed rather than blocking until the clock catches up
+  fs.writeFileSync(filePath, JSON.stringify({ pid: process.ppid, startedAt: Date.now(), refreshedAt: Date.now() + 60000 }));
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
+  result.release();
+});
+
 test('refresh never throws and keeps a lock it cannot read', (t) => {
   const filePath = useTmpLockFile(t);
   const warn = t.mock.method(logger, 'warn', () => {});
