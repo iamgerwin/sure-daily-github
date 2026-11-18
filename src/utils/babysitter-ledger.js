@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readLedgerObject } from './ledger-file.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEDGER_FILE = path.join(__dirname, '../../data/babysitter-state.json');
@@ -30,29 +31,22 @@ export class BabysitterLedger {
     this.data = this.load();
   }
 
+  // A missing, unreadable or non-object file starts an empty ledger. The shared
+  // reader copies a broken file to `.bak` first and says whether that worked,
+  // since the next save replaces the only record of which comments were answered.
   load() {
-    if (!fs.existsSync(this.filePath)) return emptyLedger();
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('ledger is not a JSON object');
-      }
-      return {
-        version: 1,
-        // An array passes a typeof check, but JSON.stringify drops the string keys
-        // written to it, so every record would vanish on save and be redone
-        comments: isObject(parsed.comments) ? parsed.comments : {},
-        prs: isObject(parsed.prs) ? parsed.prs : {},
-        deliveries: isObject(parsed.deliveries) ? parsed.deliveries : {},
-        pushIntents: isObject(parsed.pushIntents) ? parsed.pushIntents : {},
-        cursor: isObject(parsed.cursor) ? parsed.cursor : null
-      };
-    } catch (error) {
-      // Keep the unreadable file for inspection instead of silently losing it
-      try { fs.copyFileSync(this.filePath, `${this.filePath}.bak`); } catch (_) {}
-      console.error('Error loading babysitter ledger, starting fresh:', error.message);
-      return emptyLedger();
-    }
+    const parsed = readLedgerObject(this.filePath, 'babysitter ledger');
+    if (!parsed) return emptyLedger();
+    return {
+      version: 1,
+      // An array passes a typeof check, but JSON.stringify drops the string keys
+      // written to it, so every record would vanish on save and be redone
+      comments: isObject(parsed.comments) ? parsed.comments : {},
+      prs: isObject(parsed.prs) ? parsed.prs : {},
+      deliveries: isObject(parsed.deliveries) ? parsed.deliveries : {},
+      pushIntents: isObject(parsed.pushIntents) ? parsed.pushIntents : {},
+      cursor: isObject(parsed.cursor) ? parsed.cursor : null
+    };
   }
 
   // Write-then-rename so a crash mid-write cannot leave truncated JSON behind.
