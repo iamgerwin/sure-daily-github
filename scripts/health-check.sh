@@ -43,11 +43,23 @@ dotenv_value() {
 if [ -z "${SDG_HEARTBEAT_FILE+set}" ]; then
   SDG_HEARTBEAT_FILE="$(dotenv_value SDG_HEARTBEAT_FILE)"
 fi
-HEARTBEAT_FILE="${SDG_HEARTBEAT_FILE:-$APP_DIR/data/scheduler-heartbeat.json}"
-case "$HEARTBEAT_FILE" in
-  /*) ;;
-  *) HEARTBEAT_FILE="$APP_DIR/$HEARTBEAT_FILE" ;;
-esac
+# Sets HEARTBEAT_FILE from $1 the way heartbeatFilePath() in
+# src/utils/heartbeat.js does: an absolute value is used exactly as given;
+# otherwise surrounding whitespace is dropped, a blank value keeps the default
+# and a relative path is anchored to the install directory, so a run from
+# cron's working directory still finds the service's heartbeat.
+set_heartbeat_file() {
+  local value="$1" text
+  case "$value" in /*) HEARTBEAT_FILE="$value"; return ;; esac
+  text="${value#"${value%%[![:space:]]*}"}"
+  text="${text%"${text##*[![:space:]]}"}"
+  case "$text" in
+    "") HEARTBEAT_FILE="$APP_DIR/data/scheduler-heartbeat.json" ;;
+    /*) HEARTBEAT_FILE="$text" ;;
+    *) HEARTBEAT_FILE="$APP_DIR/$text" ;;
+  esac
+}
+set_heartbeat_file "${SDG_HEARTBEAT_FILE:-}"
 HEARTBEAT_MAX_AGE_MINUTES="${HEARTBEAT_MAX_AGE_MINUTES:-0}"
 # Touched on every hang restart; a heartbeat not newer than it means the
 # restarted scheduler never wrote one, so another restart would not help

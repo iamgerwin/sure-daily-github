@@ -17,13 +17,14 @@ function makeAppDir() {
   return dir;
 }
 
-function run(appDir, env = {}) {
+function run(appDir, env = {}, cwd = undefined) {
   const baseEnv = { ...process.env };
   delete baseEnv.CONFIG_PATH;
   delete baseEnv.SDG_ISSUE_STATE_FILE;
   delete baseEnv.SDG_HEARTBEAT_FILE;
   return execFileSync('bash', [path.join(appDir, 'scripts/verify-status.sh')], {
     encoding: 'utf8',
+    cwd,
     // systemctl and pgrep complaints on hosts without systemd are not under test
     stdio: ['ignore', 'pipe', 'ignore'],
     env: { ...baseEnv, ...env }
@@ -128,4 +129,72 @@ test('verify-status honors SDG_HEARTBEAT_FILE', (t) => {
   const output = run(appDir, { SDG_HEARTBEAT_FILE: heartbeatFile });
 
   assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z \(0 minutes ago\)/);
+});
+
+test('verify-status resolves a relative SDG_HEARTBEAT_FILE against the app tree', (t) => {
+  const appDir = makeAppDir();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-verify-cwd-'));
+  t.after(() => {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  fs.mkdirSync(path.join(appDir, 'run'));
+  fs.writeFileSync(path.join(appDir, 'run/heartbeat.json'), JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+
+  const output = run(appDir, { SDG_HEARTBEAT_FILE: 'run/heartbeat.json' }, elsewhere);
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z/);
+  assert.doesNotMatch(output, /No scheduler heartbeat/);
+});
+
+test('verify-status reads SDG_HEARTBEAT_FILE from the app .env when the environment does not set it', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(appDir, 'run'));
+  fs.writeFileSync(path.join(appDir, 'run/tick.json'), JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+  fs.writeFileSync(path.join(appDir, '.env'), "GITHUB_TOKEN=ghp_x\nexport SDG_HEARTBEAT_FILE='run/tick.json'\n");
+
+  const output = run(appDir);
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z/);
+  assert.doesNotMatch(output, /No scheduler heartbeat/);
+});
+
+test('verify-status prefers SDG_HEARTBEAT_FILE from the environment over .env', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+
+  fs.writeFileSync(path.join(appDir, 'data/scheduler-heartbeat.json'), JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+  fs.writeFileSync(path.join(appDir, '.env'), 'SDG_HEARTBEAT_FILE=run/missing.json\n');
+
+  const output = run(appDir, { SDG_HEARTBEAT_FILE: 'data/scheduler-heartbeat.json' });
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z/);
+});
+
+test('verify-status drops whitespace around a relative SDG_HEARTBEAT_FILE, as the scheduler does', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(appDir, 'run'));
+  fs.writeFileSync(path.join(appDir, 'run/heartbeat.json'), JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+
+  const output = run(appDir, { SDG_HEARTBEAT_FILE: ' run/heartbeat.json ' });
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z/);
+  assert.doesNotMatch(output, /No scheduler heartbeat/);
+});
+
+test('verify-status keeps the default heartbeat for a blank SDG_HEARTBEAT_FILE, as the scheduler does', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+
+  fs.writeFileSync(path.join(appDir, 'data/scheduler-heartbeat.json'), JSON.stringify({ lastTickAt: '2026-11-04T02:00:00.000Z', pid: 1 }));
+
+  const output = run(appDir, { SDG_HEARTBEAT_FILE: '   ' });
+
+  assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z/);
+  assert.doesNotMatch(output, /No scheduler heartbeat/);
 });

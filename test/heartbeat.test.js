@@ -49,6 +49,24 @@ test('heartbeatFilePath honors SDG_HEARTBEAT_FILE', (t) => {
   assert.equal(heartbeatFilePath(), '/tmp/custom-heartbeat.json');
 });
 
+test('heartbeatFilePath anchors a relative SDG_HEARTBEAT_FILE to the project root, not the working directory', (t) => {
+  useHeartbeatFile(t, ' run/heartbeat.json ');
+  const cwd = process.cwd();
+  process.chdir(os.tmpdir());
+  t.after(() => process.chdir(cwd));
+  assert.equal(heartbeatFilePath(), path.join(root, 'run', 'heartbeat.json'));
+});
+
+test('heartbeatFilePath uses an absolute SDG_HEARTBEAT_FILE exactly as given, trailing spaces included', (t) => {
+  useHeartbeatFile(t, '/tmp/custom heartbeat.json  ');
+  assert.equal(heartbeatFilePath(), '/tmp/custom heartbeat.json  ');
+});
+
+test('heartbeatFilePath keeps the default for a blank SDG_HEARTBEAT_FILE', (t) => {
+  useHeartbeatFile(t, '   ');
+  assert.equal(heartbeatFilePath(), path.join(root, 'data', 'scheduler-heartbeat.json'));
+});
+
 test('every scheduled tick writes a heartbeat, including one skipped for overlap', async (t) => {
   const file = path.join(tmpDir(t), 'heartbeat.json');
   useHeartbeatFile(t, file);
@@ -179,7 +197,9 @@ test('start writes a heartbeat before the first tick', (t) => {
 // call and, unless `active` is false, reports the service as active.
 // `heartbeat` is where the stale/fresh heartbeat is written, `dotenv` the
 // app's .env contents and `env` extra variables for the script.
-function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = tmpDir(t), heartbeat = path.join(dir, 'data', 'scheduler-heartbeat.json'), dotenv, env: extraEnv = {} }) {
+// `heartbeatFile` is passed as SDG_HEARTBEAT_FILE (relative to `dir` for the
+// written heartbeat) and `cwd` is the script's working directory.
+function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = tmpDir(t), heartbeatFile, heartbeat = path.join(dir, heartbeatFile ?? path.join('data', 'scheduler-heartbeat.json')), dotenv, env: extraEnv = {}, cwd }) {
   const bin = path.join(dir, 'bin');
   const calls = path.join(dir, 'systemctl-calls');
   fs.mkdirSync(bin, { recursive: true });
@@ -198,7 +218,8 @@ function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = t
 
   const env = { PATH: `${bin}:${process.env.PATH}`, SDG_APP_DIR: dir, ...extraEnv };
   if (maxAge !== undefined) env.HEARTBEAT_MAX_AGE_MINUTES = String(maxAge);
-  const { status } = spawnSync('bash', [HEALTH_CHECK], { env });
+  if (heartbeatFile !== undefined) env.SDG_HEARTBEAT_FILE = heartbeatFile;
+  const { status } = spawnSync('bash', [HEALTH_CHECK], { env, cwd });
 
   return {
     status,
@@ -209,6 +230,34 @@ function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = t
 
 test('health-check restarts a running service whose heartbeat is older than the limit', (t) => {
   const { calls, log } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge: 90 });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+});
+
+test('health-check resolves a relative SDG_HEARTBEAT_FILE against the install directory, not its working directory', (t) => {
+  // cron starts the script in the user's home directory, not the install
+  const { calls, log } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge: 90, heartbeatFile: 'run/heartbeat.json', cwd: tmpDir(t) });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+  assert.doesNotMatch(log, /No scheduler heartbeat/);
+});
+
+test('health-check drops whitespace around a relative SDG_HEARTBEAT_FILE, as the scheduler does', (t) => {
+  const dir = tmpDir(t);
+  const { calls, log } = runHealthCheck(t, {
+    dir, heartbeatAgeMinutes: 120, maxAge: 90,
+    heartbeat: path.join(dir, 'run', 'heartbeat.json'),
+    env: { SDG_HEARTBEAT_FILE: ' run/heartbeat.json ' }
+  });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+});
+
+test('health-check keeps the default heartbeat for a blank SDG_HEARTBEAT_FILE, as the scheduler does', (t) => {
+  const { calls, log } = runHealthCheck(t, {
+    heartbeatAgeMinutes: 120, maxAge: 90,
+    env: { SDG_HEARTBEAT_FILE: '   ' }
+  });
   assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
   assert.match(log, /heartbeat is 120 minutes old/);
 });
