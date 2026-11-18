@@ -176,8 +176,10 @@ test('start writes a heartbeat before the first tick', (t) => {
 });
 
 // Runs scripts/health-check.sh against a stub systemctl that records every
-// call and, unless `active` is false, reports the service as active
-function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = tmpDir(t) }) {
+// call and, unless `active` is false, reports the service as active.
+// `heartbeat` is where the stale/fresh heartbeat is written, `dotenv` the
+// app's .env contents and `env` extra variables for the script.
+function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = tmpDir(t), heartbeat = path.join(dir, 'data', 'scheduler-heartbeat.json'), dotenv, env: extraEnv = {} }) {
   const bin = path.join(dir, 'bin');
   const calls = path.join(dir, 'systemctl-calls');
   fs.mkdirSync(bin, { recursive: true });
@@ -186,7 +188,7 @@ function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = t
   // sleep after a restart is not worth waiting for in a test
   fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
 
-  const heartbeat = path.join(dir, 'data', 'scheduler-heartbeat.json');
+  if (dotenv !== undefined) fs.writeFileSync(path.join(dir, '.env'), dotenv);
   if (heartbeatAgeMinutes !== undefined) {
     fs.mkdirSync(path.dirname(heartbeat), { recursive: true });
     fs.writeFileSync(heartbeat, '{}');
@@ -194,7 +196,7 @@ function runHealthCheck(t, { heartbeatAgeMinutes, maxAge, active = true, dir = t
     fs.utimesSync(heartbeat, mtime, mtime);
   }
 
-  const env = { PATH: `${bin}:${process.env.PATH}`, SDG_APP_DIR: dir };
+  const env = { PATH: `${bin}:${process.env.PATH}`, SDG_APP_DIR: dir, ...extraEnv };
   if (maxAge !== undefined) env.HEARTBEAT_MAX_AGE_MINUTES = String(maxAge);
   const { status } = spawnSync('bash', [HEALTH_CHECK], { env });
 
@@ -225,6 +227,67 @@ test('health-check does not restart when no heartbeat has been written yet', (t)
   const { calls, log } = runHealthCheck(t, { maxAge: 90 });
   assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
   assert.match(log, /No scheduler heartbeat/);
+});
+
+// The service reads SDG_HEARTBEAT_FILE from .env through dotenv; cron runs the
+// health check without it, so the script has to read the same file
+test('health-check finds a heartbeat moved by SDG_HEARTBEAT_FILE in the app .env', (t) => {
+  const dir = tmpDir(t);
+  const heartbeat = path.join(dir, 'elsewhere', 'tick.json');
+  const { calls, log } = runHealthCheck(t, {
+    dir,
+    heartbeat,
+    heartbeatAgeMinutes: 120,
+    maxAge: 90,
+    dotenv: `GITHUB_TOKEN=ghp_x\n# SDG_HEARTBEAT_FILE=/nowhere.json\nexport SDG_HEARTBEAT_FILE="${heartbeat}"\n`
+  });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+  assert.match(log, /heartbeat is 120 minutes old/);
+});
+
+test('health-check reads an unquoted .env value without its comment or trailing spaces', (t) => {
+  const dir = tmpDir(t);
+  const heartbeat = path.join(dir, 'elsewhere', 'tick.json');
+  const { calls } = runHealthCheck(t, {
+    dir,
+    heartbeat,
+    heartbeatAgeMinutes: 120,
+    maxAge: 90,
+    dotenv: `SDG_HEARTBEAT_FILE = ${heartbeat}   # moved off the data volume\r\n`
+  });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+});
+
+test('health-check resolves a relative SDG_HEARTBEAT_FILE against the app directory', (t) => {
+  const dir = tmpDir(t);
+  const { calls } = runHealthCheck(t, {
+    dir,
+    heartbeat: path.join(dir, 'run', 'tick.json'),
+    heartbeatAgeMinutes: 120,
+    maxAge: 90,
+    dotenv: "SDG_HEARTBEAT_FILE='run/tick.json'\n"
+  });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
+});
+
+test('health-check prefers SDG_HEARTBEAT_FILE from the environment over .env', (t) => {
+  const dir = tmpDir(t);
+  const heartbeat = path.join(dir, 'from-env.json');
+  const { calls, log } = runHealthCheck(t, {
+    dir,
+    heartbeat,
+    heartbeatAgeMinutes: 10,
+    maxAge: 90,
+    dotenv: `SDG_HEARTBEAT_FILE=${path.join(dir, 'missing.json')}\n`,
+    env: { SDG_HEARTBEAT_FILE: heartbeat }
+  });
+  assert.ok(!calls.some(c => c.startsWith('restart')), calls.join('\n'));
+  assert.doesNotMatch(log, /No scheduler heartbeat/);
+});
+
+test('health-check keeps the default heartbeat when .env does not set one', (t) => {
+  const { calls } = runHealthCheck(t, { heartbeatAgeMinutes: 120, maxAge: 90, dotenv: 'LOG_LEVEL=info\n' });
+  assert.ok(calls.includes('restart sure-daily-github'), calls.join('\n'));
 });
 
 test('health-check reads a limit with a leading zero as decimal', (t) => {
