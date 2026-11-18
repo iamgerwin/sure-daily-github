@@ -40,10 +40,7 @@ class GitHubClient {
     }
 
     // Rate limit and transient failure retries are handled by createOctokit
-    this.octokit = createOctokit({
-      auth: token,
-      userAgent: 'sure-daily-github/1.0.0'
-    });
+    this.octokit = createOctokit({ auth: token });
 
     this.authenticated = false;
   }

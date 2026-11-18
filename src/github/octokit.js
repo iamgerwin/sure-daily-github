@@ -1,4 +1,5 @@
 import { Octokit } from '@octokit/rest';
+import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import logger from '../utils/logger.js';
 import { clampTimerMs } from '../utils/process.js';
@@ -11,6 +12,14 @@ export const MAX_RETRY_DELAY_MS = 60000;
 // GitHub asks clients to wait at least a minute after a secondary rate limit
 // response that carries neither retry-after nor x-ratelimit-* headers
 export const SECONDARY_RATE_LIMIT_DELAY_MS = 60000;
+
+// Identifies this tool, at its released version, to GitHub on every request.
+// A hardcoded "1.0.0" in one client went stale with every release, and clients
+// built elsewhere sent only Octokit's generic agent.
+const { version: PACKAGE_VERSION } = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+);
+export const USER_AGENT = `sure-daily-github/${PACKAGE_VERSION}`;
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD']);
 
@@ -112,7 +121,7 @@ export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_R
 // guard) stuck, and transient failures are retried with bounded backoff
 export function createOctokit(options = {}) {
   const { retry = {}, ...octokitOptions } = options;
-  const octokit = new Octokit(octokitOptions);
+  const octokit = new Octokit({ userAgent: USER_AGENT, ...octokitOptions });
   const timeoutMs = getRequestTimeoutMs();
   const retries = retry.retries ?? getRequestRetries();
   const baseDelayMs = retry.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;

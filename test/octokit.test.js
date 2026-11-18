@@ -1,8 +1,11 @@
 import test from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
+import { createOctokit, USER_AGENT, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
+import GitHubClient from '../src/github/client.js';
+import AdvancedIssueHandler from '../src/github/advanced-issue-handler.js';
 
 // Serves the queued responses in order, recording each request method
 async function startServer(responses, retry = {}) {
@@ -418,4 +421,62 @@ test('getRetryDelayMs caps the exponential backoff at the maximum retry delay', 
   assert.equal(getRetryDelayMs(limited, 'POST', 10), MAX_RETRY_DELAY_MS);
   // Non-retryable failures stay non-retryable at any attempt
   assert.equal(getRetryDelayMs(transient, 'POST', 40), null);
+});
+
+// Records the User-Agent of each request and answers 200
+async function startAgentServer() {
+  const agents = [];
+  const server = http.createServer((req, res) => {
+    agents.push(req.headers['user-agent']);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ login: 'me' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    agents,
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    close: () => { server.closeAllConnections(); server.close(); }
+  };
+}
+
+test('USER_AGENT names the tool at the package.json version', () => {
+  const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(USER_AGENT, `sure-daily-github/${version}`);
+});
+
+test('requests identify the tool and its version by default', async () => {
+  const srv = await startAgentServer();
+  try {
+    await createOctokit({ baseUrl: srv.baseUrl }).request('GET /user');
+    assert.ok(srv.agents[0].startsWith(`${USER_AGENT} `), srv.agents[0]);
+  } finally {
+    srv.close();
+  }
+});
+
+test('a caller-supplied userAgent still overrides the default', async () => {
+  const srv = await startAgentServer();
+  try {
+    await createOctokit({ baseUrl: srv.baseUrl, userAgent: 'custom/9' }).request('GET /user');
+    assert.ok(srv.agents[0].startsWith('custom/9 '), srv.agents[0]);
+    assert.ok(!srv.agents[0].includes('sure-daily-github/'), srv.agents[0]);
+  } finally {
+    srv.close();
+  }
+});
+
+test('GitHubClient and the advanced issue handler send the versioned agent', async (t) => {
+  // Answer every request locally so neither client reaches api.github.com
+  const agents = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    agents.push(new Headers(init.headers).get('user-agent'));
+    return new Response(JSON.stringify({ login: 'me' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+
+  await new GitHubClient('token').validate();
+  const handler = new AdvancedIssueHandler('token');
+  assert.equal((await handler.init()).success, true);
+
+  assert.equal(agents.length, 2);
+  for (const agent of agents) assert.ok(agent.startsWith(`${USER_AGENT} `), agent);
 });
