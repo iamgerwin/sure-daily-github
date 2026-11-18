@@ -18,6 +18,13 @@ function readPackageJson(dir) {
 // but not a variable assignment such as `test := ...` or `test ::= ...`
 const MAKE_TEST_RULE = /^(?:[^\s:#=]+[ \t]+)*test(?:[ \t]+[^\s:#=]+)*[ \t]*::?(?![:=])/m;
 
+// Most repositories have a test/ directory. Unless the makefile declares
+// `.PHONY: test`, make takes that directory for the target, reports it
+// "up to date" without running the recipe and exits 0, so the gate would pass
+// without running a single test. Declaring it phony on the command line makes
+// the recipe always run; prerequisites are still built as usual.
+export const MAKE_TEST_COMMAND = "make --eval='.PHONY: test' test";
+
 function hasMakeTestTarget(dir) {
   // make reads only the first of these that exists, so a test target in a
   // later one is never reachable by `make test`
@@ -89,7 +96,7 @@ export function detectTestCommand(dir, repoConfig = {}, { installDeps = true } =
   }
 
   if (hasMakeTestTarget(dir)) {
-    return { install: null, test: 'make test' };
+    return { install: null, test: MAKE_TEST_COMMAND };
   }
 
   // Go and Cargo fetch dependencies themselves, so there is no install step
