@@ -55,6 +55,24 @@ test('every documented issue template placeholder is filled', () => {
   assert.doesNotMatch(body, /\$\{/);
 });
 
+// The section once said the advanced handler ignores contentTemplate after the
+// handler had started falling back to it, so users kept a template that applied
+test('the issue content template docs say the configured contentTemplate is used without a contentTemplates list', () => {
+  const section = templatesSection();
+  assert.doesNotMatch(section, /does not use the single `contentTemplate`/);
+  assert.match(section, /Without a `contentTemplates` list \(or with an empty one\), the configured `contentTemplate` is used/);
+
+  const contentTemplate = { title: 'Single ${randomBugTitle}', body: 'Body for ${repo}' };
+  for (const contentTemplates of [undefined, []]) {
+    const { title, body } = createHandler().generateIssueContent(
+      { owner: 'me', repo: 'demo', labels: [] },
+      { contentTemplate, contentTemplates, randomization: { bugTitles: ['Crash'] } },
+      new Date('2026-10-15T00:00:00Z'));
+    assert.equal(title, 'Single Crash');
+    assert.equal(body, 'Body for demo');
+  }
+});
+
 // The section once said the advanced handler never reads contentTemplate, which
 // stopped being true when it learned to fall back to it; pin both the docs and
 // the behavior they describe
