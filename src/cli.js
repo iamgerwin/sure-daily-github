@@ -6,7 +6,7 @@ import { readFileSync } from 'fs';
 import executor, { describeFailures, describeRunMode, getRunExitCode, randomizationCountsIgnoredReason } from './core/executor.js';
 import scheduler from './core/scheduler.js';
 import ConflictFixer, { distinctRepoCount, parseScanTimeout, unmatchedGateEntries } from './core/conflict-fixer.js';
-import babysitter, { getBabysitExitCode } from './core/babysitter.js';
+import babysitter, { describeBabysitResult, getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
 import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
 import { getTemplateDateParts, formatNextIssueTime } from './utils/template-date.js';
@@ -114,20 +114,7 @@ program
 
       console.log(`\n✅ Babysit scan completed${result.dryRun ? ' (dry run)' : ''}\n`);
       for (const r of result.results) {
-        const name = `${r.owner}/${r.repo}${r.number !== undefined ? `#${r.number}` : ''}`;
-        if (r.error) {
-          console.error(`❌ ${name}: ${r.error}`);
-        } else if (r.skipped) {
-          console.log(`⏭️  ${name}: ${r.reason}`);
-        } else if (r.planned) {
-          console.log(`📝 ${name}: ${r.planned.length} planned action(s)`);
-          r.planned.forEach(p => console.log(`   ${p.action.padEnd(7)} ${p.id} by ${p.author}: ${p.reasoning}`));
-          (r.undecided || []).forEach(id => console.log(`   ???     ${id}: no triage decision`));
-        } else {
-          const c = r.counts;
-          console.log(`🔧 ${name}: addressed ${c.addressed}, deferred ${c.deferred}, wontfix ${c.wontfix}, noted ${c.noted}, failed ${c.failed}${r.commitSha ? ` (pushed ${r.commitSha.slice(0, 12)})` : ''}`);
-          (r.failures || []).forEach(f => console.error(`   ❌ ${f.id}: ${f.error}`));
-        }
+        describeBabysitResult(r).forEach(line => (line.error ? console.error : console.log)(line.text));
       }
 
       const s = result.summary;

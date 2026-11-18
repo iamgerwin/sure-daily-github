@@ -63,6 +63,30 @@ export function getBabysitExitCode(result) {
   return result.summary?.failed > 0 ? 1 : 0;
 }
 
+// The CLI lines for one per-PR result, as { error, text } (error lines go to
+// stderr). A processed PR also lists the comments left for the next run and
+// the reason a delivery or reconcile pass gives: without them a "failed N"
+// count, or a line of zero counts, would come with no explanation.
+export function describeBabysitResult(r) {
+  const name = `${r.owner}/${r.repo}${r.number !== undefined ? `#${r.number}` : ''}`;
+  if (r.error) return [{ error: true, text: `❌ ${name}: ${r.error}` }];
+  if (r.skipped) return [{ error: false, text: `⏭️  ${name}: ${r.reason}` }];
+  if (r.planned) {
+    return [
+      { error: false, text: `📝 ${name}: ${r.planned.length} planned action(s)` },
+      ...r.planned.map(p => ({ error: false, text: `   ${p.action.padEnd(7)} ${p.id} by ${p.author}: ${p.reasoning}` })),
+      ...(r.undecided || []).map(id => ({ error: false, text: `   ???     ${id}: no triage decision` }))
+    ];
+  }
+  const c = r.counts || {};
+  return [
+    { error: false, text: `🔧 ${name}: addressed ${c.addressed ?? 0}, deferred ${c.deferred ?? 0}, wontfix ${c.wontfix ?? 0}, noted ${c.noted ?? 0}, failed ${c.failed ?? 0}${r.commitSha ? ` (pushed ${r.commitSha.slice(0, 12)})` : ''}` },
+    ...(r.reason ? [{ error: false, text: `   ${r.reason}` }] : []),
+    ...(r.failures || []).map(f => ({ error: true, text: `   ❌ ${f.id}: ${f.error}` })),
+    ...(r.retrying || []).map(f => ({ error: true, text: `   ↻  ${f.id}: ${f.error} (retried next run)` }))
+  ];
+}
+
 // Drops Co-Authored-By trailers and "Generated with" footers from a commit message
 export function stripAttribution(message) {
   const cleaned = String(message)
