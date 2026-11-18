@@ -406,6 +406,22 @@ test('validate keeps configured babysit settings and fills in the rest', () => {
   assert.equal(cfg.repositories[0].testCommand, 'npm ci && npm test');
 });
 
+test('validate trims whitespace around babysit label and model', () => {
+  const cfg = config.validate({
+    repositories: [baseRepo],
+    babysit: { label: '  please-babysit ', model: ' anthropic/opus\t' }
+  });
+  assert.equal(cfg.babysit.label, 'please-babysit');
+  assert.equal(cfg.babysit.model, 'anthropic/opus');
+});
+
+test('validate rejects a babysit model that starts with a dash after trimming', () => {
+  assert.throws(
+    () => config.validate({ repositories: [baseRepo], babysit: { model: '  --dangerously-skip-permissions' } }),
+    /babysit\.model must be a non-empty string not starting with "-"/
+  );
+});
+
 test('validate rejects invalid babysit settings', () => {
   const cases = [
     [[], /babysit must be a mapping/],
