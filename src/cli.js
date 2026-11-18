@@ -447,15 +447,10 @@ program
   .option('--config <path>', 'Where to write the configuration file')
   .action(async (options) => {
     try {
-      const { existsSync, mkdirSync, writeFileSync } = await import('fs');
+      const { mkdirSync, writeFileSync } = await import('fs');
       // The path every other command reads without --config, not one relative
       // to the working directory, so a global `sure-daily-github init` is found
       const configPath = options.config || defaultConfigPath();
-
-      if (existsSync(configPath)) {
-        console.log('⚠️  Configuration file already exists:', configPath);
-        process.exit(1);
-      }
 
       mkdirSync(dirname(configPath), { recursive: true });
 
@@ -483,7 +478,16 @@ contentTemplate:
   body: "Automated update for \${date} at \${timestamp}"
 `;
 
-      writeFileSync(configPath, exampleConfig);
+      // Created exclusively ('wx'): an existence check before a plain write
+      // missed a dangling symlink (and wrote through it to wherever it points)
+      // and overwrote a file created between the check and the write
+      try {
+        writeFileSync(configPath, exampleConfig, { flag: 'wx' });
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        console.log('⚠️  Configuration file already exists:', configPath);
+        process.exit(1);
+      }
       const configFlag = options.config ? ` --config ${options.config}` : '';
       console.log('✅ Configuration file created:', configPath);
       console.log('\nNext steps:');

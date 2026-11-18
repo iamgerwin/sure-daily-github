@@ -80,3 +80,27 @@ test('init template leaves branch unset so commits go to the repository default 
   const cfg = config.validate(written);
   assert.equal(cfg.repositories[0].branch, null);
 });
+
+test('init refuses a dangling symlink instead of writing through it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-init-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-init-outside-'));
+  const target = path.join(outside, 'elsewhere.yaml');
+  const configFile = path.join(dir, 'config.yaml');
+  fs.symlinkSync(target, configFile);
+
+  const result = runCli(['init', '--config', configFile], { cwd: dir });
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stdout, /already exists/);
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.lstatSync(configFile).isSymbolicLink(), true);
+});
+
+test('init refuses a directory at the config path', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-init-'));
+  const configFile = path.join(dir, 'config.yaml');
+  fs.mkdirSync(configFile);
+
+  const result = runCli(['init', '--config', configFile], { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /already exists/);
+});
