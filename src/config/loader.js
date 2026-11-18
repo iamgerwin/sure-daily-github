@@ -49,13 +49,19 @@ function validateDailyTarget(target, label, errors) {
   }
 }
 
-// A { min, max } range of positive whole numbers, with no upper bound
+// Largest count crypto.randomInt can draw from a range starting at 1: it
+// throws when max - min reaches 2^48, which would crash the run, not validate
+export const MAX_COUNT_RANGE_VALUE = 2 ** 48 - 1;
+
+// A { min, max } range of positive whole numbers up to MAX_COUNT_RANGE_VALUE
 function validateCountRange(range, label, errors) {
   if (!range || typeof range !== 'object' || Array.isArray(range)
     || range.min === undefined || range.min === null || range.max === undefined || range.max === null) {
     errors.push(`${label} must have min and max values`);
   } else if (!Number.isInteger(range.min) || !Number.isInteger(range.max) || range.min < 1 || range.max < 1) {
     errors.push(`${label} must be positive whole numbers`);
+  } else if (range.min > MAX_COUNT_RANGE_VALUE || range.max > MAX_COUNT_RANGE_VALUE) {
+    errors.push(`${label} values must be at most ${MAX_COUNT_RANGE_VALUE}`);
   } else if (range.min > range.max) {
     errors.push(`${label} min cannot be greater than max`);
   }
