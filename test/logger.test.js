@@ -68,7 +68,7 @@ test('an unknown LOG_LEVEL is warned about once per value, in the console and th
       withLogLevel('verbose', () => fileLogger.info('third'));
       withLogLevel('debug', () => fileLogger.info('fourth'));
     });
-    const warnings = lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line));
+    const warnings = lines.error.filter(line => /Ignoring LOG_LEVEL/.test(line));
     assert.equal(warnings.length, 2);
     assert.match(warnings[0], /\[WARN\].*logging at info.*"value":"deubg"/);
     assert.match(warnings[1], /"value":"verbose"/);
@@ -89,7 +89,8 @@ test('a valid or unset LOG_LEVEL is not warned about', () => {
       withLogLevel('', () => fileLogger.info('blank'));
       withLogLevel(' INFO ', () => fileLogger.info('padded'));
     });
-    assert.equal(lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
+    // Warnings go to stderr (console.error); check both streams
+    assert.equal([...lines.log, ...lines.error].filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
     assert.equal(lines.log.length, 3);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
