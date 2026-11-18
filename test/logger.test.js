@@ -82,10 +82,11 @@ test('an unusable log directory falls back to console output without throwing', 
       fileLogger.error('first failure', { repo: 'a/b' });
       fileLogger.error('second failure');
     });
-    assert.equal(lines.log.length, 2);
-    assert.match(lines.log[0], /first failure/);
-    assert.equal(lines.error.length, 1, 'file failure is reported once');
+    assert.equal(lines.error.length, 3);
     assert.match(lines.error[0], /logging to console only/);
+    assert.match(lines.error[1], /first failure/);
+    assert.match(lines.error[2], /second failure/);
+    assert.equal(lines.error.filter(line => /logging to console only/.test(line)).length, 1, 'file failure is reported once');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -98,9 +99,9 @@ test('a log directory removed after startup is recreated', () => {
     const lines = captureConsole(() => {
       const fileLogger = new Logger({ logDir });
       fs.rmSync(logDir, { recursive: true });
-      fileLogger.error('after removal');
+      fileLogger.info('after removal');
     });
-    assert.equal(lines.error.length, 0);
+    assert.equal(lines.error.length, 0, 'no file failure is reported');
     const [file] = fs.readdirSync(logDir);
     assert.match(fs.readFileSync(path.join(logDir, file), 'utf8'), /after removal/);
   } finally {
@@ -118,8 +119,8 @@ test('unserializable meta is logged without throwing', () => {
       fileLogger.error('circular meta', circular);
       fileLogger.error('bigint meta', { id: 1n });
     });
-    assert.match(lines.log[0], /circular meta \[unserializable meta: /);
-    assert.match(lines.log[1], /bigint meta \[unserializable meta: /);
+    assert.match(lines.error[0], /circular meta \[unserializable meta: /);
+    assert.match(lines.error[1], /bigint meta \[unserializable meta: /);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -142,9 +143,9 @@ test('console output carries color escapes only when color is on', () => {
       new Logger({ logDir: dir, color: false }).error('plain line');
       new Logger({ logDir: dir, color: true }).error('colored line');
     });
-    assert.doesNotMatch(lines.log[0], /\x1b\[/);
-    assert.match(lines.log[0], /^\[.+\] \[ERROR\] plain line$/);
-    assert.match(lines.log[1], /^\x1b\[31m.*colored line\x1b\[0m$/);
+    assert.doesNotMatch(lines.error[0], /\x1b\[/);
+    assert.match(lines.error[0], /^\[.+\] \[ERROR\] plain line$/);
+    assert.match(lines.error[1], /^\x1b\[31m.*colored line\x1b\[0m$/);
     const [file] = fs.readdirSync(dir);
     assert.doesNotMatch(fs.readFileSync(path.join(dir, file), 'utf8'), /\x1b\[/);
   } finally {
@@ -161,15 +162,74 @@ test('color is detected per write so NO_COLOR set after construction applies', (
     delete process.env.NO_COLOR;
     const fileLogger = new Logger({ logDir: dir });
     const lines = captureConsole(() => {
-      fileLogger.error('before');
+      fileLogger.info('before');
       process.env.NO_COLOR = '1';
-      fileLogger.error('after');
+      fileLogger.info('after');
     });
-    assert.match(lines.log[0], /\x1b\[31m/);
+    assert.match(lines.log[0], /\x1b\[36m/);
     assert.doesNotMatch(lines.log[1], /\x1b\[/);
   } finally {
     if (originalTTY) Object.defineProperty(process.stdout, 'isTTY', originalTTY);
     else delete process.stdout.isTTY;
+    if (originalNoColor === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = originalNoColor;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('errors and warnings go to stderr, info and debug to stdout', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  const originalLevel = process.env.LOG_LEVEL;
+  process.env.LOG_LEVEL = 'debug';
+  try {
+    const lines = captureConsole(() => {
+      const fileLogger = new Logger({ logDir: dir, color: false });
+      fileLogger.error('an error');
+      fileLogger.warn('a warning');
+      fileLogger.info('some info');
+      fileLogger.debug('some detail');
+    });
+    assert.equal(lines.error.length, 2);
+    assert.match(lines.error[0], /\[ERROR\] an error$/);
+    assert.match(lines.error[1], /\[WARN\] a warning$/);
+    assert.equal(lines.log.length, 2);
+    assert.match(lines.log[0], /\[INFO\] some info$/);
+    assert.match(lines.log[1], /\[DEBUG\] some detail$/);
+    // The daily file still holds every level, in order
+    const [file] = fs.readdirSync(dir);
+    const written = fs.readFileSync(path.join(dir, file), 'utf8').trim().split('\n');
+    assert.deepEqual(written.map(line => line.match(/\[(\w+)\] /)[1]), ['ERROR', 'WARN', 'INFO', 'DEBUG']);
+  } finally {
+    if (originalLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = originalLevel;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stderr lines are colored by whether stderr, not stdout, is a terminal', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  const original = {
+    out: Object.getOwnPropertyDescriptor(process.stdout, 'isTTY'),
+    err: Object.getOwnPropertyDescriptor(process.stderr, 'isTTY')
+  };
+  const originalNoColor = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
+  // A terminal on stdout with stderr redirected to a file, as `2>errors.log` does
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+  Object.defineProperty(process.stderr, 'isTTY', { value: false, configurable: true });
+  try {
+    const lines = captureConsole(() => {
+      const fileLogger = new Logger({ logDir: dir });
+      fileLogger.error('to the file');
+      fileLogger.info('to the terminal');
+    });
+    assert.doesNotMatch(lines.error[0], /\x1b\[/);
+    assert.match(lines.log[0], /\x1b\[36m/);
+  } finally {
+    for (const [stream, descriptor] of [[process.stdout, original.out], [process.stderr, original.err]]) {
+      if (descriptor) Object.defineProperty(stream, 'isTTY', descriptor);
+      else delete stream.isTTY;
+    }
     if (originalNoColor === undefined) delete process.env.NO_COLOR;
     else process.env.NO_COLOR = originalNoColor;
     fs.rmSync(dir, { recursive: true, force: true });
