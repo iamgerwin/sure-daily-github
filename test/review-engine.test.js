@@ -439,6 +439,41 @@ test('runEngine never passes the GitHub token or git auth env to the engine by d
   assert.equal(env.PATH, process.env.PATH);
 });
 
+test('the engine env lockdown keeps hooks, fsmonitor and gpg.program planted in the clone from running', async () => {
+  const dir = tmpDir();
+  const repo = path.join(dir, 'repo');
+  const marker = path.join(dir, 'ran.txt');
+  const plant = (name) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, `#!/bin/sh\necho ${name} >> "${marker}"\nexit 1\n`, { mode: 0o755 });
+    return file;
+  };
+  const hooks = path.join(dir, 'hooks');
+  fs.mkdirSync(hooks);
+  fs.renameSync(plant('pre-commit'), path.join(hooks, 'pre-commit'));
+
+  const env = { ...process.env, ...ENGINE_ENV_LOCKDOWN };
+  const git = (args) => runProcess('git', args, { cwd: repo, env });
+  fs.mkdirSync(repo);
+  assert.equal((await git(['init', '-q'])).code, 0);
+  // What the engine's Edit/Write tools could put in .git/config
+  for (const [key, value] of [
+    ['user.name', 'x'], ['user.email', 'x@example.com'],
+    ['core.hooksPath', hooks], ['core.fsmonitor', plant('fsmonitor')],
+    ['gpg.program', plant('gpg')], ['commit.gpgSign', 'true']
+  ]) {
+    assert.equal((await git(['config', key, value])).code, 0, key);
+  }
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+
+  // The two allowlisted git commands that would run them
+  assert.equal((await git(['status', '--porcelain'])).code, 0);
+  assert.equal((await git(['add', 'a.txt'])).code, 0);
+  const commit = await git(['commit', '-q', '-m', 'change']);
+  assert.equal(commit.code, 0, commit.stderr);
+  assert.equal(fs.existsSync(marker), false, fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : '');
+});
+
 test('runProcess captures output and exit code without a shell', async () => {
   const result = await runProcess(process.execPath, ['-e', 'console.log("hi $HOME"); process.exit(3)']);
   assert.equal(result.code, 3);
