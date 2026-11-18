@@ -63,7 +63,8 @@ export async function killActiveEngines({ graceMs = KILL_GRACE_MS } = {}) {
 
 // Spawns a command without a shell and resolves (never rejects) with
 // { code, signal, stdout, stderr, timedOut, error }. On timeout the whole
-// process group is killed so `npm test` grandchildren cannot linger. `input`
+// process group is killed so `npm test` grandchildren cannot linger, and when
+// the command exits, whatever it left running in its group is killed. `input`
 // is written to stdin (prompts go there, not into argv).
 export function runProcess(cmd, args = [], { cwd, env = process.env, timeoutMs = 0, input = null } = {}) {
   return new Promise((resolve) => {
@@ -108,6 +109,14 @@ export function runProcess(cmd, args = [], { cwd, env = process.env, timeoutMs =
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { stdout = appendTail(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = appendTail(stderr, chunk); });
+    // Once the command itself exits, anything it left running in its group
+    // (a backgrounded server or watcher) is an orphan: kill it, as the test
+    // gate does, so it cannot hold stdout open and stall 'close' until the
+    // timeout (reporting a finished engine run as timed out, or hanging for
+    // good without one), or change the work tree after the engine is done
+    child.on('exit', () => {
+      if (detached) signalGroup(child.pid, 'SIGKILL');
+    });
     child.on('error', (error) => finish({ code: null, error }));
     child.on('close', (code, signal) => finish({ code, signal }));
     if (input !== null) {
