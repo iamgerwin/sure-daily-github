@@ -276,6 +276,62 @@ test('each retry of a timed-out GET gets a fresh deadline', async () => {
   }
 });
 
+test('a request made after an earlier request\'s deadline still gets its own', async () => {
+  const signals = [];
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '50';
+  try {
+    const octokit = createOctokit({
+      request: { fetch: async (url, options) => {
+        signals.push(options.signal);
+        return new Response(JSON.stringify({ login: 'me' }), {
+          status: 200, headers: { 'content-type': 'application/json' }
+        });
+      } }
+    });
+    await octokit.request('GET /user');
+    // Past the first request's deadline: reusing its signal would abort at once
+    await new Promise(resolve => setTimeout(resolve, 120));
+    const { data } = await octokit.request('GET /user');
+    assert.equal(data.login, 'me');
+    assert.equal(signals.length, 2);
+    assert.notEqual(signals[0], signals[1]);
+  } finally {
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+  }
+});
+
+test('a client without request options keeps later requests alive past the first deadline', async () => {
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '50';
+  const srv = await startServer([{ status: 200 }]);
+  try {
+    await srv.octokit.request('GET /user');
+    await new Promise(resolve => setTimeout(resolve, 120));
+    const { data } = await srv.octokit.request('GET /user');
+    assert.equal(data.login, 'me');
+    assert.equal(srv.requests.length, 2);
+  } finally {
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+    srv.close();
+  }
+});
+
+test('a caller signal is not left on the client defaults for later requests', async () => {
+  const signals = [];
+  const octokit = createOctokit({
+    request: { fetch: async (url, options) => {
+      signals.push(options.signal);
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    } }
+  });
+  const controller = new AbortController();
+  await octokit.request('GET /user', { request: { signal: controller.signal } });
+  controller.abort(new Error('scan canceled'));
+  await octokit.request('GET /user');
+  assert.equal(signals[0], controller.signal);
+  assert.notEqual(signals[1], controller.signal);
+  assert.equal(signals[1].aborted, false);
+});
+
 test('getRetryDelayMs refuses to wait for a distant rate limit reset', () => {
   const reset = Math.floor(Date.now() / 1000) + 3600;
   const error = { status: 403, response: { headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) } } };

@@ -118,9 +118,12 @@ export function createOctokit(options = {}) {
   const baseDelayMs = retry.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
 
   octokit.hook.wrap('request', async (request, requestOptions) => {
-    // Inner hooks are bound to this same options object, so the per-attempt
-    // signal must be set on it in place rather than on a copy
-    requestOptions.request = requestOptions.request || {};
+    // Without request options of its own, a call shares the client's default
+    // request object with every other call. A deadline set on that object
+    // would be read back as the next call's caller signal, so every request
+    // made after the first one's deadline would abort at once. Each call gets
+    // its own copy; inner hooks read the signal from it on every attempt.
+    requestOptions.request = { ...requestOptions.request };
     const callerSignal = requestOptions.request.signal;
 
     for (let attempt = 0; ; attempt++) {
