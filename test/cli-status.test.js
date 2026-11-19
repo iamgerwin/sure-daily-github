@@ -220,3 +220,43 @@ test('advanced issue-mode status widens the repository column for a long owner/r
   assert.ok(output.includes(`│ ${longName} │`), output);
   assertAlignedTable(output);
 });
+
+test('advanced issue-mode status prints unreadable stored times instead of crashing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  const issueStateFile = path.join(dir, 'issue-state.json');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  timezone: "UTC"',
+    '  mode: "issue"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    '    dailyTarget: { min: 1, max: 3 }',
+    ''
+  ].join('\n'));
+
+  fs.writeFileSync(issueStateFile, JSON.stringify({
+    lastDailyReset: 'not a date',
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: 'garbage', todayTarget: 3, nextIssueTime: 1e20 }
+    }
+  }));
+
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_ISSUE_STATE_FILE: issueStateFile,
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  const row = output.split('\n').find(line => line.includes('me/demo'));
+  assert.ok(row, output);
+  assert.match(row, /Unknown │$/);
+  assert.match(output, /Last daily reset: unreadable, the next run starts a new day/);
+});
