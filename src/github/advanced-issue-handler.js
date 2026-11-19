@@ -14,6 +14,13 @@ const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/issue-state.json');
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isCount = (value) => Number.isInteger(value) && value >= 0;
+// ISO string of a stored timestamp, or null when it is no instant a Date can
+// hold (a hand edit, or a number past the Date range): toISOString() would
+// throw a RangeError and abort `status` for every repository
+const isoTime = (value) => {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+};
 // The loader normalizes dailyTarget to { min, max }; a bare number is one value
 const targetBounds = (dailyTarget) => (typeof dailyTarget === 'object'
   ? dailyTarget
@@ -509,8 +516,9 @@ class AdvancedIssueHandler {
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
         todayTarget: (targetApplies && todayState.todayTarget) || 'Not set',
-        lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: waiting ? new Date(nextIssueTime).toISOString() : 'Any time'
+        lastIssueTime: repoState.lastIssueTime ? (isoTime(repoState.lastIssueTime) ?? 'Unknown') : 'Never',
+        // A pending value that is no instant still holds the run back
+        nextIssueTime: waiting ? (isoTime(nextIssueTime) ?? 'Unknown') : 'Any time'
       });
     }
     

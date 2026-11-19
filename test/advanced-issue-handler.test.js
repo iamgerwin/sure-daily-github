@@ -892,3 +892,23 @@ test('a template label that repeats a repository label is sent once', async () =
   assert.equal(created.length, 1);
   assert.deepEqual(created[0].labels, ['Automated', 'bug']);
 });
+
+test('status reports unreadable stored issue times instead of throwing', async () => {
+  const { handler } = createHandler();
+  writeState(handler, {
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      // A hand-edited string and a number past the Date range (which still holds the run back)
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: 'yesterday', todayTarget: 3, nextIssueTime: 1e20 },
+      'me/other': { issuesCreatedToday: 1, lastIssueTime: 1e20, todayTarget: 3, nextIssueTime: 'soon' }
+    }
+  });
+
+  const { repositories: [demo, other] } = await handler.getStatus([repo(), repo({ repo: 'other' })], 'UTC');
+
+  assert.equal(demo.lastIssueTime, 'Unknown');
+  assert.equal(demo.nextIssueTime, 'Unknown');
+  assert.equal(other.lastIssueTime, 'Unknown');
+  // A non-numeric value never makes the run wait (now < 'soon' is false)
+  assert.equal(other.nextIssueTime, 'Any time');
+});

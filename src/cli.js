@@ -289,7 +289,11 @@ program
             let nextIssue = 'Any time';
             
             if (repo.nextIssueTime && repo.nextIssueTime !== 'Any time') {
-              nextIssue = formatNextIssueTime(timezone, new Date(repo.nextIssueTime));
+              const next = new Date(repo.nextIssueTime);
+              // 'Unknown' (an unreadable stored time) is shown as is
+              nextIssue = Number.isFinite(next.getTime())
+                ? formatNextIssueTime(timezone, next)
+                : String(repo.nextIssueTime);
             }
             
             nextIssue = nextIssue.padStart(20);
@@ -300,8 +304,14 @@ program
           console.log(`└${bar}┴────────────┴───────┴──────────────────────┘\n`);
           
           if (result.status.lastDailyReset) {
-            const { date, time } = getTemplateDateParts(timezone, new Date(result.status.lastDailyReset));
-            console.log(`Last daily reset: ${date} ${time} (${timezone})\n`);
+            const lastReset = new Date(result.status.lastDailyReset);
+            if (Number.isFinite(lastReset.getTime())) {
+              const { date, time } = getTemplateDateParts(timezone, lastReset);
+              console.log(`Last daily reset: ${date} ${time} (${timezone})\n`);
+            } else {
+              // The run treats an unreadable reset time as a new day (shouldResetDaily)
+              console.log('Last daily reset: unreadable, the next run starts a new day\n');
+            }
           }
         } 
         // Legacy format
