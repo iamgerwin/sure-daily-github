@@ -27,6 +27,24 @@ const PUSH_BLOCKED_PROTOCOLS = ['ext', 'file', 'git', 'ssh'];
 export const REPLY_MARKER = '<!-- sdg-babysit -->';
 export const ATTRIBUTION_PATTERN = /Co-Authored-By|Generated with/i;
 
+// GitHub rejects a comment body over 65,536 characters with a 422. The body is
+// built from engine reasoning and every summarized comment, so a long one
+// would fail every retry until the reply is abandoned unposted.
+export const MAX_COMMENT_CHARS = 65536;
+const TRUNCATION_NOTE = '\n\n... (truncated to fit GitHub\'s comment size limit)';
+
+// Cuts an oversized reply to the limit, keeping the trailing REPLY_MARKER so
+// the cut reply is still recognized as babysit's own and never triaged
+export function fitCommentBody(body, max = MAX_COMMENT_CHARS) {
+  if (typeof body !== 'string' || body.length <= max) return body;
+  const suffix = `${TRUNCATION_NOTE}\n\n${REPLY_MARKER}`;
+  let text = body.endsWith(REPLY_MARKER) ? body.slice(0, -REPLY_MARKER.length).trimEnd() : body;
+  text = text.slice(0, Math.max(0, max - suffix.length));
+  // Do not leave half of a surrogate pair (an emoji) at the cut
+  if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
+  return `${text}${suffix}`;
+}
+
 const ACTION_STATES = { fix: 'addressed', defer: 'deferred', wontfix: 'wontfix', note: 'noted' };
 const STATE_LABELS = { addressed: 'fixed', deferred: 'deferred', wontfix: "won't fix", noted: 'noted' };
 const MAX_HUNK_CHARS = 2000;
@@ -189,7 +207,7 @@ export function inlineReplyBody(comment, decision, fix, { reReview = true } = {}
     default:
       text = `${lead}Noted. ${decision.reasoning}${decision.plan ? `\n\nSee: ${decision.plan}` : ''}`;
   }
-  return `${text}\n\n${REPLY_MARKER}`;
+  return fitCommentBody(`${text}\n\n${REPLY_MARKER}`);
 }
 
 function giveUpText(error) {
@@ -198,7 +216,7 @@ function giveUpText(error) {
 
 function giveUpReplyBody(comment, error) {
   const mention = mentionFor(comment.user);
-  return `${mention ? `${mention} ` : ''}${giveUpText(error)}\n\n${REPLY_MARKER}`;
+  return fitCommentBody(`${mention ? `${mention} ` : ''}${giveUpText(error)}\n\n${REPLY_MARKER}`);
 }
 
 // One PR comment covering review bodies and issue comments, which (unlike
@@ -225,7 +243,7 @@ export function summaryCommentBody(entries, fix, asked = new Set()) {
     parts.push('', `${reReview.join(' ')} please re-review the latest changes.`);
   }
   parts.push('', REPLY_MARKER);
-  return parts.join('\n');
+  return fitCommentBody(parts.join('\n'));
 }
 
 function forkNoticeBody(pr, label) {
@@ -1033,9 +1051,11 @@ export class Babysitter {
   async deliver(ctx, delivery, counts) {
     const { client, ledger } = ctx;
     const { owner, repo, pr: number } = delivery;
+    // Pending replies recorded before bodies were capped are cut here as well
+    const body = fitCommentBody(delivery.body);
     const reply = delivery.kind === 'inline'
-      ? await client.replyToReviewComment(owner, repo, number, delivery.replyToId, delivery.body)
-      : await client.createIssueComment(owner, repo, number, delivery.body);
+      ? await client.replyToReviewComment(owner, repo, number, delivery.replyToId, body)
+      : await client.createIssueComment(owner, repo, number, body);
     if (reply.success) {
       ledger.completeDelivery(delivery.id, reply.data.id);
       for (const key of delivery.keys) {

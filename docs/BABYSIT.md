@@ -202,6 +202,11 @@ interpreter gap completely requires running the engine in a container.
    and only once per pushed head, even if it opened several threads. Humans
    are never mentioned.
 
+   GitHub rejects a comment over 65,536 characters, so a reply or summary
+   that would exceed it (long engine reasoning, many summarized comments) is
+   cut to fit, with a truncation note, and keeps the `<!-- sdg-babysit -->`
+   marker at the end.
+
 ## Reply delivery
 
 Deciding an outcome and delivering its reply are separate steps:
