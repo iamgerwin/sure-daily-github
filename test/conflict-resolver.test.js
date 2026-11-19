@@ -100,7 +100,12 @@ test('isTestFile matches test directories and .test/.spec files', () => {
   for (const file of ['test/a.js', 'test/unit/b.txt', '__tests__/c.js', 'src/x.test.js', 'lib/deep/y.spec.js', 'z.test.js']) {
     assert.equal(isTestFile(file), true, file);
   }
-  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'a.test.ts', 'testing/a.js']) {
+  // Jest's default testMatch finds __tests__ directories anywhere in the tree
+  for (const file of ['src/__tests__/c.js', 'packages/ui/src/components/__tests__/button.js']) {
+    assert.equal(isTestFile(file), true, file);
+  }
+  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'a.test.ts', 'testing/a.js',
+    'src/__tests__.js', 'src/my__tests__/a.js', 'src/__tests__']) {
     assert.equal(isTestFile(file), false, file);
   }
 });

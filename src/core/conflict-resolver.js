@@ -13,8 +13,9 @@ const CONTEXT_LINES = 3;
 // Same window git uses to decide whether a blob is binary
 const BINARY_SNIFF_CHARS = 8000;
 // Conflicts in these files keep both sides instead of the newer one, so tests
-// added on the older side are never dropped
-const TEST_FILE_PATTERNS = [/^test\//, /^__tests__\//, /\.test\.js$/, /\.spec\.js$/];
+// added on the older side are never dropped. __tests__ matches at any depth,
+// as in Jest's default testMatch (src/components/__tests__/button.js)
+const TEST_FILE_PATTERNS = [/^test\//, /(?:^|\/)__tests__\//, /\.test\.js$/, /\.spec\.js$/];
 // A test(...) or it(...) registration at the start of a line: optionally
 // awaited, optionally on a receiver (t.test, suite.it), including chained
 // modifiers (.only/.skip/.todo) and the parameterized and conditional forms

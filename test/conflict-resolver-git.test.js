@@ -25,6 +25,7 @@ async function commit(cwd, files, date, message = 'change') {
     if (content === null) {
       await git(cwd, ['rm', '-q', file]);
     } else {
+      fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       fs.writeFileSync(path.join(cwd, file), content);
       await git(cwd, ['add', file]);
     }
@@ -178,6 +179,23 @@ test('resolveConflicts keeps tests added on both sides of a test file, ours befo
   assert.deepEqual(result.files, [{ file: 'app.test.js', hunks: ['union'] }, { file: 'app.txt', hunks: ['theirs'] }]);
   assert.equal(fs.readFileSync(path.join(dir, 'app.test.js'), 'utf8'), testFile('base', 'feature', 'master'));
   assert.equal(fs.readFileSync(path.join(dir, 'app.txt'), 'utf8'), numbered({ 2: 'master 2' }));
+});
+
+// Jest's default layout: a source file outside __tests__ would keep only the
+// newer side (master's), dropping the test the feature branch added
+test('resolveConflicts keeps tests added on both sides of a nested __tests__ file', async (t) => {
+  const file = 'src/components/__tests__/button.js';
+  const dir = await conflictedRepo(t, {
+    base: { [file]: testFile('base') },
+    master: [[{ [file]: testFile('base', 'master') }, '2026-02-01T00:00:00Z']],
+    feature: [[{ [file]: testFile('base', 'feature') }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, true, result.reason);
+  assert.deepEqual(result.files, [{ file, hunks: ['union'] }]);
+  assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), testFile('base', 'feature', 'master'));
 });
 
 test('resolveConflicts escalates a test hunk where a side modified existing lines', async (t) => {
