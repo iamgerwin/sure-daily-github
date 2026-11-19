@@ -144,6 +144,29 @@ test('a dashboard upsert at the hourly cap is denied without tripping the breake
   assert.deepEqual(calls, []);
 });
 
+test('writes stamped more than an hour ahead (clock stepped back) leave the hourly budget', async (t) => {
+  const { executor, state, calls } = setup(t, { caps: { writesPerHour: 2 } });
+  const DAY = 24 * 60 * 60 * 1000;
+  state.writes = [NOW + DAY, NOW + 2 * DAY];
+  const outcome = await executor.run(dashboard());
+  assert.equal(outcome.status, 'done');
+  assert.equal(state.breaker, null);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(state.writes, [NOW]);
+});
+
+test('writes within an hour either side of now still count toward the hourly cap', async (t) => {
+  const { executor, state, calls } = setup(t, { caps: { writesPerHour: 2 } });
+  const HOUR = 60 * 60 * 1000;
+  state.writes = [NOW - HOUR, NOW - HOUR + 1000, NOW + HOUR - 1000, NOW + HOUR];
+  assert.equal(executor.hourWrites(), 2);
+  assert.deepEqual(state.writes, [NOW - HOUR + 1000, NOW + HOUR - 1000]);
+  const outcome = await executor.run(dashboard());
+  assert.equal(outcome.status, 'denied');
+  assert.equal(outcome.verdict.rule, 'rate');
+  assert.deepEqual(calls, []);
+});
+
 test('the fresh read receives the action, so a needs-human clear can ask for live checks', async (t) => {
   const seen = [];
   const { executor } = setup(t, { fresh: async (number, action) => { seen.push([number, action.type]); return { headRefOid: SHA, state: 'OPEN', labels: [] }; } });

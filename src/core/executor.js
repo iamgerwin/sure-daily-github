@@ -268,9 +268,13 @@ export class ActionExecutor {
     this.decisions = [];
   }
 
+  // Writes within an hour of now, measured as distance: a write stamped more
+  // than an hour ahead (the clock was stepped back, e.g. a reboot before NTP
+  // sync) would otherwise count until the clock caught up with it, holding the
+  // hourly cap (and tripping the breaker) long after the hour it was made in
   hourWrites() {
-    const since = this.now() - HOUR_MS;
-    this.state.writes = (this.state.writes || []).filter(at => at > since);
+    const now = this.now();
+    this.state.writes = (this.state.writes || []).filter(at => Math.abs(now - at) < HOUR_MS);
     return this.state.writes.length;
   }
 
