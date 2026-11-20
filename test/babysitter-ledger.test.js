@@ -104,6 +104,51 @@ test('a corrupt ledger is backed up and replaced with an empty one', (t) => {
   }
 });
 
+test('a corrupt ledger report names the .bak copy holding the original', (t) => {
+  const filePath = tmpLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, '{"comments": ');
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  new BabysitterLedger({ filePath });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Error loading babysitter ledger/);
+  assert.match(errors[0], /the original is kept at .*\.json\.bak/);
+});
+
+test('a ledger that cannot be copied to .bak is not reported as kept there', (t) => {
+  const filePath = tmpLedgerPath();
+  // A directory at the ledger path fails both the read and the copy
+  fs.mkdirSync(filePath, { recursive: true });
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  const ledger = new BabysitterLedger({ filePath });
+  assert.deepEqual(ledger.data, { version: 1, comments: {}, prs: {}, deliveries: {}, pushIntents: {}, cursor: null });
+  assert.equal(fs.existsSync(`${filePath}.bak`), false);
+  assert.equal(errors.length, 1);
+  assert.doesNotMatch(errors[0], /is kept at/);
+  assert.match(errors[0], /could not be copied to .*\.bak .*the next save replaces it/);
+});
+
+test('an unreadable (permission denied) ledger starts empty and says no backup was kept', { skip: process.getuid?.() === 0 && 'root reads any file' }, (t) => {
+  const filePath = tmpLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ comments: { [key]: { state: 'noted' } } }));
+  fs.chmodSync(filePath, 0o000);
+  t.after(() => fs.chmodSync(filePath, 0o600));
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+  const ledger = new BabysitterLedger({ filePath });
+  assert.equal(ledger.shouldProcess(key), true);
+  assert.equal(fs.existsSync(`${filePath}.bak`), false);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /EACCES/);
+  assert.match(errors[0], /could not be copied/);
+});
+
 test('array comments or prs sections are replaced so new records survive a reload', () => {
   const filePath = tmpLedgerPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
