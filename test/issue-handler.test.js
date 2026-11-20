@@ -341,3 +341,65 @@ test('init reports why GitHub authentication failed', async () => {
   handler.client.validate = async () => ({ success: false, error: 'Request timed out' });
   await assert.rejects(() => handler.init(), { message: 'GitHub authentication failed: Request timed out' });
 });
+
+// A dailyTarget of 1 (the loader's normalized { min: 1, max: 1 }) rolls a count
+// of one, which processRepositories sends through createDailyIssue directly
+// instead of createMultipleIssues
+test('a repo with a daily target of one gets exactly one issue per day', async () => {
+  const { handler, calls } = createHandler();
+  const repo = { ...fixedRepo('single'), labels: ['daily'] };
+
+  const [first] = await handler.processRepositories([repo], { title: '${repo} ${date}' }, false, {});
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].owner, 'me');
+  assert.equal(calls[0].repo, 'single');
+  assert.match(calls[0].title, /^single \d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(calls[0].labels, ['daily']);
+  assert.equal(first.success, true);
+  assert.equal(first.count, 1);
+  assert.equal(first.data.number, 1);
+  assert.equal(state.getCounts('me', 'single').daily, 1);
+
+  const second = await handler.processRepositories([repo], {}, false, {});
+  assert.equal(calls.length, 1);
+  assert.deepEqual(second, [{ owner: 'me', repo: 'single', success: true, skipped: true, reason: 'limit_reached' }]);
+});
+
+test('a failed single issue is reported as failed and not counted', async () => {
+  const { handler } = createHandler({ fail: true });
+
+  const results = await handler.processRepositories([fixedRepo('single-broken')], {}, false, {});
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].success, false);
+  assert.equal(results[0].count, 1);
+  assert.equal(results[0].error, 'boom');
+  assert.deepEqual(summarize(results), { successful: 0, skipped: 0, failed: 1 });
+  assert.equal(getRunExitCode({ success: true, summary: summarize(results) }), 1);
+  assert.equal(state.getCounts('me', 'single-broken').daily, 0);
+});
+
+test('a single-issue dry run previews the issue without creating or counting it', async () => {
+  const { handler, calls } = createHandler();
+
+  const [result] = await handler.processRepositories([fixedRepo('single-dry')], {}, true, {});
+
+  assert.equal(calls.length, 0);
+  assert.equal(result.dryRun, true);
+  assert.equal(result.count, 1);
+  assert.match(result.preview.title, /^Daily Update - \d{4}-\d{2}-\d{2}$/);
+  assert.equal(state.getCounts('me', 'single-dry').daily, 0);
+});
+
+test('single-issue repos wait once between them and not after the last', async () => {
+  const { handler, calls } = createHandler();
+  const delays = [];
+  handler.delay = async (ms) => { delays.push(ms); };
+
+  const results = await handler.processRepositories([fixedRepo('single-a'), fixedRepo('single-b')], {}, false, {});
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(results.map(r => [r.repo, r.success, r.count]), [['single-a', true, 1], ['single-b', true, 1]]);
+  assert.deepEqual(delays, [1000]);
+});
