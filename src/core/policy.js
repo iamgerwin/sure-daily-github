@@ -31,6 +31,14 @@ export const MAX_STATUS_DESCRIPTION = 140;
 
 export const NEEDS_HUMAN_CLEAR_LIMIT = 2;
 export const NEEDS_HUMAN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// Whether an escalation or auto-clear stamped `at` falls in the 7-day window.
+// Measured in both directions, as the run lock measures clock skew: after the
+// host clock steps back, entries stamped ahead of it would otherwise count as
+// recent until the clock caught up, and a fresh escalation would stick as
+// flapping (human-only) or an allowed auto-clear would be denied.
+export function inNeedsHumanWindow(at, now) {
+  return Math.abs(now - at) < NEEDS_HUMAN_WINDOW_MS;
+}
 // Escalations only a human may clear
 export const NEVER_AUTO_CLEAR = ['gate-weakening', 'policy-denial', 'flapping'];
 
@@ -91,7 +99,7 @@ export function mentions(text) {
 }
 
 function recentClears(escalation, now) {
-  return (escalation?.clears || []).filter(at => now - at < NEEDS_HUMAN_WINDOW_MS).length;
+  return (escalation?.clears || []).filter(at => inNeedsHumanWindow(at, now)).length;
 }
 
 // kind: 'impossible' denials should never happen (a bug or an injection): they
