@@ -368,3 +368,51 @@ test('init reports why GitHub authentication failed', async () => {
   handler.client.validate = async () => ({ success: false, error: 'Bad credentials' });
   await assert.rejects(() => handler.init(), { message: 'GitHub authentication failed: Bad credentials' });
 });
+
+test('a commit the API rejects is reported as failed and not counted toward the daily target', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const repo = { ...repoConfig, repo: 'rejected', dailyTarget: { min: 1, max: 1 } };
+  handler.client = { createOrUpdateFile: async () => ({ success: false, error: 'Validation Failed' }) };
+
+  const result = await handler.createDailyCommit(repo, {}, false);
+
+  assert.deepEqual(result, { success: false, error: 'Validation Failed' });
+  assert.equal(state.getCounts('me', 'rejected').daily, 0);
+  assert.equal(state.isCommitNeeded('me', 'rejected', 1), true, 'the next run retries the repository');
+});
+
+test('a commit API call that throws is caught, reported as failed and not counted', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const repo = { ...repoConfig, repo: 'thrown', dailyTarget: { min: 1, max: 1 } };
+  handler.client = { createOrUpdateFile: async () => { throw new Error('socket hang up'); } };
+
+  const result = await handler.createDailyCommit(repo, {}, false);
+
+  assert.deepEqual(result, { success: false, error: 'socket hang up' });
+  assert.equal(state.getCounts('me', 'thrown').daily, 0);
+});
+
+test('processRepositories keeps committing to later repos after one commit fails', async () => {
+  const handler = new CommitHandler('ghp_test');
+  const calls = [];
+  handler.delay = async () => {};
+  handler.client = {
+    createOrUpdateFile: async (owner, repo) => {
+      calls.push(repo);
+      if (repo === 'chain-sel-a') throw new Error('Server Error');
+      if (repo === 'chain-sel-b') return { success: false, error: 'Conflict' };
+      return { success: true, data: { commit: { sha: `sha-${repo}` } } };
+    }
+  };
+  const repos = selectionRepos.map(r => ({ ...r, repo: `chain-${r.repo}` }));
+
+  const results = await handler.processRepositories(repos, {}, false, {});
+
+  assert.deepEqual(calls, ['chain-sel-a', 'chain-sel-b', 'chain-sel-c']);
+  assert.deepEqual(results.map(r => [r.repo, r.success]), [
+    ['chain-sel-a', false], ['chain-sel-b', false], ['chain-sel-c', true]
+  ]);
+  assert.equal(results[0].error, 'Server Error');
+  assert.equal(results[1].error, 'Conflict');
+  assert.deepEqual(repos.map(r => state.getCounts('me', r.repo).daily), [0, 0, 1]);
+});
