@@ -892,3 +892,77 @@ test('a template label that repeats a repository label is sent once', async () =
   assert.equal(created.length, 1);
   assert.deepEqual(created[0].labels, ['Automated', 'bug']);
 });
+
+test('a created issue schedules the next one within intervalMinutes', async () => {
+  const { handler } = createHandler();
+  const before = Date.now();
+
+  const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 30, max: 90 } })], {}, false, config);
+  const after = Date.now();
+
+  assert.equal(result.success, true);
+  assert.equal(result.skipped, undefined);
+  const saved = readState(handler).repositories['me/demo'];
+  assert.ok(saved.lastIssueTime >= before && saved.lastIssueTime <= after);
+  const waitMs = saved.nextIssueTime - saved.lastIssueTime;
+  assert.equal(waitMs % 60000, 0, 'the interval is a whole number of minutes');
+  assert.ok(waitMs >= 30 * 60000 && waitMs <= 90 * 60000, `wait of ${waitMs / 60000} minutes is outside 30-90`);
+});
+
+test('the run after a created issue waits out its interval instead of creating another', async () => {
+  const { handler, created } = createHandler();
+  const spaced = repo({ intervalMinutes: { min: 45, max: 45 } });
+
+  await handler.processRepositories([spaced], {}, false, config);
+  const [result] = await handler.processRepositories([spaced], {}, false, config);
+
+  assert.equal(created.length, 1);
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /^Waiting for interval \((44|45) minutes remaining\)$/);
+  assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 1);
+});
+
+test('the run after an elapsed interval creates the next issue and schedules a new wait', async () => {
+  const { handler, created } = createHandler();
+  const spaced = repo({ intervalMinutes: { min: 45, max: 45 } });
+
+  await handler.processRepositories([spaced], {}, false, config);
+  const state = readState(handler);
+  const firstNext = Date.now() - 1000;
+  state.repositories['me/demo'].nextIssueTime = firstNext;
+  writeState(handler, state);
+
+  const [result] = await handler.processRepositories([spaced], {}, false, config);
+
+  assert.equal(created.length, 2);
+  assert.equal(result.skipped, undefined);
+  const saved = readState(handler).repositories['me/demo'];
+  assert.equal(saved.issuesCreatedToday, 2);
+  assert.equal(saved.nextIssueTime - saved.lastIssueTime, 45 * 60000);
+  assert.ok(saved.nextIssueTime > firstNext);
+});
+
+test('without intervalMinutes a created issue sets no wait for the next run', async () => {
+  const { handler, created } = createHandler();
+
+  await handler.processRepositories([repo()], {}, false, config);
+  await handler.processRepositories([repo()], {}, false, config);
+
+  assert.equal(created.length, 2);
+  assert.equal(readState(handler).repositories['me/demo'].nextIssueTime, null);
+});
+
+test('a dry run with intervalMinutes does not hold back the next real run', async () => {
+  const { handler, created } = createHandler();
+  const spaced = repo({ intervalMinutes: { min: 45, max: 45 } });
+
+  const [preview] = await handler.processRepositories([spaced], {}, true, config);
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.progress, '1/3');
+
+  const [result] = await handler.processRepositories([spaced], {}, false, config);
+
+  assert.equal(created.length, 1);
+  assert.equal(result.skipped, undefined);
+  assert.equal(readState(handler).repositories['me/demo'].issuesCreatedToday, 1);
+});
