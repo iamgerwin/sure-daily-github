@@ -190,3 +190,44 @@ test('starting an attempt without windows prunes nothing', (t) => {
 
   assert.deepEqual(ledger.load()['me/demo#1'], old);
 });
+
+test('an attempt stamped well ahead of now (clock stepped back) does not skip the PR', (t) => {
+  const { ledger } = tmpLedger(t);
+  const now = 10000 * MINUTE;
+  const DAY = 24 * 60 * MINUTE;
+  ledger.save({
+    [KEY]: { headSha: 'sha1', status: 'needs-manual-review', startedAt: now + DAY, finishedAt: now + DAY },
+    'me/demo#8': { headSha: 'sha8', status: 'in-progress', startedAt: now + DAY, finishedAt: null }
+  });
+
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now, ...windows }), null);
+  assert.equal(ledger.skipReason('me/demo#8', 'sha8', { now, ...windows }), null);
+});
+
+test('an attempt stamped slightly ahead of now still skips within its window', (t) => {
+  const { ledger } = tmpLedger(t);
+  const now = 10000 * MINUTE;
+  ledger.save({
+    [KEY]: { headSha: 'sha1', status: 'fixed', startedAt: now + 239 * MINUTE, finishedAt: now + 239 * MINUTE },
+    'me/demo#8': { headSha: 'sha8', status: 'in-progress', startedAt: now + 59 * MINUTE, finishedAt: null },
+    'me/demo#9': { headSha: 'sha9', status: 'in-progress', startedAt: now + 60 * MINUTE, finishedAt: null }
+  });
+
+  assert.equal(ledger.skipReason(KEY, 'sha1', { now, ...windows }), 'already-attempted');
+  assert.equal(ledger.skipReason('me/demo#8', 'sha8', { now, ...windows }), 'already-in-progress');
+  assert.equal(ledger.skipReason('me/demo#9', 'sha9', { now, ...windows }), null);
+});
+
+test('starting an attempt prunes entries stamped further ahead than the longer window', (t) => {
+  const { ledger } = tmpLedger(t);
+  const now = 10000 * MINUTE;
+  ledger.save({
+    'me/demo#1': { headSha: 'a', status: 'fixed', startedAt: now + 240 * MINUTE, finishedAt: now + 240 * MINUTE },
+    'me/demo#2': { headSha: 'b', status: 'failed', startedAt: now + 239 * MINUTE, finishedAt: now + 239 * MINUTE },
+    'me/demo#3': { headSha: 'c', status: 'in-progress', startedAt: now + 3000 * MINUTE, finishedAt: null }
+  });
+
+  ledger.start(KEY, 'sha1', now, windows);
+
+  assert.deepEqual(Object.keys(ledger.load()).sort(), ['me/demo#2', KEY].sort());
+});
