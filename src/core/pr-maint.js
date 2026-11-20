@@ -11,7 +11,7 @@ import { ActionExecutor, effectiveMode } from './executor.js';
 import { isConflicted, selectRepositories, gateReason } from './conflict-fixer.js';
 import {
   LIFECYCLE_LABELS, MANAGED_LABELS, NEEDS_HUMAN, BABYSIT, PAUSED, MARKERS, MERGE_POLICY_CONTEXT,
-  NEVER_AUTO_CLEAR, NEEDS_HUMAN_CLEAR_LIMIT, NEEDS_HUMAN_WINDOW_MS, DEFAULT_CAPS, MAX_TEXT_BYTES,
+  NEVER_AUTO_CLEAR, NEEDS_HUMAN_CLEAR_LIMIT, inNeedsHumanWindow, DEFAULT_CAPS, MAX_TEXT_BYTES,
   CLEAR_CONDITIONS, clearConditionMet, clearsNeedsHuman
 } from './policy.js';
 
@@ -66,7 +66,7 @@ export function clearConditionText(reason) {
 export function canAutoClear(escalation, pr, now) {
   if (!escalation?.active || NEVER_AUTO_CLEAR.includes(escalation.reason)) return false;
   if (!clearConditionMet(escalation, pr)) return false;
-  const clears = (escalation.clears || []).filter(at => now - at < NEEDS_HUMAN_WINDOW_MS);
+  const clears = (escalation.clears || []).filter(at => inNeedsHumanWindow(at, now));
   return clears.length < NEEDS_HUMAN_CLEAR_LIMIT;
 }
 
@@ -76,7 +76,7 @@ export function recordEscalation(escalations, number, { reason, headSha, detail 
   const key = String(number);
   const prev = escalations[key] || {};
   if (prev.active) return prev;
-  const history = (prev.history || []).filter(at => now - at < NEEDS_HUMAN_WINDOW_MS);
+  const history = (prev.history || []).filter(at => inNeedsHumanWindow(at, now));
   const finalReason = history.length >= NEEDS_HUMAN_CLEAR_LIMIT ? 'flapping' : reason;
   escalations[key] = {
     reason: finalReason,

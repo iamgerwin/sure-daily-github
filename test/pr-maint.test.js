@@ -183,6 +183,25 @@ test('recordEscalation: the third escalation in 7 days sticks as flapping; an ac
   assert.equal(third.history.length, 3);
 });
 
+test('recordEscalation: escalations stamped ahead of a clock stepped back do not make a new one flapping', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  // Two past escalations recorded before the clock was stepped back 30 days
+  // (an unsynced RTC after a reboot); before, they counted for 37 days
+  const escalations = { 5: { reason: 'attempts', active: false, history: [NOW + 30 * DAY, NOW + 31 * DAY], clears: [] } };
+  const next = recordEscalation(escalations, 5, { reason: 'attempts', headSha: 'x', now: NOW });
+  assert.equal(next.reason, 'attempts');
+  assert.deepEqual(next.history, [NOW]);
+
+  // Escalations stamped within the window either side still count
+  const near = { 6: { reason: 'attempts', active: false, history: [NOW - 1000, NOW + 1000], clears: [] } };
+  assert.equal(recordEscalation(near, 6, { reason: 'attempts', headSha: 'x', now: NOW }).reason, 'flapping');
+  const edge = NEEDS_HUMAN_WINDOW_MS;
+  const atEdge = { 7: { reason: 'attempts', active: false, history: [NOW - 1000, NOW + edge], clears: [] } };
+  assert.equal(recordEscalation(atEdge, 7, { reason: 'attempts', headSha: 'x', now: NOW }).reason, 'attempts');
+  const insideEdge = { 8: { reason: 'attempts', active: false, history: [NOW - 1000, NOW + edge - 1], clears: [] } };
+  assert.equal(recordEscalation(insideEdge, 8, { reason: 'attempts', headSha: 'x', now: NOW }).reason, 'flapping');
+});
+
 test('decide: an unchanged fingerprint in the same mode plans nothing; a mode change re-decides', () => {
   const ledger = emptyLedger();
   ledger.prs['1'] = { fingerprint: fingerprint(pr(1)), mode: 'act' };

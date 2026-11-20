@@ -225,6 +225,11 @@ test('needs-human may be auto-cleared only for an active, clearable escalation u
   assert.match(check(action, fresh, baseCtx({ escalation: twice })).reason, /2 times in 7 days/);
   const longAgo = { ...escalation, clears: [NOW - NEEDS_HUMAN_WINDOW_MS - 1, NOW - NEEDS_HUMAN_WINDOW_MS - 2] };
   assert.deepEqual(check(action, fresh, baseCtx({ escalation: longAgo })), { allowed: true });
+  // Clears stamped more than a window ahead (a clock stepped back) no longer count
+  const ahead = { ...escalation, clears: [NOW + NEEDS_HUMAN_WINDOW_MS + 1, NOW + NEEDS_HUMAN_WINDOW_MS + 2] };
+  assert.deepEqual(check(action, fresh, baseCtx({ escalation: ahead })), { allowed: true });
+  const slightlyAhead = { ...escalation, clears: [NOW + 1000, NOW + 2000] };
+  assert.match(check(action, fresh, baseCtx({ escalation: slightlyAhead })).reason, /2 times in 7 days/);
 });
 
 test('needs-human removal is denied when the clearing condition does not hold on the fresh state', () => {

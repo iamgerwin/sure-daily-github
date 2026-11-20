@@ -120,6 +120,15 @@ test('canAutoClear stops at the clear limit within the 7-day window and forgets 
   assert.equal(canAutoClear(escalation({ clears: undefined }), pr(), NOW), true);
 });
 
+test('canAutoClear ignores clears stamped ahead of a clock stepped back, like the policy rule', () => {
+  const ahead = Array.from({ length: NEEDS_HUMAN_CLEAR_LIMIT }, (_, i) => NOW + NEEDS_HUMAN_WINDOW_MS + (i + 1) * DAY_MS);
+  assert.equal(canAutoClear(escalation({ clears: ahead }), pr(), NOW), true);
+
+  // Clears a little ahead (small skew) still count toward the limit
+  const slightlyAhead = Array.from({ length: NEEDS_HUMAN_CLEAR_LIMIT }, (_, i) => NOW + (i + 1) * 1000);
+  assert.equal(canAutoClear(escalation({ clears: slightlyAhead }), pr(), NOW), false);
+});
+
 // The planner proposes a needs-human removal only when canAutoClear holds, and
 // the needs-human policy rule then vets the write. If they disagreed, pr-maint
 // would either plan a write the policy always denies (a wasted write slot and a
@@ -140,7 +149,10 @@ test('canAutoClear agrees with the needs-human policy rule on every escalation a
     [NOW - DAY_MS],
     [NOW - DAY_MS, NOW - 2 * DAY_MS],
     [NOW - DAY_MS, NOW - NEEDS_HUMAN_WINDOW_MS],
-    [NOW - 8 * DAY_MS, NOW - 9 * DAY_MS, NOW - 10 * DAY_MS]
+    [NOW - 8 * DAY_MS, NOW - 9 * DAY_MS, NOW - 10 * DAY_MS],
+    // Stamped ahead of the clock: a small skew, and a clock stepped back past the window
+    [NOW + DAY_MS, NOW + 2 * DAY_MS],
+    [NOW + 8 * DAY_MS, NOW + 9 * DAY_MS]
   ];
 
   let allowed = 0;
