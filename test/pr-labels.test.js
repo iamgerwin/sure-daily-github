@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
+import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, connectionRollupState, mergePolicyState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
@@ -265,4 +265,47 @@ test('rollupState counts only passing conclusions as success; stale and unknown 
     assert.equal(rollupState([run('COMPLETED', 'STALE'), run('COMPLETED', conclusion)]), 'FAILURE', conclusion);
   }
   assert.equal(rollupState([run('COMPLETED', 'STALE'), ctx('ci', 'ERROR')]), 'FAILURE');
+});
+
+test('connectionRollupState never passes a check list that was not read in full', () => {
+  const run = (conclusion) => ({ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion });
+  const passing = Array.from({ length: 100 }, () => run('SUCCESS'));
+  // Every context read: the rollup as usual
+  assert.equal(connectionRollupState({ totalCount: 100, nodes: passing }), 'SUCCESS');
+  // A response without totalCount is taken as complete
+  assert.equal(connectionRollupState({ nodes: passing }), 'SUCCESS');
+  // A 101st context was not read and may have failed
+  assert.equal(connectionRollupState({ totalCount: 101, nodes: passing }), 'PENDING');
+  // A failure among the read contexts still wins
+  assert.equal(connectionRollupState({ totalCount: 101, nodes: [...passing.slice(1), run('FAILURE')] }), 'FAILURE');
+  // Only our own status read, more unread: not "no checks"
+  assert.equal(connectionRollupState({ totalCount: 2, nodes: [{ __typename: 'StatusContext', context: MERGE_POLICY_CONTEXT, state: 'SUCCESS' }] }), 'PENDING');
+  assert.equal(connectionRollupState(undefined), null);
+});
+
+test('fetchSnapshot and freshPullRequest hold passing checks as pending when more contexts exist than were read', async () => {
+  const contexts = { totalCount: 150, nodes: Array.from({ length: 100 }, () => ({ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' })) };
+  const stub = stubOctokit({
+    graphql: ({ number }) => number
+      ? { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: 'h1', statusCheckRollup: { contexts } } }] } } } }
+      : {
+          repository: {
+            pausedIssues: { nodes: [] },
+            pullRequests: {
+              nodes: [{ number: 3, author: { login: OWNER }, commits: { nodes: [{ commit: { statusCheckRollup: { contexts } } }] } }],
+              pageInfo: { hasNextPage: false, endCursor: null }
+            }
+          }
+        }
+  });
+  stub.octokit.rest.pulls = { get: async () => ({ data: { number: 3, state: 'open', head: { sha: 'h1' }, labels: [], mergeable: true, mergeable_state: 'clean' } }) };
+  const github = new PrMaintGitHub(stub.octokit);
+
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.equal(snapshot.prs[0].checks, 'PENDING');
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, 'PENDING');
+  // Both queries ask GitHub how many contexts there are
+  const queries = stub.calls.filter(c => c.name === 'graphql').map(c => c.query);
+  assert.equal(queries.length, 2);
+  for (const query of queries) assert.match(query, /contexts\(first: 100\) \{\s+totalCount\s+nodes/);
 });
