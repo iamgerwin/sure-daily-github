@@ -334,3 +334,68 @@ test('runScheduledTask returns a locked or failed execution result unchanged', a
   assert.equal(babysitRuns, 1);
   assert.equal(scheduler.executing, false);
 });
+
+test('runScheduledBabysit logs a held run lock as a warning and failed scans as errors', async (t) => {
+  const { default: logger } = await import('../src/utils/logger.js');
+  const originalBabysit = babysitter.execute;
+  const originalWarn = logger.warn;
+  const originalError = logger.error;
+  const logs = [];
+  logger.warn = (message, meta) => logs.push({ level: 'warn', message, meta });
+  logger.error = (message, meta) => logs.push({ level: 'error', message, meta });
+  t.after(() => {
+    babysitter.execute = originalBabysit;
+    logger.warn = originalWarn;
+    logger.error = originalError;
+  });
+  const cfg = { babysit: { enabled: true } };
+  const scan = async (result) => {
+    babysitter.execute = async () => result;
+    logs.length = 0;
+    assert.equal(await scheduler.runScheduledBabysit(cfg), result);
+    return logs.map(({ level, message, meta }) => ({ level, message, meta }));
+  };
+
+  // A clean scan logs nothing
+  assert.deepEqual(await scan({ success: true, summary: { failed: 0 } }), []);
+
+  // Another process holding the lock is expected, not a failure
+  const locked = { success: false, locked: true, error: 'Run lock held by PID 7' };
+  assert.deepEqual(await scan(locked), [{
+    level: 'warn',
+    message: 'Another process holds the run lock, skipped babysit scan',
+    meta: { error: 'Run lock held by PID 7' }
+  }]);
+
+  // A scan that failed outright, and one that finished with failed comments
+  const failed = { success: false, error: 'GitHub authentication failed' };
+  assert.deepEqual(await scan(failed), [{
+    level: 'error',
+    message: 'Scheduled babysit scan had failures',
+    meta: { error: 'GitHub authentication failed', summary: undefined }
+  }]);
+  const partial = { success: true, summary: { prs: 2, failed: 1 } };
+  assert.deepEqual(await scan(partial), [{
+    level: 'error',
+    message: 'Scheduled babysit scan had failures',
+    meta: { error: undefined, summary: { prs: 2, failed: 1 } }
+  }]);
+
+  // A missing result is reported instead of throwing on result.locked
+  assert.deepEqual(await scan(undefined), [{
+    level: 'error',
+    message: 'Scheduled babysit scan had failures',
+    meta: { error: undefined, summary: undefined }
+  }]);
+});
+
+test('runScheduledBabysit returns null without scanning when babysit is not enabled', async (t) => {
+  const originalBabysit = babysitter.execute;
+  let calls = 0;
+  babysitter.execute = async () => { calls++; return { success: true }; };
+  t.after(() => { babysitter.execute = originalBabysit; });
+
+  assert.equal(await scheduler.runScheduledBabysit({}), null);
+  assert.equal(await scheduler.runScheduledBabysit({ babysit: { enabled: false } }), null);
+  assert.equal(calls, 0);
+});
