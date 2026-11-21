@@ -129,3 +129,64 @@ test('verify-status honors SDG_HEARTBEAT_FILE', (t) => {
 
   assert.match(output, /Last tick: 2026-11-04T02:00:00\.000Z \(0 minutes ago\)/);
 });
+
+// The service reads these overrides from .env through dotenv, but the script
+// runs from a plain shell that never loaded it
+test('verify-status finds files moved only in the app .env', (t) => {
+  const appDir = makeAppDir();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-verify-env-'));
+  t.after(() => {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  const configFile = path.join(elsewhere, 'custom.yaml');
+  const stateFile = path.join(elsewhere, 'state.json');
+  const heartbeatFile = path.join(elsewhere, 'heartbeat.json');
+  fs.writeFileSync(configFile, 'schedule:\n  cron: "7 7 * * *"\n');
+  fs.writeFileSync(stateFile, JSON.stringify({ lastDailyReset: '2026-11-20T16:00:00.000Z' }, null, 2));
+  fs.writeFileSync(heartbeatFile, JSON.stringify({ lastTickAt: '2026-11-21T03:00:00.000Z', pid: 1 }));
+  // Defaults that must not be shown in place of the moved files
+  fs.writeFileSync(path.join(appDir, 'config/config.yaml'), 'schedule:\n  cron: "0 0 * * *"\n');
+  fs.writeFileSync(path.join(appDir, '.env'), [
+    'GITHUB_TOKEN=unused',
+    `export CONFIG_PATH="${configFile}"`,
+    `SDG_ISSUE_STATE_FILE='${stateFile}'`,
+    `SDG_HEARTBEAT_FILE=${heartbeatFile}   # moved off the root disk`,
+    ''
+  ].join('\n'));
+
+  const output = run(appDir);
+
+  assert.match(output, /cron: "7 7 \* \* \*"/);
+  assert.doesNotMatch(output, /cron: "0 0 \* \* \*"/);
+  assert.match(output, /Last reset: 2026-11-20T16:00:00\.000Z/);
+  assert.match(output, /Last tick: 2026-11-21T03:00:00\.000Z/);
+});
+
+test('verify-status prefers the environment over .env and resolves relative paths against the app directory', (t) => {
+  const appDir = makeAppDir();
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(appDir, 'alt'));
+  fs.writeFileSync(path.join(appDir, 'alt/env.yaml'), 'schedule:\n  cron: "1 2 * * *"\n');
+  fs.writeFileSync(path.join(appDir, 'alt/state.json'), JSON.stringify({ lastDailyReset: '2026-11-19T00:00:00.000Z' }, null, 2));
+  fs.writeFileSync(path.join(appDir, '.env'), [
+    'CONFIG_PATH=alt/dotenv.yaml',
+    'SDG_ISSUE_STATE_FILE=alt/state.json',
+    ''
+  ].join('\n'));
+
+  // Run from another directory so a cwd-relative lookup would miss the files
+  const output = execFileSync('bash', [path.join(appDir, 'scripts/verify-status.sh')], {
+    encoding: 'utf8',
+    cwd: os.tmpdir(),
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, CONFIG_PATH: 'alt/env.yaml', SDG_ISSUE_STATE_FILE: undefined, SDG_HEARTBEAT_FILE: undefined }
+  });
+
+  assert.match(output, /cron: "1 2 \* \* \*"/);
+  assert.doesNotMatch(output, /dotenv\.yaml/);
+  assert.match(output, /Last reset: 2026-11-19T00:00:00\.000Z/);
+  assert.match(output, new RegExp(`No scheduler heartbeat at ${appDir}/data/scheduler-heartbeat\\.json`));
+});
