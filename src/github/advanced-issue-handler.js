@@ -69,9 +69,20 @@ class AdvancedIssueHandler {
     } catch (error) {
       if (error.code !== 'ENOENT') {
         // Keep the unreadable file for inspection instead of silently discarding progress
+        // A file that cannot be read (permissions, a directory) usually cannot be
+        // copied either; naming a backup that was never written would hide that
+        // the next save replaces the only copy, as state.js reports it
         const backup = `${this.stateFile}.corrupt-${Date.now()}`;
-        await fs.copyFile(this.stateFile, backup).catch(() => {});
-        logger.error('Failed to load issue state, starting fresh', { error: error.message, backup });
+        try {
+          await fs.copyFile(this.stateFile, backup);
+          logger.error('Failed to load issue state, starting fresh', { error: error.message, backup });
+        } catch (copyError) {
+          logger.error('Failed to load issue state, starting fresh; the original could not be backed up and the next save replaces it', {
+            error: error.message,
+            backupError: copyError.message,
+            file: this.stateFile
+          });
+        }
       }
       // Initialize default state
       return {
