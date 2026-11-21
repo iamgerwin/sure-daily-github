@@ -57,7 +57,7 @@ The restarted scheduler writes a fresh heartbeat on start, so a heartbeat that i
 /opt/sure-daily-github/scripts/verify-status.sh
 ```
 
-The script reads the install it lives in (the directory above `scripts/`), so it works from any checkout. It shows the newest daily `logs/YYYY-MM-DD.log` (not `health-check.log`) and honors `CONFIG_PATH`, `SDG_ISSUE_STATE_FILE` and `SDG_HEARTBEAT_FILE` when the config, issue state or heartbeat file has been moved. It also shows the scheduler heartbeat's last tick and its age in minutes, so a service that is `active` but no longer ticking (see [Hung scheduler detection](#hung-scheduler-detection)) is visible without waiting for the health check.
+The script reads the install it lives in (the directory above `scripts/`), so it works from any checkout. It shows the newest daily `logs/YYYY-MM-DD.log` (not `health-check.log`) and honors `CONFIG_PATH`, `SDG_ISSUE_STATE_FILE` and `SDG_HEARTBEAT_FILE` when the config, issue state or heartbeat file has been moved, whether they are set in the shell or only in the app's `.env` (the shell wins, as it does for the service; relative paths resolve against the app directory). It also shows the scheduler heartbeat's last tick and its age in minutes, so a service that is `active` but no longer ticking (see [Hung scheduler detection](#hung-scheduler-detection)) is visible without waiting for the health check.
 
 ### Manual Service Commands
 ```bash
