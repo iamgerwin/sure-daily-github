@@ -54,9 +54,11 @@ function parseLock(raw) {
 // being sane: a missing or non-numeric value has no age (stale), and a value
 // further ahead than the limit (the clock was stepped back, e.g. a reboot
 // before NTP sync) is measured as distance, otherwise the lock would block
-// every run until the clock caught up with it
+// every run until the clock caught up with it. A pid of 0 or below names no
+// single process: kill(0) and kill(-n) signal a process group (or every
+// process), so a corrupt lock holding one would look alive until the age limit.
 function isStale(holder, raw, filePath, now) {
-  if (!holder || !Number.isInteger(holder.pid)) return true;
+  if (!holder || !Number.isInteger(holder.pid) || holder.pid <= 0) return true;
   if (holder.pid === process.pid) return heldLocks.get(filePath) !== raw;
   if (!isProcessAlive(holder.pid)) return true;
   if (!Number.isFinite(holder.startedAt)) return true;

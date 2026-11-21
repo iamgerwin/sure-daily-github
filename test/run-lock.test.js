@@ -126,6 +126,20 @@ test('acquireRunLock reclaims a live-PID lock without a usable start time', (t) 
   }
 });
 
+// kill(0, 0) and kill(-1, 0) succeed (they signal a process group, or every
+// process), so these must not be read as a live holder
+test('acquireRunLock reclaims a fresh lock whose pid names no single process', (t) => {
+  const filePath = useTmpLockFile(t);
+
+  for (const pid of [0, -1, -process.ppid]) {
+    writeForeignLock(filePath, { pid });
+    const result = acquireRunLock();
+    assert.equal(result.acquired, true, `pid ${pid}`);
+    assert.equal(JSON.parse(fs.readFileSync(filePath, 'utf8')).pid, process.pid);
+    result.release();
+  }
+});
+
 test('acquireRunLock ages a lock dated ahead of the clock by its distance', (t) => {
   const filePath = useTmpLockFile(t);
   process.env.SDG_RUN_LOCK_STALE_MS = '1000';
