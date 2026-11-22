@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { acquireRunLock } from '../src/utils/run-lock.js';
+import { acquireRunLock, lockFilePath } from '../src/utils/run-lock.js';
 import executor from '../src/core/executor.js';
 
 function useTmpLockFile(t) {
@@ -298,4 +298,65 @@ test('acquireRunLock leaves no moved-aside file after reclaiming a stale lock', 
   assert.equal(result.acquired, true);
   assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
   result.release();
+});
+
+const PROJECT_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+
+function withLockEnv(t, value) {
+  const previous = process.env.SDG_RUN_LOCK_FILE;
+  if (value === undefined) delete process.env.SDG_RUN_LOCK_FILE;
+  else process.env.SDG_RUN_LOCK_FILE = value;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SDG_RUN_LOCK_FILE;
+    else process.env.SDG_RUN_LOCK_FILE = previous;
+  });
+}
+
+test('lockFilePath defaults to data/run.lock under the project root', (t) => {
+  withLockEnv(t, undefined);
+  assert.equal(lockFilePath(), path.join(PROJECT_ROOT, 'data', 'run.lock'));
+});
+
+test('lockFilePath keeps the default for a blank or whitespace-only override', (t) => {
+  for (const value of ['', '   ', '\t']) {
+    withLockEnv(t, value);
+    assert.equal(lockFilePath(), path.join(PROJECT_ROOT, 'data', 'run.lock'), JSON.stringify(value));
+  }
+});
+
+test('lockFilePath anchors a relative override to the project root, not the working directory', (t) => {
+  const cwd = process.cwd();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-lock-cwd-'));
+  process.chdir(elsewhere);
+  t.after(() => process.chdir(cwd));
+
+  withLockEnv(t, '  var/run.lock  ');
+  assert.equal(lockFilePath(), path.join(PROJECT_ROOT, 'var', 'run.lock'));
+});
+
+test('lockFilePath keeps an absolute override as given', (t) => {
+  const absolute = path.join(os.tmpdir(), 'sdg-abs', 'run.lock');
+  withLockEnv(t, absolute);
+  assert.equal(lockFilePath(), absolute);
+});
+
+test('callers in different working directories share one lock for a relative override', (t) => {
+  const dir = fs.mkdtempSync(path.join(PROJECT_ROOT, 'data', '.sdg-lock-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  withLockEnv(t, path.relative(PROJECT_ROOT, path.join(dir, 'run.lock')));
+
+  const cwd = process.cwd();
+  t.after(() => process.chdir(cwd));
+
+  const first = acquireRunLock();
+  assert.equal(first.acquired, true);
+  assert.ok(fs.existsSync(path.join(dir, 'run.lock')));
+
+  process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-lock-cwd-')));
+  const second = acquireRunLock();
+  assert.equal(second.acquired, false, 'a run from another directory sees the same lock');
+  assert.equal(second.holder.pid, process.pid);
+
+  first.release();
+  assert.equal(fs.existsSync(path.join(dir, 'run.lock')), false);
 });
