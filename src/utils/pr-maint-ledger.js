@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readLedgerObject } from './ledger-file.js';
+import { resolveDataPath } from './data-path.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEDGER_FILE = path.join(__dirname, '../../data/pr-maint-state.json');
@@ -35,7 +36,7 @@ function normalize(parsed) {
 // the source of truth: deleting this file costs reads, not duplicate writes.
 export class PrMaintLedger {
   constructor({ filePath } = {}) {
-    this.filePath = filePath || process.env.SDG_PR_MAINT_STATE_FILE || DEFAULT_LEDGER_FILE;
+    this.filePath = filePath || resolveDataPath(process.env.SDG_PR_MAINT_STATE_FILE, DEFAULT_LEDGER_FILE);
   }
 
   load() {
