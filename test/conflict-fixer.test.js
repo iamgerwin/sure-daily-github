@@ -9,7 +9,8 @@ process.env.SDG_RUN_LOCK_FILE = path.join(lockDir, 'run.lock');
 process.env.SDG_CONFLICT_FIXER_STATE_FILE = path.join(lockDir, 'conflict-fixer-state.json');
 
 const {
-  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout, gateReason, unmatchedGateEntries
+  default: ConflictFixer, isConflicted, selectRepositories, summarize, parseScanTimeout, gateReason, unmatchedGateEntries,
+  UNKNOWN_RETRIES
 } = await import('../src/core/conflict-fixer.js');
 const { FixerLedger, ledgerKey } = await import('../src/utils/fixer-ledger.js');
 const { default: GitHubClient } = await import('../src/github/client.js');
@@ -842,6 +843,48 @@ test('UNKNOWN re-polls stop when the remaining budget cannot cover the sleep', a
 
   assert.equal(client.calls.list, 2);
   assert.deepEqual(result.results.map(r => r.status), ['unknown']);
+});
+
+test('--pr does not re-poll for another pull request whose mergeability is UNKNOWN', async (t) => {
+  const fx = await fixture(t);
+  const other = { ...fx.pr, number: 9, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' };
+  const { fixer, client } = makeFixer(fx, [fx.pr, other]);
+  let slept = 0;
+  fixer.delay = async () => { slept++; };
+
+  const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr: '7' });
+
+  assert.equal(client.calls.list, 1);
+  assert.equal(slept, 0);
+  assert.deepEqual(result.results.map(r => [r.pr, r.status]), [[7, 'conflicted']]);
+});
+
+test('--pr still re-polls while the targeted pull request is UNKNOWN', async (t) => {
+  const fx = await fixture(t);
+  let polls = 0;
+  const pulls = () => {
+    polls++;
+    const target = polls < 3 ? { ...fx.pr, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' } : fx.pr;
+    return [target, { ...fx.pr, number: 9, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }];
+  };
+  const { fixer, client } = makeFixer(fx, pulls);
+  fixer.delay = async () => {};
+
+  const result = await fixer.run(config(), { scanOnly: true, repos: ['me/demo'], pr: '7' });
+
+  assert.equal(client.calls.list, 3);
+  assert.deepEqual(result.results.map(r => [r.pr, r.status]), [[7, 'conflicted']]);
+});
+
+test('without --pr any same-repository UNKNOWN pull request is still re-polled', async (t) => {
+  const fx = await fixture(t);
+  const other = { ...fx.pr, number: 9, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' };
+  const { fixer, client } = makeFixer(fx, [fx.pr, other]);
+  fixer.delay = async () => {};
+
+  await fixer.run(config(), { scanOnly: true });
+
+  assert.equal(client.calls.list, 1 + UNKNOWN_RETRIES);
 });
 
 test('invalid scan-timeout values are rejected', async (t) => {
