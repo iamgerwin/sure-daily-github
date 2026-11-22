@@ -379,6 +379,22 @@ test('getRequestRetries reads GITHUB_REQUEST_RETRIES and falls back on invalid v
   }
 });
 
+test('getRequestRetries trims whitespace and rejects blank, exponent, hex and fractional values', () => {
+  try {
+    process.env.GITHUB_REQUEST_RETRIES = ' 5 ';
+    assert.equal(getRequestRetries(), 5);
+    process.env.GITHUB_REQUEST_RETRIES = '05';
+    assert.equal(getRequestRetries(), 5);
+    // A blank value must not read as 0 and silently disable retries
+    for (const value of ['', ' ', '\t', '1e9', '0x10', '3.0', '-1', '+3', '2 3']) {
+      process.env.GITHUB_REQUEST_RETRIES = value;
+      assert.equal(getRequestRetries(), 2, `value ${JSON.stringify(value)}`);
+    }
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
 test('getRequestTimeoutMs caps GITHUB_REQUEST_TIMEOUT_MS at the timer limit', () => {
   process.env.GITHUB_REQUEST_TIMEOUT_MS = '9999999999';
   try {
