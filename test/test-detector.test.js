@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { detectTestCommand, runTestCommand, tailLines } from '../src/utils/test-detector.js';
+import { detectTestCommand, runTestCommand, killActiveTests, tailLines } from '../src/utils/test-detector.js';
 
 function repoDir(t, files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-detect-'));
@@ -247,6 +247,56 @@ test('runTestCommand kills processes the command left running after it exits', a
   assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
   await new Promise(resolve => setTimeout(resolve, 1500));
   assert.equal(fs.existsSync(marker), false);
+});
+
+// The conflict fixer and babysitter call killActiveTests from their signal
+// handlers; a test gate it missed would outlive the interrupted run
+test('killActiveTests stops a running test command and everything in its process group', async (t) => {
+  const dir = repoDir(t);
+  const marker = path.join(dir, 'grandchild-ran');
+  const started = Date.now();
+  const running = runTestCommand(`(sleep 1; touch "${marker}") >/dev/null 2>&1 & sleep 30`, { cwd: dir, env: process.env, timeoutMs: 60000 });
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  killActiveTests();
+  const result = await running;
+
+  assert.equal(result.code, null, 'killed by a signal, not a normal exit');
+  assert.equal(result.timedOut, false, 'an interrupt is not reported as a timeout');
+  assert.ok(Date.now() - started < 10000, 'resolved without waiting for the command or its timeout');
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  assert.equal(fs.existsSync(marker), false, 'the backgrounded grandchild was killed with the group');
+});
+
+test('killActiveTests leaves no finished command registered, so later commands run normally', async (t) => {
+  const dir = repoDir(t);
+  const first = await runTestCommand('echo first', { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.deepEqual(first, { code: 0, timedOut: false, output: 'first\n' });
+
+  // Nothing is running: a no-op that must not throw or affect what follows
+  killActiveTests();
+
+  const second = await runTestCommand('echo second', { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.deepEqual(second, { code: 0, timedOut: false, output: 'second\n' });
+});
+
+test('killActiveTests stops every command running at once', async (t) => {
+  const dir = repoDir(t);
+  const started = Date.now();
+  const runs = [
+    runTestCommand('sleep 30', { cwd: dir, env: process.env, timeoutMs: 60000 }),
+    runTestCommand('sleep 30', { cwd: dir, env: process.env, timeoutMs: 60000 })
+  ];
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  killActiveTests();
+  const results = await Promise.all(runs);
+
+  for (const result of results) {
+    assert.equal(result.code, null);
+    assert.equal(result.timedOut, false);
+  }
+  assert.ok(Date.now() - started < 10000, 'both resolved without waiting for their timeout');
 });
 
 test('tailLines keeps the last lines of output', () => {
