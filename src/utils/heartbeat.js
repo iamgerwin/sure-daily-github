@@ -4,11 +4,18 @@ import { fileURLToPath } from 'url';
 import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.join(__dirname, '../..');
 // Anchored to the project root so scripts/health-check.sh finds it without config
-const DEFAULT_HEARTBEAT_FILE = path.join(__dirname, '../../data/scheduler-heartbeat.json');
+const DEFAULT_HEARTBEAT_FILE = path.join(PROJECT_ROOT, 'data/scheduler-heartbeat.json');
 
+// A relative SDG_HEARTBEAT_FILE is resolved against the project root, as
+// scripts/health-check.sh resolves it against the app directory. Resolving it
+// against the working directory would make a scheduler started from anywhere
+// else write a heartbeat the health check never reads, so every check would
+// see a stale file and restart a healthy service.
 export function heartbeatFilePath() {
-  return process.env.SDG_HEARTBEAT_FILE || DEFAULT_HEARTBEAT_FILE;
+  const configured = process.env.SDG_HEARTBEAT_FILE;
+  return configured ? path.resolve(PROJECT_ROOT, configured) : DEFAULT_HEARTBEAT_FILE;
 }
 
 // Minutes an execution may stay in flight before skipped ticks stop refreshing
