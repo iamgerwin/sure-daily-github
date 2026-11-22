@@ -189,6 +189,30 @@ test('countTests does not let template literal text hide a real registration', (
   assert.equal(countTests("const msg = `${void test('a', () => {})}`;\n"), null);
 });
 
+// Issue #43: a quote, backtick or comment opener inside a regex literal must
+// not open a phantom template, string or comment that hides a real registration
+test('countTests does not let regex literal text hide a real registration', () => {
+  assert.equal(countTests("const open = /`/;\nvoid test('real', () => {});\nconst close = /`/;\n"), null);
+  assert.equal(countTests("const q = /'/;\nvoid test('a', () => {});\nconst r = /'/;\n"), null);
+  assert.equal(countTests("const c = /[/*]/;\nvoid test('a', () => {});\nconst d = /*/;\n"), null);
+  assert.equal(countTests("if (ok) x = /`/g.test(s);\nvoid it('a', () => {});\nconst y = /`/i;\n"), null);
+  assert.equal(countTests("function f() { return /`/; }\nvoid test('a', () => {});\nconst g = () => /`/;\n"), null);
+  assert.equal(countTests("const e = /\\/`/;\nvoid test('a', () => {});\nconst h = [/`/];\n"), null);
+});
+
+test('countTests ignores test( mentioned only inside a regex literal', () => {
+  assert.equal(countTests('export const pattern = /test\\(/;\n'), 0);
+  assert.equal(countTests('export const call = (s) => /\\bit\\(/.exec(s);\n'), 0);
+});
+
+test('countTests still reads a division as code, not as a regex', () => {
+  // Division operands on either side keep the code between the slashes visible
+  assert.equal(countTests("const half = total / 2; void test('a', () => {}); const q = n / 4;\n"), null);
+  assert.equal(countTests("const r = (a) / 2 + 'x'.length / 3; void it('a', () => {});\n"), null);
+  // An unterminated regex on its line stops the stripping and fails closed
+  assert.equal(countTests("const broken = /abc\n// test(x)\n"), null);
+});
+
 // A test( inside a template's literal text or a comment is inert, not code
 test('countTests ignores test( mentioned only in template literal text or comments', () => {
   const text = [

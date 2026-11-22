@@ -123,20 +123,59 @@ export function isTestFile(file) {
 
 const blankOut = (text) => text.replace(/[^\n]/g, ' ');
 
-// `text` with comments, '...'/"..." strings and the literal text of `...`
-// templates blanked out (newlines kept), so a test( mentioned there is inert
-// and not mistaken for a registration. ${...} inside a template is code and is
-// kept. An unclosed comment, string or template stops the stripping, so a
+// A `/` after one of these (or at the start) begins a regex literal, since a
+// division needs an operand on its left. `)`, `]`, `}` and `<` are left out:
+// a division after them is plausible, and a closing JSX tag starts with `</`.
+const REGEX_AFTER_PUNCTUATOR = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', ';', '*', '%', '>', '~', '^']);
+const REGEX_AFTER_KEYWORD = /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
+// Stands for a just-closed string, template or regex: an operand, so a `/`
+// after it divides
+const LITERAL = '"';
+
+function startsRegex(prev, out) {
+  if (prev === null || REGEX_AFTER_PUNCTUATOR.has(prev)) return true;
+  return /[\w$]/.test(prev) && REGEX_AFTER_KEYWORD.test(out.trimEnd());
+}
+
+// Index of the `/` closing the regex literal opened at `start`, or -1 when the
+// line ends first. A `/` inside a [...] class does not close it.
+function regexEnd(text, start) {
+  let inClass = false;
+  for (let j = start + 1; j < text.length && text[j] !== '\n'; j++) {
+    if (text[j] === '\\') j++;
+    else if (text[j] === '[') inClass = true;
+    else if (text[j] === ']') inClass = false;
+    else if (text[j] === '/' && !inClass) return j;
+  }
+  return -1;
+}
+
+// `text` with comments, '...'/"..." strings, regex literals and the literal
+// text of `...` templates blanked out (newlines kept), so a test( mentioned
+// there is inert and not mistaken for a registration, and a quote, backtick or
+// `/*` inside a regex (/`/, /[/*]/) cannot open a phantom string, template or
+// comment that hides real code. ${...} inside a template is code and is kept.
+// An unclosed comment, string, template or regex stops the stripping, so a
 // misread keeps the text and fails closed.
 function stripCommentsAndStrings(text) {
   let out = '';
   // Brace depth inside each open ${...}, innermost last
   const interpolations = [];
+  // Last significant code character, which tells a regex from a division
+  let prev = null;
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1];
-    if (ch === '/' && next === '/') {
+    if (ch === '/' && next !== '/' && next !== '*' && startsRegex(prev, out)) {
+      const end = regexEnd(text, i);
+      if (end === -1) return out + text.slice(i);
+      let j = end + 1;
+      while (j < text.length && /[a-z]/i.test(text[j])) j++;
+      out += blankOut(text.slice(i, j));
+      prev = LITERAL;
+      i = j;
+    } else if (ch === '/' && next === '/') {
       const newline = text.indexOf('\n', i);
       const end = newline === -1 ? text.length : newline;
       out += blankOut(text.slice(i, end));
@@ -151,6 +190,7 @@ function stripCommentsAndStrings(text) {
       while (j < text.length && text[j] !== ch && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
       if (j >= text.length || text[j] !== ch) return out + text.slice(i);
       out += blankOut(text.slice(i, j + 1));
+      prev = LITERAL;
       i = j + 1;
     } else if (ch === '`' || (ch === '}' && interpolations.at(-1) === 0)) {
       // Opening a template, or closing a ${...} and resuming its template
@@ -162,15 +202,18 @@ function stripCommentsAndStrings(text) {
       if (j >= text.length) return out + text.slice(i);
       if (text[j] === '`') {
         out += blankOut(text.slice(i, j + 1));
+        prev = LITERAL;
         i = j + 1;
       } else {
         out += blankOut(text.slice(i, j + 2));
         interpolations.push(0);
+        prev = '{';
         i = j + 2;
       }
     } else {
       if (interpolations.length && ch === '{') interpolations[interpolations.length - 1]++;
       if (interpolations.length && ch === '}') interpolations[interpolations.length - 1]--;
+      if (!/\s/.test(ch)) prev = ch;
       out += ch;
       i++;
     }
