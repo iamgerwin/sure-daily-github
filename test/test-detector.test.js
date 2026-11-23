@@ -225,6 +225,15 @@ test('runTestCommand does not kill a command when the timeout exceeds the timer 
   assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' });
 });
 
+test('runTestCommand runs without a time limit when the timeout is missing, zero or invalid', async (t) => {
+  // setTimeout turns a NaN, zero or negative delay into 1ms, which would kill
+  // the command before it finished and report a timeout
+  for (const timeoutMs of [undefined, 0, -1, NaN, 'abc']) {
+    const result = await runTestCommand('sleep 0.2; echo done', { cwd: repoDir(t), env: process.env, timeoutMs });
+    assert.deepEqual(result, { code: 0, timedOut: false, output: 'done\n' }, `timeoutMs: ${String(timeoutMs)}`);
+  }
+});
+
 test('runTestCommand keeps a multibyte character split across two writes intact', async (t) => {
   // "✓" is e2 9c 93; the pause makes the two halves arrive as separate chunks
   const script = 'process.stdout.write(Buffer.from([0xe2, 0x9c])); setTimeout(() => process.stdout.write(Buffer.from([0x93, 0x0a])), 100)';
