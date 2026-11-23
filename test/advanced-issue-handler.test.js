@@ -892,3 +892,39 @@ test('a template label that repeats a repository label is sent once', async () =
   assert.equal(created.length, 1);
   assert.deepEqual(created[0].labels, ['Automated', 'bug']);
 });
+
+// A run started just before midnight crosses it during the pause between
+// repositories; every issue it creates is counted in the day the run reset to,
+// so each one must also be dated in that day
+test('dates every issue of a run from the clock reading that counts it', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-23T23:59:59.000Z') });
+  const { handler, created } = createHandler();
+  handler.delay = async () => t.mock.timers.tick(2000);
+  const cfg = {
+    ...config,
+    contentTemplates: [{ title: 'Daily ${repo} ${date}', body: 'At ${date} ${time} (${timestamp})' }]
+  };
+
+  await handler.processRepositories([repo({ repo: 'one' }), repo({ repo: 'two' })], null, false, cfg);
+
+  assert.equal(created.length, 2);
+  assert.deepEqual(created.map(issue => issue.title), ['Daily one 2026-11-23', 'Daily two 2026-11-23']);
+  assert.equal(created[1].body, 'At 2026-11-23 23:59:59 (2026-11-23T23:59:59.000Z)');
+
+  const state = readState(handler);
+  assert.equal(state.lastDailyReset, '2026-11-23T23:59:59.000Z');
+  assert.equal(state.repositories['me/two'].lastIssueTime, Date.parse('2026-11-23T23:59:59.000Z'));
+});
+
+test('processRepositories takes its clock reading from the caller', async () => {
+  const { handler, created } = createHandler();
+  const at = new Date('2026-03-01T08:30:00.000Z');
+  const cfg = { ...config, general: { timezone: 'Asia/Manila' }, contentTemplates: [{ title: '${date} ${time}', body: 'B' }] };
+
+  await handler.processRepositories([repo()], null, false, cfg, at);
+
+  assert.equal(created[0].title, '2026-03-01 16:30:00');
+  const state = readState(handler);
+  assert.equal(state.lastDailyReset, at.toISOString());
+  assert.equal(state.repositories['me/demo'].lastIssueTime, at.getTime());
+});
