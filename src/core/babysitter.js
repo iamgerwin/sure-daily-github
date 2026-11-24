@@ -10,7 +10,7 @@ import { detectTestCommand, runTestCommand, killActiveTests, tailLines } from '.
 import { BabysitterLedger, MAX_ATTEMPTS, PUSHED_STATE } from '../utils/babysitter-ledger.js';
 import { createReviewEngine } from '../utils/review-engine.js';
 import { killActiveEngines } from '../utils/process.js';
-import { isFreshPushConfig } from './conflict-fixer.js';
+import { isFreshPushConfig, pushConfigListArgs } from './conflict-fixer.js';
 
 // Threat model: the engine runs inside the PR checkout and may execute PR code
 // (e.g. `npm test`), as does the test gate. From the moment the engine starts,
@@ -859,7 +859,7 @@ export class Babysitter {
       await git(['init', '-q', '--bare', pushDir], { cwd: pushDir });
       // Runs with the untrusted clone config, but without any credential
       await git(['push', '-q', pushDir, `${sha}:refs/heads/${headRef}`]);
-      if (!isFreshPushConfig(await run(['config', '--file', path.join(pushDir, 'config'), '--name-only', '--list'], { cwd: pushDir }))) {
+      if (!isFreshPushConfig(await run(pushConfigListArgs(pushDir), { cwd: pushDir }))) {
         return { ok: false, error: 'push repository config tampered' };
       }
 

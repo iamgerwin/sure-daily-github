@@ -8,14 +8,14 @@ const lockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-push-gate-'));
 process.env.SDG_RUN_LOCK_FILE = path.join(lockDir, 'run.lock');
 process.env.SDG_CONFLICT_FIXER_STATE_FILE = path.join(lockDir, 'conflict-fixer-state.json');
 
-const { isFreshPushConfig, distinctRepoCount } = await import('../src/core/conflict-fixer.js');
+const { isFreshPushConfig, pushConfigListArgs, distinctRepoCount } = await import('../src/core/conflict-fixer.js');
 const { runGit } = await import('../src/utils/git.js');
 
 test.after(() => fs.rmSync(lockDir, { recursive: true, force: true }));
 
-// The same command conflict-fixer.js and babysitter.js run on the push repository
+// The same args conflict-fixer.js and babysitter.js list the push repository with
 function listPushConfig(pushDir) {
-  return runGit(['config', '--file', path.join(pushDir, 'config'), '--name-only', '--list'], { cwd: pushDir });
+  return runGit(pushConfigListArgs(pushDir), { cwd: pushDir });
 }
 
 async function initBare(t) {

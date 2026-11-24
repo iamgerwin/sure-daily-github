@@ -26,6 +26,11 @@ const FRESH_PUSH_CONFIG_KEYS = new Set([
   'core.ignorecase', 'core.precomposeunicode', 'core.symlinks'
 ]);
 
+// The listing isFreshPushConfig checks; shared with babysitter.js and the tests
+export function pushConfigListArgs(pushDir) {
+  return ['config', '--file', path.join(pushDir, 'config'), '--name-only', '--list'];
+}
+
 export function isFreshPushConfig({ code, stdout }) {
   if (code !== 0) return false;
   return String(stdout).split('\n').filter(Boolean)
@@ -472,7 +477,7 @@ class ConflictFixer {
       await must(['push', '-q', pushDir, `${mergeSha}:refs/heads/${head}`], untrusted);
 
       // Checked after the untrusted push, which runs with the clone's config
-      if (!isFreshPushConfig(await git(['config', '--file', path.join(pushDir, 'config'), '--name-only', '--list'],
+      if (!isFreshPushConfig(await git(pushConfigListArgs(pushDir),
         { ...untrusted, cwd: pushDir }))) {
         return done('needs-manual-review', { reason: 'push repository config tampered', files });
       }
