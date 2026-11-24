@@ -32,12 +32,21 @@ export function shouldUseColor(stream = process.stdout, env = process.env) {
 }
 
 // Daily log files kept by LOG_RETENTION_DAYS (today included). Unset, zero or
-// anything but a whole number keeps every file, as before.
+// anything but a whole number keeps every file, as before; the latter is
+// reported by invalidRetentionDays.
 export function resolveRetentionDays(value) {
   const text = String(value ?? '').trim();
   if (!/^\d+$/.test(text)) return null;
   const days = Number(text);
   return days >= 1 ? days : null;
+}
+
+// The raw LOG_RETENTION_DAYS when it is set but not whole days ("7d", "-3",
+// "1.5"), so the logger can warn that old daily files are no longer pruned;
+// else null. Zero is a documented way to keep every file, so it is valid.
+export function invalidRetentionDays(value) {
+  const text = String(value ?? '').trim();
+  return text === '' || /^\d+$/.test(text) ? null : value;
 }
 
 // Only the logger's own YYYY-MM-DD.log files; systemd.log, cron.log and other
@@ -56,6 +65,7 @@ export class Logger {
     this.fileErrorReported = false;
     this.lastPrunedDay = null;
     this.reportedInvalidLevel = null;
+    this.reportedInvalidRetention = null;
     this.ensureLogDir();
   }
 
@@ -88,8 +98,16 @@ export class Logger {
 
   // Once per day of writing, so a long-running scheduler keeps pruning without
   // scanning the directory on every line. Read like LOG_LEVEL, after dotenv.
+  // A value that is not whole days is reported once per distinct value (marked
+  // before writing, since the warning's own write() comes back here)
   pruneIfDue(now = new Date()) {
-    const days = resolveRetentionDays(process.env.LOG_RETENTION_DAYS);
+    const raw = process.env.LOG_RETENTION_DAYS;
+    const invalid = invalidRetentionDays(raw);
+    if (invalid !== null && invalid !== this.reportedInvalidRetention) {
+      this.reportedInvalidRetention = invalid;
+      this.write('warn', 'Ignoring LOG_RETENTION_DAYS (expected a whole number of days); keeping every daily log file', { value: invalid });
+    }
+    const days = resolveRetentionDays(raw);
     const today = now.toISOString().split('T')[0];
     if (days === null || this.lastPrunedDay === today) return;
     this.lastPrunedDay = today;
