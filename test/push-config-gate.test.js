@@ -77,8 +77,12 @@ test('an unreadable push repository config fails the push gate', async (t) => {
   assert.notEqual(listed.code, 0);
   assert.equal(isFreshPushConfig(listed), false);
 
+  // git exits non-zero (128) when the --file config does not exist, so the gate
+  // rejects an absent config through its failed-listing check
   fs.rmSync(path.join(pushDir, 'config'));
-  assert.equal(isFreshPushConfig(await listPushConfig(pushDir)), false);
+  const missing = await listPushConfig(pushDir);
+  assert.notEqual(missing.code, 0, `git listed a missing config file:\n${missing.stdout}`);
+  assert.equal(isFreshPushConfig(missing), false);
 });
 
 test('isFreshPushConfig accepts only known init keys, in any case, and rejects a failed listing', () => {
