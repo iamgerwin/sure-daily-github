@@ -18,10 +18,14 @@ function listPushConfig(pushDir) {
   return runGit(pushConfigListArgs(pushDir), { cwd: pushDir });
 }
 
+const emptyTemplateDir = fs.mkdtempSync(path.join(lockDir, 'sdg-template-'));
+
 async function initBare(t) {
   const pushDir = fs.mkdtempSync(path.join(lockDir, 'sdg-push-'));
   t.after(() => fs.rmSync(pushDir, { recursive: true, force: true }));
-  const init = await runGit(['init', '-q', '--bare', pushDir], { cwd: pushDir });
+  // An empty template dir keeps a host GIT_TEMPLATE_DIR or default template from
+  // adding keys (runGit already ignores global and system init.templateDir)
+  const init = await runGit(['init', '-q', '--bare', `--template=${emptyTemplateDir}`, pushDir], { cwd: pushDir });
   assert.equal(init.code, 0, init.stderr);
   return pushDir;
 }
