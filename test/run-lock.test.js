@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { acquireRunLock } from '../src/utils/run-lock.js';
+import { acquireRunLock, staleMs } from '../src/utils/run-lock.js';
+import logger from '../src/utils/logger.js';
 import executor from '../src/core/executor.js';
 
 function useTmpLockFile(t) {
@@ -297,5 +298,62 @@ test('acquireRunLock leaves no moved-aside file after reclaiming a stale lock', 
   const result = acquireRunLock();
   assert.equal(result.acquired, true);
   assert.deepEqual(lockDirEntries(filePath), ['run.lock']);
+  result.release();
+});
+
+function captureWarnings(t) {
+  const warnings = [];
+  const original = logger.warn;
+  logger.warn = (message, meta) => warnings.push({ message, meta });
+  t.after(() => { logger.warn = original; });
+  return warnings;
+}
+
+test('staleMs reads whole milliseconds and ignores surrounding whitespace', (t) => {
+  const warnings = captureWarnings(t);
+  t.after(() => { delete process.env.SDG_RUN_LOCK_STALE_MS; });
+
+  delete process.env.SDG_RUN_LOCK_STALE_MS;
+  assert.equal(staleMs(), 2 * 60 * 60 * 1000);
+  for (const [value, expected] of [['', 7200000], ['   ', 7200000], ['1000', 1000], [' 14400000\n', 14400000]]) {
+    process.env.SDG_RUN_LOCK_STALE_MS = value;
+    assert.equal(staleMs(), expected, JSON.stringify(value));
+  }
+  assert.deepEqual(warnings, []);
+});
+
+test('staleMs keeps the default for an invalid value and warns once per value', (t) => {
+  const warnings = captureWarnings(t);
+  t.after(() => { delete process.env.SDG_RUN_LOCK_STALE_MS; });
+
+  // Each was previously either read loosely (1.5ms, 16ms, 1000ms) or silently
+  // replaced by the default
+  const invalid = ['4h', '1.5', '0x10', '1e3', '-5', '0', '99999999999999999999'];
+  for (const value of invalid) {
+    process.env.SDG_RUN_LOCK_STALE_MS = value;
+    assert.equal(staleMs(), 7200000, value);
+    assert.equal(staleMs(), 7200000, value);
+  }
+  assert.deepEqual(warnings.map(w => w.meta.value), invalid);
+  assert.ok(warnings.every(w => /SDG_RUN_LOCK_STALE_MS/.test(w.message)));
+});
+
+test('acquireRunLock reports an invalid SDG_RUN_LOCK_STALE_MS without contention and holds a live lock for 2 hours', (t) => {
+  const filePath = useTmpLockFile(t);
+  const warnings = captureWarnings(t);
+  process.env.SDG_RUN_LOCK_STALE_MS = '3h';
+
+  const own = acquireRunLock();
+  assert.equal(own.acquired, true);
+  own.release();
+  assert.deepEqual(warnings.map(w => w.meta.value), ['3h']);
+
+  // One hour old: within the default, so a live holder keeps it
+  writeForeignLock(filePath, { startedAt: Date.now() - 60 * 60 * 1000 });
+  assert.equal(acquireRunLock().acquired, false);
+  // Past the default: reclaimed
+  writeForeignLock(filePath, { startedAt: Date.now() - 3 * 60 * 60 * 1000 });
+  const result = acquireRunLock();
+  assert.equal(result.acquired, true);
   result.release();
 });
