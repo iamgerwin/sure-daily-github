@@ -47,7 +47,10 @@ export function fingerprint(pr) {
     pr.checks,
     pr.reviewThreads.map(t => `${t.id}:${t.lastCommentId}:${t.isResolved}`).sort(),
     pr.reviews.map(r => r.id).sort(),
-    pr.labels.filter(l => !MANAGED_LABELS.includes(l)).sort()
+    pr.labels.filter(l => !MANAGED_LABELS.includes(l)).sort(),
+    // Only when some threads were not read, so every other PR keeps the
+    // fingerprint it already has; a new thread past the read ones still wakes it
+    ...(pr.reviewThreadsUnread > 0 ? [pr.reviewThreadsUnread] : [])
   ]));
 }
 
@@ -95,7 +98,11 @@ function waitingNext(pr) {
   if (pr.checks === 'FAILURE') return 'checks are failing';
   if (pr.checks === 'PENDING') return 'waiting for checks';
   const open = pr.reviewThreads.filter(t => !t.isResolved).length;
-  if (open) return `${open} unresolved review thread${open === 1 ? '' : 's'}`;
+  const threads = `${open} unresolved review thread${open === 1 ? '' : 's'}`;
+  // Unread threads may be unresolved, so the PR is not waiting on the merge policy alone
+  const unread = pr.reviewThreadsUnread || 0;
+  if (unread > 0) return `${threads} in the first ${pr.reviewThreads.length}; ${unread} more could not be read`;
+  if (open) return threads;
   return 'waiting for the merge policy (ships in a later release)';
 }
 

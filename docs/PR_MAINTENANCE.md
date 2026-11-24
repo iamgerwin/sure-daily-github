@@ -88,7 +88,8 @@ dashboard handler. Shadow mode also never creates labels, and never re-reads PRs
 
 **Fingerprint.** A PR is only decided again when
 `sha1(headSha, mergeable, mergeStateStatus, checks, thread ids + last comment ids, review ids, labels − managed labels)`
-changes, the mode changes, or its managed labels differ from what the ledger recorded after our own last writes (so a
+(plus the number of review threads past the first 100 the snapshot reads, only when there are any, so a new thread
+there still wakes the PR and its status comment says those threads could not be read) changes, the mode changes, or its managed labels differ from what the ledger recorded after our own last writes (so a
 managed label someone else added or removed is reconciled). `checks` is computed from the check contexts *without*
 `sdg/merge-policy`, and the sticky comment isn't part of the snapshot, so none of our own writes wake a PR. `checks` is
 `SUCCESS` only when every context passes the way a required status check does (`SUCCESS`, `NEUTRAL` or `SKIPPED`); a

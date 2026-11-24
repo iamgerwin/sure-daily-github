@@ -45,6 +45,7 @@ const SNAPSHOT_QUERY = `
           author { login }
           labels(first: 50) { nodes { name } }
           reviewThreads(first: 100) {
+            totalCount
             nodes {
               id
               isResolved
@@ -146,6 +147,16 @@ export function mergePolicyState(contexts = []) {
   return contexts.find(c => c?.context === MERGE_POLICY_CONTEXT)?.state || null;
 }
 
+// Threads past the first 100 the snapshot reads. Those are the newest, so
+// without this count a new thread or an unresolved one there would neither
+// wake the PR nor show in its status comment. A response without totalCount
+// is treated as complete.
+export function unreadCount(connection) {
+  const read = connection?.nodes?.length || 0;
+  const total = connection?.totalCount;
+  return Number.isInteger(total) && total > read ? total - read : 0;
+}
+
 export function normalizePullRequest(node) {
   const contexts = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
   return {
@@ -165,6 +176,7 @@ export function normalizePullRequest(node) {
       author: t.opener?.nodes?.[0]?.author?.login || null,
       lastCommentId: t.latest?.nodes?.[0]?.id || null
     })),
+    reviewThreadsUnread: unreadCount(node.reviewThreads),
     reviews: (node.reviews?.nodes || []).map(r => ({ id: r.id, state: r.state, author: r.author?.login || null })),
     checks: rollupState(contexts),
     mergePolicy: mergePolicyState(contexts)

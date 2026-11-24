@@ -237,6 +237,11 @@ test('fingerprint ignores managed labels but sees human labels, pushes, threads 
   const withThread = fingerprint(pr(1, { reviewThreads: [thread] }));
   assert.notEqual(withThread, base);
   assert.notEqual(fingerprint(pr(1, { reviewThreads: [{ ...thread, lastCommentId: 'C2' }] })), withThread);
+  // Unread threads only enter the fingerprint when there are some, so other PRs keep theirs
+  assert.equal(fingerprint(pr(1, { reviewThreads: [thread], reviewThreadsUnread: 0 })), withThread);
+  const overflow = fingerprint(pr(1, { reviewThreads: [thread], reviewThreadsUnread: 3 }));
+  assert.notEqual(overflow, withThread);
+  assert.notEqual(fingerprint(pr(1, { reviewThreads: [thread], reviewThreadsUnread: 4 })), overflow);
 });
 
 test('fingerprint is stable across label order and unaffected by our own merge-policy status', () => {
