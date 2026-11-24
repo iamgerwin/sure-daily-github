@@ -26,6 +26,16 @@ async function initBare(t) {
   return pushDir;
 }
 
+// Proves the listing itself succeeded and shows the planted key, so a false
+// from the gate comes from that key rather than from a failed listing
+async function listPlanted(pushDir, plantedKey) {
+  const listed = await listPushConfig(pushDir);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.ok(listed.stdout.split('\n').includes(plantedKey.toLowerCase()),
+    `expected ${plantedKey} in the listing:\n${listed.stdout}`);
+  return listed;
+}
+
 test('the config of a freshly initialized bare repository passes the push gate', async (t) => {
   const pushDir = await initBare(t);
   const listed = await listPushConfig(pushDir);
@@ -46,7 +56,7 @@ for (const [key, value] of [
     const pushDir = await initBare(t);
     const set = await runGit(['config', '--file', path.join(pushDir, 'config'), key, value], { cwd: pushDir });
     assert.equal(set.code, 0, set.stderr);
-    assert.equal(isFreshPushConfig(await listPushConfig(pushDir)), false);
+    assert.equal(isFreshPushConfig(await listPlanted(pushDir, key)), false);
   });
 }
 
