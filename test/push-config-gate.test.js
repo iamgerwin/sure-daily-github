@@ -63,11 +63,11 @@ for (const [key, value] of [
 test('a planted [include] or [includeIf] section fails the push gate', async (t) => {
   const pushDir = await initBare(t);
   fs.appendFileSync(path.join(pushDir, 'config'), '[include]\n\tpath = /tmp/planted.gitconfig\n');
-  assert.equal(isFreshPushConfig(await listPushConfig(pushDir)), false);
+  assert.equal(isFreshPushConfig(await listPlanted(pushDir, 'include.path')), false);
 
   const other = await initBare(t);
   fs.appendFileSync(path.join(other, 'config'), '[includeIf "gitdir:/"]\n\tpath = /tmp/planted.gitconfig\n');
-  assert.equal(isFreshPushConfig(await listPushConfig(other)), false);
+  assert.equal(isFreshPushConfig(await listPlanted(other, 'includeIf.gitdir:/.path')), false);
 });
 
 test('an unreadable push repository config fails the push gate', async (t) => {
