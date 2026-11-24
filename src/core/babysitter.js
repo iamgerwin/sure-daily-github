@@ -11,6 +11,7 @@ import { BabysitterLedger, MAX_ATTEMPTS, PUSHED_STATE } from '../utils/babysitte
 import { createReviewEngine } from '../utils/review-engine.js';
 import { killActiveEngines } from '../utils/process.js';
 import { isFreshPushConfig } from './conflict-fixer.js';
+import { ATTRIBUTION_PATTERN } from './policy.js';
 
 // Threat model: the engine runs inside the PR checkout and may execute PR code
 // (e.g. `npm test`), as does the test gate. From the moment the engine starts,
@@ -25,7 +26,12 @@ const PUSH_BLOCKED_PROTOCOLS = ['ext', 'file', 'git', 'ssh'];
 
 // Appended to every comment babysit posts so its own replies are never triaged
 export const REPLY_MARKER = '<!-- sdg-babysit -->';
-export const ATTRIBUTION_PATTERN = /Co-Authored-By|Generated with/i;
+// The same attribution rule pr-maint's text-safety check applies: co-author
+// trailers, "Generated with" footers, and any line naming Claude, Anthropic or
+// the robot emoji
+export { ATTRIBUTION_PATTERN };
+
+const DEFAULT_FIX_SUBJECT = 'fix: address review feedback';
 
 const ACTION_STATES = { fix: 'addressed', defer: 'deferred', wontfix: 'wontfix', note: 'noted' };
 const STATE_LABELS = { addressed: 'fixed', deferred: 'deferred', wontfix: "won't fix", noted: 'noted' };
@@ -63,14 +69,19 @@ export function getBabysitExitCode(result) {
   return result.summary?.failed > 0 ? 1 : 0;
 }
 
-// Drops Co-Authored-By trailers and "Generated with" footers from a commit message
+// Drops every attribution line (see ATTRIBUTION_PATTERN) from a commit
+// message. A dropped subject is replaced by the default one rather than
+// promoting the first body line, and a message with nothing left gets it too.
 export function stripAttribution(message) {
-  const cleaned = String(message)
-    .split('\n')
-    .filter(line => !ATTRIBUTION_PATTERN.test(line))
+  const [subject, ...body] = String(message).replace(/^\s+/, '').split('\n');
+  const keep = line => !ATTRIBUTION_PATTERN.test(line);
+  const lines = keep(subject) ? [subject, ...body] : [DEFAULT_FIX_SUBJECT, '', ...body];
+  const cleaned = lines
+    .filter(keep)
     .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
     .replace(/\s+$/, '');
-  return cleaned ? `${cleaned}\n` : 'fix: address review feedback\n';
+  return `${cleaned || DEFAULT_FIX_SUBJECT}\n`;
 }
 
 // GitHub App logins end in "[bot]", which a mention must leave off
