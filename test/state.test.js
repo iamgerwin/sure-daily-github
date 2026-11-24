@@ -288,6 +288,19 @@ test('getPeriodKeys keeps the repeated fall-back hour as two hourly windows', ()
   assert.equal(sm.getPeriodKeys(tz, new Date('2026-11-01T07:00:00Z')).hourly, '2026-11-01T02');
 });
 
+test('getPeriodKeys names the midnight hour 00 on every supported Node version', () => {
+  const sm = new StateManager({ filePath: tmpStateFile() });
+  // Node 18 resolves hour12: false to h24 and would key this hour T24
+  assert.deepEqual(sm.getPeriodKeys('UTC', new Date('2026-10-15T00:10:00Z')), {
+    hourly: '2026-10-15T00',
+    daily: '2026-10-15',
+    weekly: '2026-W42'
+  });
+  // Local midnight in a non-UTC timezone (16:30Z is 00:30 on Oct 15 in Asia/Manila)
+  assert.equal(sm.getPeriodKeys('Asia/Manila', new Date('2026-10-14T16:30:00Z')).hourly, '2026-10-15T00');
+  assert.equal(sm.getPeriodKeys('UTC', new Date('2026-10-14T23:59:59Z')).hourly, '2026-10-14T23');
+});
+
 test('getPeriodKeys leaves spring-forward and offset-free hours unchanged', () => {
   const sm = new StateManager({ filePath: tmpStateFile() });
   // 2026-03-08: 02:00 EST jumps to 03:00 EDT, no hour repeats

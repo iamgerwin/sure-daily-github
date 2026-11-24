@@ -11,6 +11,11 @@ const DEFAULT_STATE_FILE = path.join(__dirname, '../../data/state.json');
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isCount = (value) => Number.isInteger(value) && value >= 0;
 
+// Hours 00-23. `hour12: false` resolves to h24 on Node 18 (pre-2023 ECMA-402),
+// which renders the midnight hour as "24": the hourly window key would then
+// depend on the Node version (T24 there, T00 on newer releases)
+const HOUR_CYCLE = 'h23';
+
 export class StateManager {
   constructor(options = {}) {
     this.filePath = options.filePath || process.env.SDG_STATE_FILE || DEFAULT_STATE_FILE;
@@ -120,7 +125,7 @@ export class StateManager {
   getPeriodKeys(timezone = 'UTC', now = new Date()) {
     // Use Intl to format parts in timezone
     const fmt = (opts) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, ...opts });
-    const parts = Object.fromEntries(fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false }).formatToParts(now).map(p => [p.type, p.value]));
+    const parts = Object.fromEntries(fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: HOUR_CYCLE }).formatToParts(now).map(p => [p.type, p.value]));
     const y = parts.year;
     const m = parts.month;
     const d = parts.day;
@@ -165,7 +170,7 @@ export class StateManager {
       const other = new Date(now.getTime() + deltaMin * 60 * 1000);
       if (this.getUtcOffset(timezone, other) === offset) continue;
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
+        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: HOUR_CYCLE
       }).formatToParts(other).map(p => [p.type, p.value]));
       if (`${parts.year}-${parts.month}-${parts.day}T${parts.hour}` === hourKey) return true;
     }
