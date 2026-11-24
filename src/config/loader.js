@@ -150,9 +150,19 @@ function validateContentTemplate(template, label, errors) {
   validateTemplateText(template.body, `${label}.body`, errors);
 }
 
-// Where commands without --config read the configuration (and `init` writes it)
+const PROJECT_ROOT = path.join(__dirname, '../..');
+
+// Where commands without --config read the configuration (and `init` writes it).
+// A relative CONFIG_PATH (the shipped .env.example uses ./config/config.yaml)
+// is resolved against the project root, where .env lives, not the caller's
+// working directory: otherwise the scheduler, cron and a shell in another
+// directory would each read a different file, or none. Surrounding whitespace
+// is ignored and a blank value falls back to the default.
 export function defaultConfigPath() {
-  return process.env.CONFIG_PATH || path.join(__dirname, '../../config/config.yaml');
+  const configured = String(process.env.CONFIG_PATH ?? '').trim();
+  return configured
+    ? path.resolve(PROJECT_ROOT, configured)
+    : path.join(PROJECT_ROOT, 'config/config.yaml');
 }
 
 // Used when the config has no contentTemplate. Shared by identity so advanced

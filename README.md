@@ -143,7 +143,7 @@ sure-daily-github pr-maint [--mode shadow|act|autonomous] [--dry-run] [--repo ow
 sure-daily-github --help            # Show all commands
 ```
 
-Every command accepts `--config <path>`; without it they read `CONFIG_PATH` or `config/config.yaml` in the project root, which is also where `init` writes. The scheduler (`start`) is covered in
+Every command accepts `--config <path>`; without it they read `CONFIG_PATH` (a relative value is resolved against the project root, not the working directory) or `config/config.yaml` in the project root, which is also where `init` writes. The scheduler (`start`) is covered in
 [docs/SCHEDULER.md](./docs/SCHEDULER.md) and [docs/SCHEDULER_SETUP.md](./docs/SCHEDULER_SETUP.md).
 
 ### Babysit
