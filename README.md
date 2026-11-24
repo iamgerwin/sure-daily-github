@@ -166,7 +166,9 @@ hunks keep the newer change; `conflictFixer.sourceHunks` (`push` | `claude` |
 `escalate`) can send them to manual review instead. Test files
 (`test/**`, `__tests__/**`, `*.test.js`, `*.spec.js`) are merged as a union of
 both sides, and a test-count guard leaves the PR for review if a resolved test
-file has fewer tests than either parent. Nothing runs until a repository is
+file has fewer tests than either parent; `.test`/`.spec` files ending in
+`.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts` or `.tsx` are test files too.
+Nothing runs until a repository is
 allowed in the `conflictFixer:` block (default: empty allowlist). Runs are
 idempotent via the run lock and a per-PR head-SHA ledger. See
 [docs/CONFLICT_FIXER.md](./docs/CONFLICT_FIXER.md).
