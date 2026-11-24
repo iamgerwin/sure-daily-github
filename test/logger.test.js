@@ -68,7 +68,8 @@ test('an unknown LOG_LEVEL is warned about once per value, in the console and th
       withLogLevel('verbose', () => fileLogger.info('third'));
       withLogLevel('debug', () => fileLogger.info('fourth'));
     });
-    const warnings = lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line));
+    // Warnings go to stderr (console.error), info lines to stdout
+    const warnings = lines.error.filter(line => /Ignoring LOG_LEVEL/.test(line));
     assert.equal(warnings.length, 2);
     assert.match(warnings[0], /\[WARN\].*logging at info.*"value":"deubg"/);
     assert.match(warnings[1], /"value":"verbose"/);
