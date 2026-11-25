@@ -521,6 +521,28 @@ test('dry run triages and reports planned actions without pushing, replying, or 
   assert.equal(remote.remote('rev-parse', 'refs/heads/feature'), remote.headSha);
 });
 
+test('dry run lists comments whose triage batch could not start as undecided', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const { client, calls } = stubClient({ pulls: { 7: pull(remote.headSha) }, reviewComments: [inlineAlice, inlineBot] });
+  // The first batch was triaged; the engine could not be started for the second
+  const engine = {
+    triage: async () => ({
+      ok: true,
+      decisions: [{ id: 'review_comment:11', action: 'fix', reasoning: 'because', plan: 'plan' }],
+      batchFailures: [{ ids: ['review_comment:12'], infra: true, error: 'spawn opencode ENOENT' }]
+    }),
+    implement: async () => { throw new Error('dry run must not implement'); }
+  };
+
+  const result = await babysitter(remote, client, engine).execute(makeConfig(), { dryRun: true });
+  const pr = result.results[0];
+  assert.deepEqual(pr.planned.map(p => p.id), ['review_comment:11']);
+  assert.deepEqual(pr.undecided, ['review_comment:12']);
+  assert.equal(calls.replies.length, 0);
+  assert.equal(fs.existsSync(state.ledgerFile), false);
+});
+
 test('the temporary clone is removed after each pull request', async (t) => {
   useTmpState(t);
   const remote = setupRemote();
