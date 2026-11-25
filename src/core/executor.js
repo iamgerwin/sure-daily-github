@@ -43,6 +43,15 @@ export function randomizationCountsIgnoredReason(cfg) {
   return null;
 }
 
+// No handler reads contentTemplate.labels: simple issue mode labels issues
+// from each repository's labels, and advanced issue mode takes only the title
+// and body from contentTemplate (labels come from contentTemplates[].labels).
+// A config that sets them would otherwise validate and silently drop them.
+export function contentTemplateLabelsIgnored(cfg) {
+  const labels = cfg?.contentTemplate?.labels;
+  return labels !== undefined && labels !== null;
+}
+
 // A run that completes but fails some repositories must still exit non-zero,
 // otherwise cron and systemd report every failed commit/issue as a success
 export function getRunExitCode(result) {

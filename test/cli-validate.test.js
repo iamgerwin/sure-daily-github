@@ -82,3 +82,19 @@ test('validate does not warn when conflictFixer list entries match configured re
   assert.doesNotMatch(validate('1', ['conflictFixer:', '  allowlist: ["ME/Demo"]']), UNMATCHED);
   assert.doesNotMatch(validate('1'), UNMATCHED);
 });
+
+const TEMPLATE_LABELS = /^ {3}⚠️ {2}contentTemplate\.labels is not used: /m;
+
+test('validate warns that contentTemplate.labels is not used in commit or issue mode', () => {
+  const extra = ['contentTemplate:', '  title: "Daily"', '  labels: ["daily"]'];
+  assert.match(validate('1', extra), TEMPLATE_LABELS);
+  assert.match(validate('1', extra, ['  mode: "issue"']), TEMPLATE_LABELS);
+  assert.match(validate('{ min: 2, max: 5 }', extra, ['  mode: "issue"']), TEMPLATE_LABELS);
+});
+
+test('validate does not warn about labels a contentTemplate does not set', () => {
+  assert.doesNotMatch(validate('1', ['contentTemplate:', '  title: "Daily"'], ['  mode: "issue"']), TEMPLATE_LABELS);
+  assert.doesNotMatch(validate('1', [
+    'contentTemplates:', '  - title: "Bug"', '    labels: ["bug"]'
+  ], ['  mode: "issue"']), TEMPLATE_LABELS);
+});

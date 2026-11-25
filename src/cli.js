@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync } from 'fs';
-import executor, { describeFailures, describeRunMode, getRunExitCode, randomizationCountsIgnoredReason } from './core/executor.js';
+import executor, { describeFailures, describeRunMode, getRunExitCode, randomizationCountsIgnoredReason, contentTemplateLabelsIgnored } from './core/executor.js';
 import scheduler from './core/scheduler.js';
 import ConflictFixer, { distinctRepoCount, parseScanTimeout, unmatchedGateEntries } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
@@ -427,6 +427,10 @@ program
       
       if (cfg.repositorySelection?.strategy) {
         console.log(`   Strategy: ${cfg.repositorySelection.strategy}`);
+      }
+
+      if (contentTemplateLabelsIgnored(cfg)) {
+        console.log('   ⚠️  contentTemplate.labels is not used: issues get each repository\'s labels (and contentTemplates[].labels in advanced issue mode)');
       }
 
       // A mistyped entry validates but never matches, so fix-conflicts would

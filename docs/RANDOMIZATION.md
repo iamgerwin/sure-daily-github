@@ -134,7 +134,7 @@ randomization:
   perfTitles: ["Slow dashboard query"]
 ```
 
-- `title` and `body` are optional strings. Without a list, the `contentTemplate` block's `title` and `body` are used instead; its `labels`, if any, are ignored, as in simple issue mode. Without either (or for a missing field), the issue is titled `Automated Issue - <date> <time>` and gets a short default body naming the repository.
+- `title` and `body` are optional strings. Without a list, the `contentTemplate` block's `title` and `body` are used instead; its `labels`, if any, are ignored, as in simple issue mode (`validate` warns when they are set). Without either (or for a missing field), the issue is titled `Automated Issue - <date> <time>` and gets a short default body naming the repository.
 - A `contentTemplate` used this way gets every placeholder in the table below, not only the four the simple issue handler fills.
 - `labels` are added to the issue together with the repository's `labels` (default `["automated"]`). A label listed in both is sent once (names compare case-insensitively, as on GitHub; the first spelling wins).
 - `bugTitles`, `featureTitles`, `docTitles` and `perfTitles` feed the `${randomBug…}` style placeholders below. A missing or empty list falls back to `General bug`, `General feature`, `General documentation` and `General performance`.
