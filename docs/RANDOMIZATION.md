@@ -158,6 +158,8 @@ Values are inserted literally, and any other `${name}` is left as written.
 
 The simple issue handler (fixed targets) and commit mode always use `contentTemplate`, and there it supports only `${date}`, `${time}`, `${timestamp}` and `${repo}`.
 
+GitHub rejects an issue whose title is over 256 characters or whose body is over 65,536. In both issue modes the filled-in title and body are therefore cut to fit: a title ends with `...` and a body with a truncation note. A long template or title-list entry then still creates its issue instead of failing on every run.
+
 ## Repository Selection Strategies
 
 Control which repositories are processed during each execution.

@@ -204,6 +204,22 @@ test('generateIssueContent leaves ${repo} as written when no repository is given
   assert.equal(content.title, '${repo}');
 });
 
+test('generateIssueContent caps a rendered title and body at GitHub\'s issue limits', () => {
+  const { handler } = createHandler();
+
+  const content = handler.generateIssueContent(
+    { title: `${'Long title '.repeat(30)}\${date}`, body: 'x'.repeat(70000) },
+    'UTC',
+    new Date('2026-10-15T00:00:00Z')
+  );
+
+  assert.equal(content.title.length <= 256, true);
+  assert.ok(content.title.startsWith('Long title Long title'));
+  assert.ok(content.title.endsWith('...'));
+  assert.ok(content.body.length <= 65536);
+  assert.match(content.body, /truncated to fit GitHub's issue size limit\)$/);
+});
+
 test('createDailyIssue counts an issue in the day it is dated, not the day the API call returns', async () => {
   const { handler, calls } = createHandler();
   const lastSecond = new Date('2026-10-14T15:59:59Z'); // 23:59:59 in Asia/Manila

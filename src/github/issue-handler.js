@@ -1,4 +1,5 @@
 import GitHubClient, { authFailureMessage } from './client.js';
+import { fitIssueTitle, fitIssueBody } from './issue-limits.js';
 import state from '../utils/state.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
@@ -40,7 +41,7 @@ class IssueHandler {
       return repo ? rendered.replace(/\$\{repo\}/g, repo) : rendered;
     };
 
-    return { title: fill(title), body: fill(body) };
+    return { title: fitIssueTitle(fill(title)), body: fitIssueBody(fill(body)) };
   }
 
   async createIssue(owner, repo, title, body, labels = []) {
