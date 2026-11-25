@@ -26,7 +26,7 @@ Never auto-pushed:
 Other guarantees:
 
 - Each run uses throwaway clones in the OS temp directory, which are deleted afterwards.
-- Your global and system git config (hooks, signing, merge drivers) is ignored, and every git command runs with `core.hooksPath` pointed at the null device on the command line, so hooks planted by the tested code never run.
+- Your global and system git config (hooks, signing, merge drivers) is ignored, as are any `GIT_*` variables inherited from the calling shell (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_CONFIG_PARAMETERS`, ...), so a run started from a git hook or alias still works only in its own temporary clone, and every git command runs with `core.hooksPath` pointed at the null device on the command line, so hooks planted by the tested code never run.
 - The GitHub token never appears in URLs, `.git/config`, the process list or logs. Tests run with only `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_*` and `CI=true` in their environment; every other variable (tokens, cloud credentials) is dropped.
 - After the tests have run, the clone's config is no longer trusted: the authenticated push is made from a fresh repository that receives only the pinned merge commit.
 
