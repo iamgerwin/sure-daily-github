@@ -121,6 +121,68 @@ test('array comments or prs sections are replaced so new records survive a reloa
   assert.equal(reloaded.getPr('me/demo#8').forkNotice.replyId, 4);
 });
 
+test('malformed deliveries and push intents are dropped on load and reported once', (t) => {
+  const filePath = tmpLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const goodDelivery = { owner: 'me', repo: 'demo', pr: 7, keys: [key], states: {}, attempts: 0 };
+  const goodIntent = { owner: 'me', repo: 'demo', pr: 7, expectedSha: 'abc' };
+  fs.writeFileSync(filePath, JSON.stringify({
+    version: 1,
+    comments: { [key]: { state: 'addressed', pr: 7 }, odd: 'kept as written' },
+    deliveries: {
+      good: goodDelivery,
+      noKeys: { owner: 'me', repo: 'demo', pr: 7 },
+      stringKeys: { owner: 'me', repo: 'demo', pr: 7, keys: 'me/demo#7/x' },
+      numberKey: { owner: 'me', repo: 'demo', pr: 7, keys: [1] },
+      nothing: null,
+      text: 'reply'
+    },
+    pushIntents: { 'me/demo#7': goodIntent, 'me/demo#8': null, 'me/demo#9': [] }
+  }));
+
+  const messages = [];
+  const originalError = console.error;
+  console.error = (...args) => messages.push(args.join(' '));
+  t.after(() => { console.error = originalError; });
+
+  const ledger = new BabysitterLedger({ filePath });
+  assert.deepEqual(ledger.getDeliveries(), [{ id: 'good', ...goodDelivery }]);
+  assert.deepEqual(ledger.getPushIntents(), [{ prKey: 'me/demo#7', ...goodIntent }]);
+  // Comment records are never dropped: losing one would answer it again
+  assert.equal(ledger.getComment('odd'), 'kept as written');
+  assert.equal(ledger.shouldProcess(key), false);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /deliveries: 5, pushIntents: 2/);
+  assert.ok(messages[0].includes(filePath));
+
+  // The next save writes only the well-formed records, so the warning stops
+  ledger.completeDelivery('good', 42);
+  messages.length = 0;
+  const reloaded = new BabysitterLedger({ filePath });
+  assert.deepEqual(reloaded.getDeliveries(), []);
+  assert.equal(reloaded.getPushIntent('me/demo#7').expectedSha, 'abc');
+  assert.equal(reloaded.getComment(key).replyId, 42);
+  assert.deepEqual(messages, []);
+});
+
+test('a well-formed ledger loads without a malformed-record warning', (t) => {
+  const filePath = tmpLedgerPath();
+  const ledger = new BabysitterLedger({ filePath });
+  ledger.recordOutcome(key, { state: PUSHED_STATE, pr: 7 }, { save: false });
+  ledger.addDeliveries([{ id: 'd1', owner: 'me', repo: 'demo', pr: 7, keys: [key], states: { [key]: 'addressed' } }]);
+  ledger.recordPushIntent('me/demo#7', { owner: 'me', repo: 'demo', pr: 7, expectedSha: 'abc' });
+
+  const messages = [];
+  const originalError = console.error;
+  console.error = (...args) => messages.push(args.join(' '));
+  t.after(() => { console.error = originalError; });
+
+  const reloaded = new BabysitterLedger({ filePath });
+  assert.equal(reloaded.getDeliveries().length, 1);
+  assert.equal(reloaded.getPushIntents().length, 1);
+  assert.deepEqual(messages, []);
+});
+
 test('the ledger path defaults to SDG_BABYSITTER_STATE_FILE', (t) => {
   const filePath = tmpLedgerPath();
   process.env.SDG_BABYSITTER_STATE_FILE = filePath;

@@ -270,7 +270,12 @@ backed up to `.bak` and the ledger starts fresh.
 | `failed`    | triage, the engine (exit or timeout), tests, or a reported `failed` fix | retried once more; after 2 failures the thread gets a "leaving this for manual follow-up" reply and is left alone |
 
 Queued replies live under `deliveries`, unreconciled pushes under
-`pushIntents`, and the round-robin position under `cursor`. Some failures are not charged against a comment and leave it
+`pushIntents`, and the round-robin position under `cursor`. A queued reply
+without its list of comment `keys`, or a delivery or push intent that is not an
+object (a hand edit or a damaged file), is dropped when the ledger loads and
+reported on stderr, so it cannot abort every later scan; comment entries are
+never dropped this way, since losing one would answer its comment again.
+Some failures are not charged against a comment and leave it
 pending: an engine that cannot be spawned (`E2BIG`, `ENOENT`, `EACCES`), a
 missing or invalid implement report, an item the report left out, a push
 rejected because the branch moved, and an interrupt. A failure in the

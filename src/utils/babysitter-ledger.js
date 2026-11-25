@@ -22,6 +22,24 @@ function emptyLedger() {
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
+// A delivery is walked by its comment keys on every retry, settle and failure;
+// one without a keys array would throw there and abort every later scan
+const isDelivery = (value) => isObject(value)
+  && Array.isArray(value.keys) && value.keys.every(key => typeof key === 'string');
+
+// The records of a pending-work section (deliveries, push intents) that later
+// code can read, and how many were dropped. A record that is not an object, or
+// a delivery without its keys, comes from a hand edit or a damaged file and can
+// never be completed; kept, it would be retried (and throw) on every scan.
+// Comment records are not filtered this way: dropping one would answer its
+// comment a second time.
+function wellFormed(section, isRecord = isObject) {
+  if (!isObject(section)) return { records: {}, dropped: 0 };
+  const entries = Object.entries(section);
+  const records = Object.fromEntries(entries.filter(([, value]) => isRecord(value)));
+  return { records, dropped: entries.length - Object.keys(records).length };
+}
+
 // Per-comment memory for babysit: which review comments were handled, how, and
 // with which reply/commit, so a comment is answered exactly once across runs
 export class BabysitterLedger {
@@ -37,14 +55,24 @@ export class BabysitterLedger {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error('ledger is not a JSON object');
       }
+      const sections = {
+        deliveries: wellFormed(parsed.deliveries, isDelivery),
+        pushIntents: wellFormed(parsed.pushIntents)
+      };
+      const dropped = Object.entries(sections)
+        .filter(([, section]) => section.dropped > 0)
+        .map(([name, section]) => `${name}: ${section.dropped}`);
+      if (dropped.length) {
+        console.error(`Dropped malformed babysitter ledger records (${dropped.join(', ')}) from ${this.filePath}; the next save removes them`);
+      }
       return {
         version: 1,
         // An array passes a typeof check, but JSON.stringify drops the string keys
         // written to it, so every record would vanish on save and be redone
         comments: isObject(parsed.comments) ? parsed.comments : {},
         prs: isObject(parsed.prs) ? parsed.prs : {},
-        deliveries: isObject(parsed.deliveries) ? parsed.deliveries : {},
-        pushIntents: isObject(parsed.pushIntents) ? parsed.pushIntents : {},
+        deliveries: sections.deliveries.records,
+        pushIntents: sections.pushIntents.records,
         cursor: isObject(parsed.cursor) ? parsed.cursor : null
       };
     } catch (error) {
