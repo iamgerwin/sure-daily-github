@@ -16,6 +16,7 @@ import {
   runImplement,
   parseTriage,
   parseImplementReport,
+  parseEngineJson,
   createReviewEngine
 } from '../src/utils/review-engine.js';
 import { runProcess, killActiveEngines } from '../src/utils/process.js';
@@ -284,6 +285,55 @@ test('parseImplementReport never settles an id reported with conflicting statuse
     assert.deepEqual(report.missing, ['a']);
     assert.deepEqual(report.conflicting, ['a']);
   }
+});
+
+test('parseEngineJson unwraps a whole-file code fence and a byte order mark', () => {
+  const json = '{"comments":[{"id":"a","note":"use ``` here"}]}';
+  const expected = { comments: [{ id: 'a', note: 'use ``` here' }] };
+  for (const raw of [
+    json,
+    `﻿${json}`,
+    `\`\`\`json\n${json}\n\`\`\``,
+    `\n\`\`\`JSON \n${json}\n\`\`\`\n\n`,
+    `﻿\`\`\`\n${json}\n\`\`\``,
+    `~~~json\n${json}\n~~~`,
+    `\`\`\`\`json\n${json}\n\`\`\`\``,
+    `\`\`\`json\r\n${json}\r\n\`\`\``
+  ]) {
+    assert.deepEqual(parseEngineJson(raw), expected, JSON.stringify(raw));
+  }
+});
+
+test('parseEngineJson still rejects prose around a fence and unclosed or mismatched fences', () => {
+  for (const raw of [
+    `Here is the triage:\n\`\`\`json\n{"comments":[]}\n\`\`\``,
+    `\`\`\`json\n{"comments":[]}\n\`\`\`\nDone.`,
+    '```json\n{"comments":[]}',
+    '```json\n{"comments":[]}\n~~~',
+    '```json\n{"comments":[]}\n``',
+    'garbage'
+  ]) {
+    assert.throws(() => parseEngineJson(raw), SyntaxError, JSON.stringify(raw));
+  }
+});
+
+test('parseTriage and parseImplementReport accept fenced engine output and validate it as before', () => {
+  const triage = parseTriage(`\`\`\`json\n${JSON.stringify({
+    comments: [{ id: 'a', action: 'fix', reasoning: 'real bug', plan: 'patch it' }]
+  })}\n\`\`\``, ['a', 'b']);
+  assert.equal(triage.ok, true);
+  assert.deepEqual(triage.decisions.map(d => [d.id, d.action]), [['a', 'fix']]);
+  assert.deepEqual(triage.missing, ['b']);
+
+  const invalid = parseTriage('```json\n{"comments":[{"id":"a","action":"maybe","reasoning":"x"}]}\n```', ['a']);
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.error, /triage action for a/);
+
+  const report = parseImplementReport(`﻿\`\`\`json\n${JSON.stringify({
+    fixes: [{ id: 'a', status: 'implemented', summary: 'done' }]
+  })}\n\`\`\`\n`, ['a']);
+  assert.deepEqual(report.fixes.map(f => [f.id, f.status]), [['a', 'implemented']]);
+  assert.equal(parseImplementReport('```json\n{"nope":1}\n```', ['a']), null);
 });
 
 test('a failing later batch keeps the earlier batches\' results and only reports its own items', async () => {
