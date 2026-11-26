@@ -107,6 +107,16 @@ export function getRetryDelayMs(error, request, attempt, baseDelayMs = DEFAULT_R
   return null;
 }
 
+// The per-attempt deadline, combined with the caller's cancellation signal when
+// there is one. Using the caller's signal alone would drop the deadline, so a
+// stalled connection would hang until the caller gave up, if ever. Node before
+// 20.3 lacks AbortSignal.any and keeps that older behavior.
+export function attemptSignal(callerSignal, timeoutMs) {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  if (!callerSignal) return deadline;
+  return typeof AbortSignal.any === 'function' ? AbortSignal.any([callerSignal, deadline]) : callerSignal;
+}
+
 // Every GitHub API call gets an abort deadline (per attempt) so a stalled
 // connection cannot keep a scheduled execution (and the scheduler's overlap
 // guard) stuck, and transient failures are retried with bounded backoff
@@ -125,7 +135,7 @@ export function createOctokit(options = {}) {
 
     for (let attempt = 0; ; attempt++) {
       callerSignal?.throwIfAborted();
-      requestOptions.request.signal = callerSignal || AbortSignal.timeout(timeoutMs);
+      requestOptions.request.signal = attemptSignal(callerSignal, timeoutMs);
 
       let response;
       let failure;
