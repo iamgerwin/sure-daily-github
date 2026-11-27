@@ -28,11 +28,29 @@ export function getRequestTimeoutMs() {
 // default, and accepts forms such as "0x10" or "1e3" nobody means as a count.
 // Capped at MAX_REQUEST_RETRIES: each retry may wait up to MAX_RETRY_DELAY_MS
 // plus a full request timeout, so a huge count would stall a run for days.
+// A set value that is ignored or capped is warned about once per distinct
+// value (every client reads it), so a typo does not go unnoticed.
+let reportedRetriesValue = null;
+function reportRetriesValue(raw, message) {
+  if (raw === reportedRetriesValue) return;
+  reportedRetriesValue = raw;
+  logger.warn(message, { value: raw });
+}
+
 export function getRequestRetries() {
-  const text = String(process.env.GITHUB_REQUEST_RETRIES ?? '').trim();
+  const raw = process.env.GITHUB_REQUEST_RETRIES;
+  const text = String(raw ?? '').trim();
+  if (text === '') return DEFAULT_REQUEST_RETRIES;
   const value = Number(text);
-  if (!/^\d+$/.test(text) || !Number.isSafeInteger(value)) return DEFAULT_REQUEST_RETRIES;
-  return Math.min(value, MAX_REQUEST_RETRIES);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(value)) {
+    reportRetriesValue(raw, `Ignoring GITHUB_REQUEST_RETRIES (expected a whole number); using ${DEFAULT_REQUEST_RETRIES}`);
+    return DEFAULT_REQUEST_RETRIES;
+  }
+  if (value > MAX_REQUEST_RETRIES) {
+    reportRetriesValue(raw, `Capping GITHUB_REQUEST_RETRIES at ${MAX_REQUEST_RETRIES}`);
+    return MAX_REQUEST_RETRIES;
+  }
+  return value;
 }
 
 // A secondary (abuse) limit may arrive as a 403 without any rate limit

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, MAX_REQUEST_RETRIES, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
+import logger from '../src/utils/logger.js';
 
 // Serves the queued responses in order, recording each request method
 async function startServer(responses, retry = {}) {
@@ -446,6 +447,50 @@ test('getRequestRetries rejects values that are not plain whole digits', () => {
       process.env.GITHUB_REQUEST_RETRIES = raw;
       assert.equal(getRequestRetries(), 2, raw);
     }
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+function captureWarnings(t) {
+  const warnings = [];
+  const original = logger.warn;
+  logger.warn = (message, meta) => warnings.push({ message, meta });
+  t.after(() => { logger.warn = original; });
+  return warnings;
+}
+
+test('getRequestRetries warns once per ignored or capped value', (t) => {
+  // Values no other test uses: the last reported value is module state
+  const warnings = captureWarnings(t);
+  try {
+    process.env.GITHUB_REQUEST_RETRIES = '7.0';
+    assert.equal(getRequestRetries(), 2);
+    assert.equal(getRequestRetries(), 2);
+    assert.equal(warnings.length, 1, 'the same value is reported once');
+    assert.match(warnings[0].message, /Ignoring GITHUB_REQUEST_RETRIES/);
+    assert.equal(warnings[0].meta.value, '7.0');
+
+    process.env.GITHUB_REQUEST_RETRIES = '4096';
+    assert.equal(getRequestRetries(), MAX_REQUEST_RETRIES);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[1].message, /Capping GITHUB_REQUEST_RETRIES/);
+    assert.equal(warnings[1].meta.value, '4096');
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+test('getRequestRetries does not warn for unset, blank or valid values', (t) => {
+  const warnings = captureWarnings(t);
+  try {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+    getRequestRetries();
+    for (const value of ['', '  ', '0', ' 5 ', String(MAX_REQUEST_RETRIES)]) {
+      process.env.GITHUB_REQUEST_RETRIES = value;
+      getRequestRetries();
+    }
+    assert.deepEqual(warnings, []);
   } finally {
     delete process.env.GITHUB_REQUEST_RETRIES;
   }
