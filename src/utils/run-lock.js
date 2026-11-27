@@ -4,12 +4,20 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root so the service and a manual `cli.js run` share it
-const DEFAULT_LOCK_FILE = path.join(__dirname, '../../data/run.lock');
+const PROJECT_ROOT = path.join(__dirname, '../..');
+const DEFAULT_LOCK_FILE = path.join(PROJECT_ROOT, 'data/run.lock');
 // Fallback for PID reuse: a lock older than this is reclaimed even if its PID is alive
 const DEFAULT_STALE_MS = 2 * 60 * 60 * 1000;
 
-function lockFilePath() {
-  return process.env.SDG_RUN_LOCK_FILE || DEFAULT_LOCK_FILE;
+// A relative override is anchored to the project root like the default:
+// resolved against the working directory, the service (run from its
+// WorkingDirectory) and a manual `cli.js run` started elsewhere would take two
+// different locks and run at the same time on the same state files.
+// Surrounding whitespace (a systemd Environment= line) is ignored, and a blank
+// value keeps the default.
+export function lockFilePath() {
+  const text = String(process.env.SDG_RUN_LOCK_FILE ?? '').trim();
+  return text ? path.resolve(PROJECT_ROOT, text) : DEFAULT_LOCK_FILE;
 }
 
 function staleMs() {

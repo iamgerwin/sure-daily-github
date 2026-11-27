@@ -70,6 +70,8 @@ export SDG_RUN_LOCK_FILE=/var/lib/sure-daily-github/run.lock   # lock location
 export SDG_RUN_LOCK_STALE_MS=7200000                           # age after which a lock is reclaimed
 ```
 
+A relative `SDG_RUN_LOCK_FILE` is resolved against the project root, not the working directory, so the service and a manual `run` started from another directory still share one lock. Surrounding whitespace is ignored, and a blank value keeps the default.
+
 ## Testing
 
 Run unit tests covering state logic and window resets:
