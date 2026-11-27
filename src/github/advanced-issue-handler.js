@@ -189,6 +189,20 @@ class AdvancedIssueHandler {
     return Number.isInteger(target) && sameRange && target >= min && target <= max;
   }
 
+  // The time the repository's next issue may be created, as the run applies it.
+  // A wait is drawn from intervalMinutes, so it never legitimately reaches past
+  // now + intervalMinutes.max; a stored time beyond that (the system clock was
+  // stepped back, a hand edit, or max was lowered since) is cut to that bound,
+  // which still spaces the next issue out instead of holding the repository
+  // back for as long as the stored time says. Without intervalMinutes the stored
+  // time is kept as is.
+  effectiveNextIssueTime(repoState, repo, now = Date.now()) {
+    const next = repoState?.nextIssueTime;
+    if (!Number.isFinite(next) || !repo?.intervalMinutes) return next;
+    const maxWaitMs = (repo.intervalMinutes.max || 180) * 60 * 1000;
+    return Math.min(next, now + maxWaitMs);
+  }
+
   getRandomElement(array) {
     if (!array || array.length === 0) return null;
     return array[Math.floor(Math.random() * array.length)];
@@ -325,7 +339,16 @@ class AdvancedIssueHandler {
         continue;
       }
       
-      // Check if enough time has passed since last issue
+      // Check if enough time has passed since last issue. A wait cut to the
+      // configured maximum is saved, so it ends at that bound on later runs too.
+      const nextIssueTime = this.effectiveNextIssueTime(repoState, repo, now);
+      if (nextIssueTime !== repoState.nextIssueTime) {
+        logger.warn(`Stored next issue time for ${repo.repo} is past the longest configured interval, shortening the wait`, {
+          stored: new Date(repoState.nextIssueTime).toISOString(),
+          next: new Date(nextIssueTime).toISOString()
+        });
+        repoState.nextIssueTime = nextIssueTime;
+      }
       if (repoState.nextIssueTime && now < repoState.nextIssueTime) {
         // Rounded up: a wait under half a minute would otherwise read as
         // "0 minutes remaining" while the repository is still held back
@@ -495,10 +518,12 @@ class AdvancedIssueHandler {
     for (const repo of repositories) {
       const repoState = state.repositories[this.findRepoKey(state, repo)] || {};
       const todayState = stale ? {} : repoState;
-      // The next run's reset keeps a pending interval, so it still applies
-      const nextIssueTime = stale && repoState.nextIssueTime > now
-        ? repoState.nextIssueTime
-        : todayState.nextIssueTime;
+      // The next run's reset keeps a pending interval, so it still applies,
+      // bounded by intervalMinutes.max as the run bounds it
+      const pending = this.effectiveNextIssueTime(repoState, repo, now);
+      const nextIssueTime = stale
+        ? (pending > now ? pending : undefined)
+        : pending;
       // An elapsed interval no longer holds the repo back (processRepositories
       // only waits while now < nextIssueTime), so it must not read as a future time
       const waiting = nextIssueTime && now < nextIssueTime;

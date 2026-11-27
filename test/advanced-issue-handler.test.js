@@ -892,3 +892,85 @@ test('a template label that repeats a repository label is sent once', async () =
   assert.equal(created.length, 1);
   assert.deepEqual(created[0].labels, ['Automated', 'bug']);
 });
+
+// A stored next issue time far past the longest configured interval: the system
+// clock was stepped back after it was written, or it was hand edited
+function writeFarFutureWait(handler, now) {
+  writeState(handler, {
+    lastDailyReset: new Date(now).toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: now - 1000, todayTarget: 3, targetRange: { min: 3, max: 3 }, nextIssueTime: now + 30 * 24 * 60 * 60 * 1000 }
+    }
+  });
+}
+
+test('a stored wait past intervalMinutes.max is cut to that bound and then ends', async () => {
+  const { handler, created } = createHandler();
+  const realNow = Date.now;
+  const now = realNow();
+  const interval = repo({ intervalMinutes: { min: 30, max: 60 } });
+  writeFarFutureWait(handler, now);
+  try {
+    Date.now = () => now;
+    const [waiting] = await handler.processRepositories([interval], {}, false, config);
+    assert.equal(created.length, 0);
+    assert.equal(waiting.reason, 'Waiting for interval (60 minutes remaining)');
+    assert.equal(readState(handler).repositories['me/demo'].nextIssueTime, now + 60 * 60 * 1000);
+
+    // The saved bound does not move forward again on later runs
+    Date.now = () => now + 30 * 60 * 1000;
+    const [stillWaiting] = await handler.processRepositories([interval], {}, false, config);
+    assert.equal(stillWaiting.reason, 'Waiting for interval (30 minutes remaining)');
+
+    Date.now = () => now + 61 * 60 * 1000;
+    const [result] = await handler.processRepositories([interval], {}, false, config);
+    assert.equal(result.success, true);
+    assert.equal(created.length, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a dry run reports the bounded wait without saving it', async () => {
+  const { handler, created } = createHandler();
+  const realNow = Date.now;
+  const now = realNow();
+  writeFarFutureWait(handler, now);
+  const stored = readState(handler).repositories['me/demo'].nextIssueTime;
+  try {
+    Date.now = () => now;
+    const [result] = await handler.processRepositories([repo({ intervalMinutes: { min: 60, max: 90 } })], {}, true, config);
+    assert.equal(created.length, 0);
+    assert.equal(result.reason, 'Waiting for interval (90 minutes remaining)');
+    assert.equal(readState(handler).repositories['me/demo'].nextIssueTime, stored);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('status shows a stored wait past intervalMinutes.max at that bound', async () => {
+  const { handler } = createHandler();
+  const realNow = Date.now;
+  const now = realNow();
+  writeFarFutureWait(handler, now);
+  try {
+    Date.now = () => now;
+    const { repositories: [status] } = await handler.getStatus([repo({ intervalMinutes: { min: 60, max: 120 } })], 'UTC');
+    assert.equal(status.nextIssueTime, new Date(now + 120 * 60 * 1000).toISOString());
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('without intervalMinutes a stored wait is kept as written', async () => {
+  const { handler, created } = createHandler();
+  const now = Date.now();
+  writeFarFutureWait(handler, now);
+  const stored = readState(handler).repositories['me/demo'].nextIssueTime;
+
+  const [result] = await handler.processRepositories([repo()], {}, false, config);
+
+  assert.equal(created.length, 0);
+  assert.match(result.reason, /Waiting for interval/);
+  assert.equal(readState(handler).repositories['me/demo'].nextIssueTime, stored);
+});
