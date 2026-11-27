@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const cliPath = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
-function validate(dailyTarget, extra = [], general = []) {
+function validate(dailyTarget, extra = [], general = [], env = { GITHUB_TOKEN: 'ghp_test' }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-validate-'));
   const configFile = path.join(dir, 'config.yaml');
   fs.writeFileSync(configFile, [
@@ -24,7 +24,7 @@ function validate(dailyTarget, extra = [], general = []) {
 
   try {
     return execFileSync(process.execPath, [cliPath, 'validate', '--config', configFile], {
-      env: { ...process.env, GITHUB_TOKEN: 'ghp_test', LOG_LEVEL: 'error' },
+      env: { ...process.env, ...env, LOG_LEVEL: 'error' },
       encoding: 'utf8'
     });
   } finally {
@@ -81,4 +81,25 @@ test('validate warns about conflictFixer list entries that match no configured r
 test('validate does not warn when conflictFixer list entries match configured repositories', () => {
   assert.doesNotMatch(validate('1', ['conflictFixer:', '  allowlist: ["ME/Demo"]']), UNMATCHED);
   assert.doesNotMatch(validate('1'), UNMATCHED);
+});
+
+const NO_TOKEN = /GITHUB_TOKEN is not set/;
+
+// A blank value overrides any GITHUB_TOKEN in the caller's environment, and
+// dotenv never replaces a variable that is already set
+test('validate passes without GITHUB_TOKEN and notes the commands that need it', () => {
+  const output = validate('1', [], [], { GITHUB_TOKEN: '' });
+  assert.match(output, /^✅ Configuration is valid$/m);
+  assert.match(output, /^ {3}⚠️ {2}GITHUB_TOKEN is not set: run, start, babysit, fix-conflicts and pr-maint need it$/m);
+});
+
+test('validate does not note a missing token when GITHUB_TOKEN is set', () => {
+  assert.doesNotMatch(validate('1'), NO_TOKEN);
+});
+
+test('validate still fails on a malformed GITHUB_TOKEN', () => {
+  assert.throws(
+    () => validate('1', [], [], { GITHUB_TOKEN: 'not-a-token' }),
+    (error) => error.status === 1 && /GITHUB_TOKEN appears to be invalid format/.test(error.stderr)
+  );
 });
