@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState, contextsState } from '../src/github/pr-labels.js';
+import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState, contextsState, unreadCount } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
@@ -249,6 +249,41 @@ test('fetchSnapshot normalizes every page and detects a paused dashboard', async
   assert.deepEqual(snapshot.prs.map(p => p.number), [1, 2]);
   assert.deepEqual(snapshot.prs[0].reviewThreads, [{ id: 'T1', isResolved: false, author: 'coderabbitai', lastCommentId: 'C9' }]);
   assert.deepEqual(calls.map(c => c.params.cursor), [null, 'c1']);
+});
+
+test('fetchSnapshot counts review threads past the 100 it reads', async () => {
+  const thread = (i) => ({ id: `T${i}`, isResolved: true, opener: { nodes: [] }, latest: { nodes: [{ id: `C${i}` }] } });
+  const node = (number, reviewThreads) => ({
+    number, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE', author: { login: OWNER }, labels: { nodes: [] }, reviewThreads
+  });
+  const hundred = Array.from({ length: 100 }, (_, i) => thread(i));
+  const { github, calls } = await client({
+    graphql: () => ({
+      repository: {
+        pausedIssues: { nodes: [] },
+        pullRequests: {
+          nodes: [
+            node(1, { totalCount: 130, nodes: hundred }),
+            node(2, { totalCount: 100, nodes: hundred }),
+            node(3, { nodes: [thread(1)] })
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null }
+        }
+      }
+    })
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.match(calls[0].query, /reviewThreads\(first: 100\) \{\s*totalCount/);
+  assert.deepEqual(snapshot.prs.map(p => p.reviewThreadsUnread), [30, 0, 0]);
+});
+
+test('unreadCount is zero unless totalCount exceeds the nodes returned', () => {
+  assert.equal(unreadCount(undefined), 0);
+  assert.equal(unreadCount({ nodes: [] }), 0);
+  assert.equal(unreadCount({ totalCount: 0, nodes: [] }), 0);
+  assert.equal(unreadCount({ totalCount: 2, nodes: [{}, {}] }), 0);
+  assert.equal(unreadCount({ totalCount: 5, nodes: [{}, {}] }), 3);
+  assert.equal(unreadCount({ totalCount: '5', nodes: [] }), 0);
 });
 
 test('fetchSnapshot reads the check context count and fails closed past the 100 it reads', async () => {

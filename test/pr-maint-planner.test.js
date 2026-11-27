@@ -203,6 +203,12 @@ test('targetLifecycle moves a cleared conflict to sdg:waiting and names what it 
   assert.equal(cleared({ reviewThreads: [thread(false)] }).next, '1 unresolved review thread');
   assert.equal(cleared({ reviewThreads: [thread(false), thread(false), thread(true)] }).next, '2 unresolved review threads');
   assert.match(cleared({ reviewThreads: [thread(true)] }).next, /merge policy/);
+  // Threads past the ones read may be unresolved, so the merge policy is not all it waits for
+  assert.equal(cleared({ reviewThreads: [thread(true), thread(false)], reviewThreadsUnread: 12 }).next,
+    '1 unresolved review thread in the first 2; 12 more could not be read');
+  assert.equal(cleared({ reviewThreads: [thread(true)], reviewThreadsUnread: 1 }).next,
+    '0 unresolved review threads in the first 1; 1 more could not be read');
+  assert.equal(cleared({ reviewThreads: [thread(false)], reviewThreadsUnread: 0 }).next, '1 unresolved review thread');
 });
 
 test('targetLifecycle keeps the fixing and ready labels and defaults to sdg:waiting', () => {
