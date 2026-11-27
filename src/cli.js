@@ -8,7 +8,7 @@ import scheduler from './core/scheduler.js';
 import ConflictFixer, { distinctRepoCount, parseScanTimeout, unmatchedGateEntries } from './core/conflict-fixer.js';
 import babysitter, { getBabysitExitCode } from './core/babysitter.js';
 import prMaint, { getPrMaintExitCode } from './core/pr-maint.js';
-import config, { PR_MAINT_MODES, defaultConfigPath } from './config/loader.js';
+import config, { PR_MAINT_MODES, defaultConfigPath, readGitHubToken } from './config/loader.js';
 import { getTemplateDateParts, formatNextIssueTime } from './utils/template-date.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -397,8 +397,13 @@ program
   .option('--config <path>', 'Path to configuration file')
   .action((options) => {
     try {
-      const cfg = config.load(options.config);
+      // Only the config file is checked and GitHub is never called, so a
+      // missing token is reported instead of failing; a malformed one still fails
+      const cfg = config.load(options.config, { requireToken: false });
       console.log('✅ Configuration is valid');
+      if (!readGitHubToken()) {
+        console.log('   ⚠️  GITHUB_TOKEN is not set: run, start, babysit, fix-conflicts and pr-maint need it');
+      }
       console.log(`   Repositories: ${cfg.repositories.length}`);
       console.log(`   Mode: ${describeRunMode(cfg)}`);
 
