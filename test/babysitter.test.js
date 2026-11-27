@@ -672,6 +672,34 @@ test('a push intent whose SHA never reached the branch leaves the comments pendi
   assert.deepEqual(state.ledger().pushIntents, {});
 });
 
+test('a malformed pending delivery in the ledger does not abort the scan', async (t) => {
+  const state = useTmpState(t);
+  const remote = setupRemote();
+  const pulls = { 7: pull(remote.headSha) };
+  const { client, calls } = stubClient({ pulls, reviewComments: [inlineAlice] });
+  const { engine, calls: engineCalls } = stubEngine({ actions: { 'review_comment:11': 'note' } });
+  // A delivery without its comment keys (hand edit or damaged file) used to
+  // throw in the retry pass, failing this and every later scan
+  fs.writeFileSync(state.ledgerFile, JSON.stringify({
+    version: 1,
+    comments: {},
+    deliveries: { broken: { owner: 'me', repo: 'demo', pr: 7, body: 'reply' } },
+    pushIntents: {}
+  }));
+
+  const originalError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = originalError; });
+
+  const result = await babysitter(remote, client, engine).execute(makeConfig());
+  assert.equal(result.success, true, result.error);
+  assert.equal(getBabysitExitCode(result), 0);
+  assert.equal(engineCalls.triage.length, 1, 'the pull request is still handled');
+  assert.equal(calls.replies.length, 1);
+  assert.equal(state.ledger().comments['me/demo#7/review_comment:11'].state, 'noted');
+  assert.deepEqual(state.ledger().deliveries, {});
+});
+
 test('a failed head lookup leaves a pending reply untouched and uncharged', async (t) => {
   const state = useTmpState(t);
   const remote = setupRemote();
