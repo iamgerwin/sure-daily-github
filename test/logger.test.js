@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import logger, { Logger, invalidLogLevel, resolveLogLevel, resolveRetentionDays, shouldUseColor } from '../src/utils/logger.js';
+import logger, { Logger, invalidLogLevel, invalidRetentionDays, resolveLogLevel, resolveRetentionDays, shouldUseColor } from '../src/utils/logger.js';
 
 function withLogLevel(value, fn) {
   const original = process.env.LOG_LEVEL;
@@ -433,6 +433,56 @@ test('a line written across midnight UTC goes to the file of the day it is stamp
     assert.match(fs.readFileSync(path.join(dir, files[0]), 'utf8'), /^\[2026-11-16T23:59:59\.999Z\] \[INFO\] at midnight/);
   } finally {
     globalThis.Date = RealDate;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('invalidRetentionDays names only a set value that is not whole days', () => {
+  for (const value of [undefined, '', '  ', '0', '7', ' 30 ']) {
+    assert.equal(invalidRetentionDays(value), null, `${JSON.stringify(value)} should not be reported`);
+  }
+  for (const value of ['7d', '-3', '1.5', 'abc', 'two weeks']) {
+    assert.equal(invalidRetentionDays(value), value);
+  }
+});
+
+test('an invalid LOG_RETENTION_DAYS is warned about once per value and keeps every file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    seedLogs(dir, ['2000-01-01.log']);
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    const lines = captureConsole(() => withLogLevel('info', () => {
+      withRetention('7d', () => {
+        fileLogger.info('first');
+        fileLogger.info('second');
+      });
+      withRetention('-3', () => fileLogger.info('third'));
+    }));
+    const warnings = lines.error.filter(line => /Ignoring LOG_RETENTION_DAYS/.test(line));
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0], /\[WARN\].*keeping every daily log file.*"value":"7d"/);
+    assert.match(warnings[1], /"value":"-3"/);
+    assert.deepEqual(lines.log.map(line => line.replace(/^.*\] /, '')), ['first', 'second', 'third']);
+    assert.ok(fs.existsSync(path.join(dir, '2000-01-01.log')), 'an invalid retention prunes nothing');
+    const today = `${new Date().toISOString().split('T')[0]}.log`;
+    assert.match(fs.readFileSync(path.join(dir, today), 'utf8'), /Ignoring LOG_RETENTION_DAYS.*"value":"7d"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a valid, zero or unset LOG_RETENTION_DAYS is not warned about', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-logger-'));
+  try {
+    const fileLogger = new Logger({ logDir: dir, color: false });
+    const lines = captureConsole(() => withLogLevel('info', () => {
+      for (const value of [undefined, '', '0', '14']) {
+        withRetention(value, () => fileLogger.info('line'));
+      }
+    }));
+    assert.equal(lines.error.filter(line => /Ignoring LOG_RETENTION_DAYS/.test(line)).length, 0);
+    assert.equal(lines.log.length, 4);
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
