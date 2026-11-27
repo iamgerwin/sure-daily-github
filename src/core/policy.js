@@ -45,9 +45,12 @@ export function isCleanlyMergeable(pr) {
 const headMoved = (e, pr) => Boolean(e.headSha && pr?.headRefOid) && pr.headRefOid !== e.headSha;
 
 // The allowlist of clearing conditions the AI may act on, shared by the
-// planner and the needs-human rule; any other reason waits for a human
+// planner and the needs-human rule; any other reason waits for a human.
+// Each text is shown in the sticky comment and the dashboard as the promise a
+// human waits on, so it names only what `met` checks: an escalation records
+// the head SHA alone, so a base branch push never clears one.
 export const CLEAR_CONDITIONS = {
-  attempts: { text: 'the head or base moves', met: (e, pr) => headMoved(e, pr) },
+  attempts: { text: 'a new commit is pushed', met: (e, pr) => headMoved(e, pr) },
   uncertain: { text: 'a new commit is pushed', met: (e, pr) => headMoved(e, pr) },
   scorecard: { text: 'a new commit is pushed', met: (e, pr) => headMoved(e, pr) },
   'tests-red': { text: 'checks pass on a new head', met: (e, pr) => headMoved(e, pr) && pr.checks === 'SUCCESS' },

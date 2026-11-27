@@ -92,6 +92,17 @@ test('clearConditionText names the allowlisted condition, else a human', () => {
   }
 });
 
+test('head-based clearing conditions promise only a new head, which is all they check', () => {
+  // A base branch push leaves the head where it was: the escalation must stay,
+  // so the text a human reads must not promise that a base move clears it
+  const baseMoved = pr({ headRefOid: OLD_SHA, baseRefName: 'release' });
+  for (const reason of ['attempts', 'uncertain', 'scorecard']) {
+    assert.equal(clearConditionMet(escalation({ reason }), baseMoved), false, reason);
+    assert.equal(clearConditionText(reason), 'a new commit is pushed', reason);
+    assert.doesNotMatch(clearConditionText(reason), /base/, reason);
+  }
+});
+
 test('canAutoClear refuses inactive escalations and reasons only a human may clear', () => {
   assert.equal(canAutoClear(escalation(), pr(), NOW), true);
   assert.equal(canAutoClear(escalation({ active: false }), pr(), NOW), false);
