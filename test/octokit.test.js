@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
+import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, MAX_REQUEST_RETRIES, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
 
 // Serves the queued responses in order, recording each request method
@@ -388,6 +388,30 @@ test('getRequestRetries reads leading zeros and rejects whole-looking non-intege
     for (const value of ['1e9', '3.0', '2 3']) {
       process.env.GITHUB_REQUEST_RETRIES = value;
       assert.equal(getRequestRetries(), 2, `value ${JSON.stringify(value)}`);
+    }
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+test('getRequestRetries still lets 0 and 00 disable retries', () => {
+  try {
+    for (const value of ['0', '00', ' 0 ']) {
+      process.env.GITHUB_REQUEST_RETRIES = value;
+      assert.equal(getRequestRetries(), 0, JSON.stringify(value));
+    }
+  } finally {
+    delete process.env.GITHUB_REQUEST_RETRIES;
+  }
+});
+
+test('getRequestRetries caps a large count at MAX_REQUEST_RETRIES', () => {
+  try {
+    process.env.GITHUB_REQUEST_RETRIES = String(MAX_REQUEST_RETRIES);
+    assert.equal(getRequestRetries(), MAX_REQUEST_RETRIES);
+    for (const value of [String(MAX_REQUEST_RETRIES + 1), '1000', '999999999']) {
+      process.env.GITHUB_REQUEST_RETRIES = value;
+      assert.equal(getRequestRetries(), MAX_REQUEST_RETRIES, value);
     }
   } finally {
     delete process.env.GITHUB_REQUEST_RETRIES;

@@ -5,6 +5,7 @@ import { clampTimerMs } from '../utils/process.js';
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 export const DEFAULT_REQUEST_RETRIES = 2;
+export const MAX_REQUEST_RETRIES = 10;
 export const DEFAULT_RETRY_BASE_DELAY_MS = 1000;
 // Never sleep longer than this for a rate limit reset; fail the run instead
 export const MAX_RETRY_DELAY_MS = 60000;
@@ -25,12 +26,13 @@ export function getRequestTimeoutMs() {
 // Environment= or env-file line). Number() reads a blank or whitespace-only
 // value as 0, which would silently turn retries off instead of keeping the
 // default, and accepts forms such as "0x10" or "1e3" nobody means as a count.
+// Capped at MAX_REQUEST_RETRIES: each retry may wait up to MAX_RETRY_DELAY_MS
+// plus a full request timeout, so a huge count would stall a run for days.
 export function getRequestRetries() {
   const text = String(process.env.GITHUB_REQUEST_RETRIES ?? '').trim();
   const value = Number(text);
-  return /^\d+$/.test(text) && Number.isSafeInteger(value)
-    ? value
-    : DEFAULT_REQUEST_RETRIES;
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(value)) return DEFAULT_REQUEST_RETRIES;
+  return Math.min(value, MAX_REQUEST_RETRIES);
 }
 
 // A secondary (abuse) limit may arrive as a 403 without any rate limit
