@@ -8,7 +8,7 @@ import fs from 'node:fs';
 const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-exit-code-'));
 process.env.SDG_STATE_FILE = path.join(stateDir, 'state.json');
 
-const { getRunExitCode, describeFailures, summarizeResults } = await import('../src/core/executor.js');
+const { getRunExitCode, describeFailures, summarizeResults, contentTemplateLabelsIgnored } = await import('../src/core/executor.js');
 
 const summary = (failed) => ({ total: 2, successful: 2 - failed, skipped: 0, failed });
 
@@ -72,4 +72,18 @@ test('summarizeResults keeps real runs counted as successful', () => {
   ];
   assert.deepEqual(summarizeResults(results), { total: 3, successful: 2, previewed: 0, skipped: 1, failed: 0 });
   assert.deepEqual(summarizeResults(), { total: 0, successful: 0, previewed: 0, skipped: 0, failed: 0 });
+});
+
+test('contentTemplateLabelsIgnored flags any labels set on contentTemplate', () => {
+  assert.equal(contentTemplateLabelsIgnored({ contentTemplate: { title: 'x', labels: ['daily'] } }), true);
+  assert.equal(contentTemplateLabelsIgnored({ contentTemplate: { labels: [] } }), true);
+  assert.equal(contentTemplateLabelsIgnored({ contentTemplate: { labels: 'daily' } }), true);
+});
+
+test('contentTemplateLabelsIgnored ignores templates without labels and missing configs', () => {
+  assert.equal(contentTemplateLabelsIgnored({ contentTemplate: { title: 'x' } }), false);
+  assert.equal(contentTemplateLabelsIgnored({ contentTemplate: { labels: null } }), false);
+  assert.equal(contentTemplateLabelsIgnored({ contentTemplates: [{ labels: ['bug'] }] }), false);
+  assert.equal(contentTemplateLabelsIgnored({}), false);
+  assert.equal(contentTemplateLabelsIgnored(undefined), false);
 });
