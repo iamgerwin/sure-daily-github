@@ -118,6 +118,9 @@ export function killActiveTests() {
 
 // Runs a shell command in its own process group so a timeout also kills the
 // processes it spawned. Resolves { code, timedOut, output }; never rejects.
+// A timeoutMs that is not a positive number means no time limit, as in
+// runProcess: passed to setTimeout as is, a missing (NaN) or zero delay fires
+// after 1ms, killing the suite at once and reporting it as timed out.
 export function runTestCommand(command, { cwd, env, timeoutMs }) {
   return new Promise((resolve) => {
     let output = '';
@@ -135,10 +138,12 @@ export function runTestCommand(command, { cwd, env, timeoutMs }) {
     child.stdout.on('data', append);
     child.stderr.on('data', append);
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup(child);
-    }, clampTimerMs(timeoutMs));
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+        timedOut = true;
+        killGroup(child);
+      }, clampTimerMs(timeoutMs))
+      : null;
 
     // Once the command itself exits, anything it left running in its group
     // (a backgrounded server or watcher) is an orphan: kill it so it cannot
