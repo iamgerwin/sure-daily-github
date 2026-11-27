@@ -63,12 +63,15 @@ export const CLAUDE_DISALLOWED_TOOLS = [
 // Applied on top of the scrubbed env, so a command the policy misses still
 // finds no git or gh credential under HOME: no global/system git config (no
 // credential helpers or insteadOf), local helpers reset, no ssh/ext transport,
-// and gh pointed at an empty config directory
+// and gh pointed at an empty config directory. Environment config beats the
+// clone's .git/config, so a hook, fsmonitor or gpg.program the engine writes
+// there (Write and Edit reach .git/) cannot run a command through the
+// allowlisted `git commit` and `git status`.
 export const ENGINE_ENV_LOCKDOWN = {
   GIT_CONFIG_GLOBAL: os.devNull,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_TERMINAL_PROMPT: '0',
-  GIT_CONFIG_COUNT: '4',
+  GIT_CONFIG_COUNT: '7',
   GIT_CONFIG_KEY_0: 'credential.helper',
   GIT_CONFIG_VALUE_0: '',
   GIT_CONFIG_KEY_1: 'protocol.ext.allow',
@@ -77,6 +80,12 @@ export const ENGINE_ENV_LOCKDOWN = {
   GIT_CONFIG_VALUE_2: 'never',
   GIT_CONFIG_KEY_3: 'protocol.git.allow',
   GIT_CONFIG_VALUE_3: 'never',
+  GIT_CONFIG_KEY_4: 'core.hooksPath',
+  GIT_CONFIG_VALUE_4: os.devNull,
+  GIT_CONFIG_KEY_5: 'core.fsmonitor',
+  GIT_CONFIG_VALUE_5: 'false',
+  GIT_CONFIG_KEY_6: 'commit.gpgSign',
+  GIT_CONFIG_VALUE_6: 'false',
   GIT_SSH_COMMAND: 'false',
   GH_CONFIG_DIR: os.devNull
 };
