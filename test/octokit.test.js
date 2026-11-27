@@ -379,14 +379,13 @@ test('getRequestRetries reads GITHUB_REQUEST_RETRIES and falls back on invalid v
   }
 });
 
-test('getRequestRetries trims whitespace and rejects blank, exponent, hex and fractional values', () => {
+// Blank, whitespace, '-1', '0x10', '+3' and similar are covered by the tests
+// below; these are the forms only this test guards
+test('getRequestRetries reads leading zeros and rejects whole-looking non-integers', () => {
   try {
-    process.env.GITHUB_REQUEST_RETRIES = ' 5 ';
-    assert.equal(getRequestRetries(), 5);
     process.env.GITHUB_REQUEST_RETRIES = '05';
     assert.equal(getRequestRetries(), 5);
-    // A blank value must not read as 0 and silently disable retries
-    for (const value of ['', ' ', '\t', '1e9', '0x10', '3.0', '-1', '+3', '2 3']) {
+    for (const value of ['1e9', '3.0', '2 3']) {
       process.env.GITHUB_REQUEST_RETRIES = value;
       assert.equal(getRequestRetries(), 2, `value ${JSON.stringify(value)}`);
     }
