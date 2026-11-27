@@ -393,3 +393,24 @@ test('createIssueComment posts to the pull request conversation by issue_number'
   assert.equal(failed.success, false);
   assert.equal(failed.status, 403);
 });
+
+// An uncalled wrapper drifts from the rest of the client unnoticed: the removed
+// getDefaultBranch silently answered "main" when the repository lookup failed,
+// although commits rely on the contents API resolving the real default branch
+test('every GitHubClient method is called somewhere in src/', async () => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const { fileURLToPath } = await import('url');
+  const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const listFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return listFiles(full);
+    return entry.name.endsWith('.js') ? [full] : [];
+  });
+  const source = listFiles(srcDir).map(file => fs.readFileSync(file, 'utf8')).join('\n');
+
+  const methods = Object.getOwnPropertyNames(GitHubClient.prototype).filter(name => name !== 'constructor');
+  assert.ok(methods.length > 0);
+  const uncalled = methods.filter(name => !new RegExp(`\\.${name}\\(`).test(source));
+  assert.deepEqual(uncalled, []);
+});
