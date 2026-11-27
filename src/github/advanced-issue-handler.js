@@ -264,21 +264,26 @@ class AdvancedIssueHandler {
     };
   }
 
-  async processRepositories(repositories, contentTemplate, dryRun, fullConfig) {
+  // One clock reading (`at`) decides the daily reset, the interval waits, the
+  // recorded issue times and the ${date}/${time}/${timestamp} of every issue
+  // in the run. Reading the clock again when an issue is rendered (after API
+  // calls and the pause between repositories) could date a run started at
+  // 23:59 on the next day while its count stays in the day the run reset to.
+  async processRepositories(repositories, contentTemplate, dryRun, fullConfig, at = new Date()) {
     const state = await this.loadState();
     const timezone = fullConfig.general?.timezone || 'UTC';
-    
+
     // Check if we need to reset daily counters
-    if (this.shouldResetDaily(state, timezone)) {
+    if (this.shouldResetDaily(state, timezone, at)) {
       logger.info('Performing daily reset', { timezone });
-      state.lastDailyReset = new Date().toISOString();
+      state.lastDailyReset = at.toISOString();
       state.repositories = this.resetRepositories(state.repositories);
     }
-    
+
     // Results use the same { owner, repo } shape as the other handlers so the
     // CLI failure summary can name the repository
     const results = [];
-    const now = Date.now();
+    const now = at.getTime();
     const ready = [];
 
     for (const repo of repositories) {
@@ -372,7 +377,7 @@ class AdvancedIssueHandler {
 
       try {
         // Generate issue content
-        const issueContent = this.generateIssueContent(repo, fullConfig);
+        const issueContent = this.generateIssueContent(repo, fullConfig, at);
         
         if (dryRun) {
           logger.info('DRY RUN: Would create issue', {
