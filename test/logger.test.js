@@ -68,10 +68,10 @@ test('an unknown LOG_LEVEL is warned about once per value, in the console and th
       withLogLevel('verbose', () => fileLogger.info('third'));
       withLogLevel('debug', () => fileLogger.info('fourth'));
     });
-    // A warning goes to stderr like every warn line, never to stdout
+    // Warnings go to stderr like every warn line; none may leak onto stdout
     const warnings = lines.error.filter(line => /Ignoring LOG_LEVEL/.test(line));
-    assert.equal(lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
     assert.equal(warnings.length, 2);
+    assert.equal(lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
     assert.match(warnings[0], /\[WARN\].*logging at info.*"value":"deubg"/);
     assert.match(warnings[1], /"value":"verbose"/);
     assert.equal(lines.log.filter(line => /\] (first|second|third|fourth)$/.test(line)).length, 4);
@@ -91,9 +91,9 @@ test('a valid or unset LOG_LEVEL is not warned about', () => {
       withLogLevel('', () => fileLogger.info('blank'));
       withLogLevel(' INFO ', () => fileLogger.info('padded'));
     });
-    assert.equal(lines.log.filter(line => /Ignoring LOG_LEVEL/.test(line)).length, 0);
-    assert.equal(lines.log.length, 3);
+    // The warning would land on stderr, so checking stdout alone proves nothing
     assert.equal(lines.error.length, 0);
+    assert.equal(lines.log.length, 3);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
