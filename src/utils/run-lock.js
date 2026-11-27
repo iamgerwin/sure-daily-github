@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to the project root so the service and a manual `cli.js run` share it
@@ -12,9 +13,24 @@ function lockFilePath() {
   return process.env.SDG_RUN_LOCK_FILE || DEFAULT_LOCK_FILE;
 }
 
-function staleMs() {
-  const value = Number(process.env.SDG_RUN_LOCK_STALE_MS);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_STALE_MS;
+// Whole milliseconds; surrounding whitespace (a systemd Environment= or
+// env-file line) is ignored. Other values ("4h", "1.5", "0x10", "0") used to be
+// read loosely or replaced by the default without a word, so a typo meant to
+// lengthen the limit for a long run left it at 2 hours and a second run could
+// reclaim the lock mid-run. They now keep the default and are reported once.
+const warnedStaleValues = new Set();
+
+export function staleMs() {
+  const raw = process.env.SDG_RUN_LOCK_STALE_MS;
+  const text = String(raw ?? '').trim();
+  if (text === '') return DEFAULT_STALE_MS;
+  const value = /^[0-9]+$/.test(text) ? Number(text) : NaN;
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  if (!warnedStaleValues.has(raw)) {
+    warnedStaleValues.add(raw);
+    logger.warn('Ignoring SDG_RUN_LOCK_STALE_MS (expected a positive whole number of milliseconds); using the 2-hour default', { value: raw });
+  }
+  return DEFAULT_STALE_MS;
 }
 
 // Contents of each lock this process currently holds, by path. A lock naming
@@ -55,12 +71,12 @@ function parseLock(raw) {
 // further ahead than the limit (the clock was stepped back, e.g. a reboot
 // before NTP sync) is measured as distance, otherwise the lock would block
 // every run until the clock caught up with it
-function isStale(holder, raw, filePath, now) {
+function isStale(holder, raw, filePath, now, limitMs) {
   if (!holder || !Number.isInteger(holder.pid)) return true;
   if (holder.pid === process.pid) return heldLocks.get(filePath) !== raw;
   if (!isProcessAlive(holder.pid)) return true;
   if (!Number.isFinite(holder.startedAt)) return true;
-  return Math.abs(now - holder.startedAt) > staleMs();
+  return Math.abs(now - holder.startedAt) > limitMs;
 }
 
 // Filesystems without hard links; fall back to a plain exclusive create there
@@ -117,6 +133,9 @@ function reclaimStaleLock(filePath, staleRaw) {
 // `filePath` selects a separate lock (pr-maint ticks must not wait on `run`).
 export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  // Read up front, not only when a live holder is found, so an invalid value
+  // is reported on the first run rather than the first contended one
+  const limitMs = staleMs();
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -130,7 +149,7 @@ export function acquireRunLock({ now = Date.now(), filePath = lockFilePath() } =
 
     const raw = readRaw(filePath);
     const holder = parseLock(raw);
-    if (attempt > 0 || !isStale(holder, raw, filePath, now)) {
+    if (attempt > 0 || !isStale(holder, raw, filePath, now, limitMs)) {
       return { acquired: false, holder };
     }
     reclaimStaleLock(filePath, raw);
