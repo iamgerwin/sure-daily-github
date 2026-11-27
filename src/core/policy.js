@@ -65,7 +65,8 @@ export const clearsNeedsHuman = (action) => action?.type === 'label.remove' && a
 
 export const DEFAULT_CAPS = { writesPerPrPerTick: 20, writesPerHour: 200 };
 
-const ATTRIBUTION_PATTERN = /Co-Authored-By|Generated with|\bClaude\b|\bAnthropic\b|\u{1F916}/iu;
+// Shared with babysit, which strips matching lines from engine commit messages
+export const ATTRIBUTION_PATTERN = /Co-Authored-By|Generated with|\bClaude\b|\bAnthropic\b|\u{1F916}/iu;
 const SECRET_PATTERN = /\bgh[pousr]_[A-Za-z0-9]|github_pat_|sk-ant-/;
 const SLASH_COMMAND_PATTERN = /^\s*\/sdg\b/i;
 // A word character before "@" means an email address, not a mention

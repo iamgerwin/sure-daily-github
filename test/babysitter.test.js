@@ -9,10 +9,12 @@ import {
   REPLY_MARKER,
   getBabysitExitCode,
   stripAttribution,
+  ATTRIBUTION_PATTERN,
   mentionFor,
   normalizeComments
 } from '../src/core/babysitter.js';
 import { BABYSIT_DEFAULTS } from '../src/config/loader.js';
+import { ATTRIBUTION_PATTERN as POLICY_ATTRIBUTION_PATTERN } from '../src/core/policy.js';
 import { MAX_ATTEMPTS } from '../src/utils/babysitter-ledger.js';
 import { createReviewEngine } from '../src/utils/review-engine.js';
 import { runProcess, killActiveEngines } from '../src/utils/process.js';
@@ -175,6 +177,33 @@ test('stripAttribution removes co-author trailers and generated-with footers', (
     'fix: x\n'
   );
   assert.equal(stripAttribution('Co-Authored-By: a <b>\n'), 'fix: address review feedback\n');
+  assert.equal(stripAttribution(''), 'fix: address review feedback\n');
+});
+
+test('stripAttribution drops lines naming Claude, Anthropic or the robot emoji', () => {
+  assert.equal(
+    stripAttribution('fix: guard null config\n\nHandle a missing section.\n\nWritten by Claude Code\n\nAssisted-by: Anthropic model\n'),
+    'fix: guard null config\n\nHandle a missing section.\n'
+  );
+  assert.equal(stripAttribution('fix: tidy\n\n\u{1F916} Made with an assistant\n'), 'fix: tidy\n');
+  // Words that only contain the names are not attribution
+  assert.equal(stripAttribution('fix: rename claudeConfig\n'), 'fix: rename claudeConfig\n');
+});
+
+test('stripAttribution replaces an attributed subject with the default one and keeps the body', () => {
+  assert.equal(
+    stripAttribution('fix: apply Claude suggestions\n\nUse a constant for the version.\n'),
+    'fix: address review feedback\n\nUse a constant for the version.\n'
+  );
+  assert.equal(stripAttribution('\n\nClaude fix\n'), 'fix: address review feedback\n');
+});
+
+test('babysit commit attribution is the pr-maint text-safety pattern', () => {
+  assert.equal(ATTRIBUTION_PATTERN, POLICY_ATTRIBUTION_PATTERN);
+  for (const text of ['Co-Authored-By: x <y>', 'Generated with a tool', 'by Claude', 'Anthropic', '\u{1F916}']) {
+    assert.match(text, ATTRIBUTION_PATTERN);
+  }
+  assert.doesNotMatch('fix: plain message', ATTRIBUTION_PATTERN);
 });
 
 test('mentionFor tags bots without the [bot] suffix and never humans', () => {
@@ -313,7 +342,7 @@ test('fix path pushes a fast-forward commit at the tested SHA, strips attributio
     implement: ({ cwd, reportFile, items }) => {
       assert.deepEqual(items.map(i => i.comment.id), ['review_comment:11', 'review_comment:12']);
       commitFile(cwd, 'constants.txt', 'fix: use a constant\n\nCo-Authored-By: Claude <noreply@anthropic.com>');
-      commitFile(cwd, 'app.txt', 'fix: drop hardcoded value\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)');
+      commitFile(cwd, 'app.txt', 'fix: drop hardcoded value\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nWritten by Claude');
       const fixes = [
         { id: 'review_comment:11', status: 'implemented', summary: 'Extracted VERSION constant', locations: [{ path: 'constants.txt', line: 1 }] },
         { id: 'review_comment:12', status: 'implemented', summary: '', locations: [] }
@@ -334,7 +363,7 @@ test('fix path pushes a fast-forward commit at the tested SHA, strips attributio
   assert.equal(remote.remote('rev-parse', 'refs/heads/feature'), pr.commitSha);
   assert.equal(remote.remote('rev-parse', `${pr.commitSha}~2`), remote.headSha);
   const messages = remote.remote('log', '--format=%B', `${remote.headSha}..${pr.commitSha}`);
-  assert.doesNotMatch(messages, /Co-Authored-By|Generated with/i);
+  assert.doesNotMatch(messages, /Co-Authored-By|Generated with|Claude/i);
   assert.match(messages, /fix: use a constant/);
   assert.match(messages, /fix: drop hardcoded value/);
   // Engine commits use the clone's identity (the authenticated user) and keep it through the rewrite

@@ -168,8 +168,11 @@ interpreter gap completely requires running the engine in a container.
    uncharged when it could not be started or wrote no report); the other
    calls' results are kept.
 6. **Verify.** The new commits must descend linearly from the PR head (no
-   rewritten history, no merges). `Co-Authored-By` and `Generated with` lines
-   are stripped from their messages, keeping authors and trees. The working
+   rewritten history, no merges). Attribution lines (`Co-Authored-By`,
+   `Generated with`, or any line naming Claude, Anthropic, or the robot
+   emoji, the same pattern as pr-maint's `text-safety` rule) are stripped
+   from their messages, keeping authors and trees; an attributed subject is
+   replaced by `fix: address review feedback`. The working
    tree must be clean. Then the **test gate** runs: `testCommand`, or a command
    detected the same way as `fix-conflicts` (`npm test` after installing
    from the npm, pnpm, yarn or bun lockfile, or with `npm install` when
