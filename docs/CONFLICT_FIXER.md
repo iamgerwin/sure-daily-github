@@ -140,6 +140,7 @@ Long test suites hold the run lock for the whole run. Raise `SDG_RUN_LOCK_STALE_
 `conflictFixer.scanTimeoutSeconds` (default 120), or `--scan-timeout <seconds>` for a single run, caps the whole gather phase: GraphQL pagination over every allowed repo plus the re-polls for `UNKNOWN` mergeability.
 
 - The budget is checked before each repo, before each further page, and before each re-poll. A re-poll is skipped when the remaining budget is shorter than its 2 s sleep.
+- With `--pr`, only the targeted pull request's `UNKNOWN` mergeability triggers re-polls; other open PRs still at `UNKNOWN` do not delay the run.
 - When the budget runs out, scanning stops. PRs already collected are still processed normally, including those from the pages already fetched for a repo cut off mid-pagination. Every repo that was not fully listed also gets one `scan-timeout` row with reason `scan budget exhausted`, after its PR rows.
 - `scan-timeout` does not cause a non-zero exit.
 

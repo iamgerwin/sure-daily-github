@@ -205,8 +205,9 @@ class ConflictFixer {
   }
 
   // Lists every repository's open PRs within the scan budget. Repositories not
-  // fully listed before the deadline are returned as timedOut.
-  async gather(repositories, deadline) {
+  // fully listed before the deadline are returned as timedOut. With prNumber
+  // (--pr), only that PR's mergeability is waited for.
+  async gather(repositories, deadline, prNumber = null) {
     const remaining = () => deadline - this.now();
     const scanned = [];
     for (const repoConfig of repositories) {
@@ -214,7 +215,7 @@ class ConflictFixer {
         scanned.push({ repoConfig, timedOut: true });
         continue;
       }
-      const listed = await this.listPullRequests(repoConfig.owner, repoConfig.repo, remaining);
+      const listed = await this.listPullRequests(repoConfig.owner, repoConfig.repo, remaining, prNumber);
       scanned.push({ repoConfig, ...listed });
     }
     return scanned;
@@ -260,7 +261,7 @@ class ConflictFixer {
       const allowed = repositories.filter(r => !gates.get(r));
 
       // The budget covers only gathering; collected PRs are always processed
-      const scanned = new Map((await this.gather(allowed, this.now() + scanBudgetSeconds * 1000))
+      const scanned = new Map((await this.gather(allowed, this.now() + scanBudgetSeconds * 1000, prNumber))
         .map(entry => [entry.repoConfig, entry]));
 
       const results = [];
@@ -320,13 +321,16 @@ class ConflictFixer {
   }
 
   // Re-polls while GitHub reports UNKNOWN mergeability, but only while the
-  // budget can cover the sleep; the last complete listing is kept on expiry
-  async listPullRequests(owner, repo, remaining = () => Infinity) {
+  // budget can cover the sleep; the last complete listing is kept on expiry.
+  // With prNumber, an unrelated PR still at UNKNOWN does not hold up the run:
+  // only the targeted PR is processed, so only its mergeability is re-polled.
+  async listPullRequests(owner, repo, remaining = () => Infinity, prNumber = null) {
     const shouldContinue = () => remaining() > 0;
     let result = await this.client.listOpenPullRequests(owner, repo, { shouldContinue });
     for (let attempt = 0; attempt < UNKNOWN_RETRIES; attempt++) {
       const pending = result.success
-        && result.data.some(pr => !pr.isCrossRepository && pr.mergeable === 'UNKNOWN');
+        && result.data.some(pr => !pr.isCrossRepository && pr.mergeable === 'UNKNOWN'
+          && (prNumber === null || pr.number === prNumber));
       if (!pending || remaining() <= this.retryDelayMs) break;
       await this.delay(this.retryDelayMs);
       const retried = await this.client.listOpenPullRequests(owner, repo, { shouldContinue });
