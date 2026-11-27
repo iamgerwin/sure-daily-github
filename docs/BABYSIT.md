@@ -151,7 +151,10 @@ interpreter gap completely requires running the engine in a container.
    including commits the engine makes.
 4. **Triage.** The engine gets the comments plus the PR diff and must write
    `{"comments":[{"id","action","reasoning","plan"}]}` to a JSON file. Its
-   stdout is never parsed. Each comment gets one action: `fix`, `defer`,
+   stdout is never parsed. A leading byte order mark, or one markdown code
+   fence around the whole file (```` ```json ... ``` ````), is removed before
+   the file is parsed and validated; this also applies to the implement
+   report. Text outside the fence still makes the file invalid. Each comment gets one action: `fix`, `defer`,
    `wontfix`, or `note`. Anything the engine changed during triage is
    discarded.
 5. **Implement** (only if there are `fix` items). The engine applies the

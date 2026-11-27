@@ -251,12 +251,27 @@ export function buildImplementPrompt({ pr, items, reportFile }) {
   ].join('\n');
 }
 
+// A whole file that is one markdown code fence (```json ... ``` or ~~~)
+const WHOLE_FENCE = /^(`{3,}|~{3,})[^\n`]*\n([\s\S]*?)\n?\1[ \t]*$/;
+
+// Parses an engine's output file as JSON. Engines write the file themselves,
+// and an LLM engine often wraps the JSON in a markdown code fence or an editor
+// prepends a UTF-8 byte order mark; JSON.parse rejects both, which would throw
+// away a whole triage or implement call over packaging. Only a fence around
+// the entire file is unwrapped, and the content is validated as before.
+// Throws like JSON.parse when the content is still not JSON.
+export function parseEngineJson(raw) {
+  const text = String(raw).replace(/^﻿/, '').trim();
+  const fenced = WHOLE_FENCE.exec(text);
+  return JSON.parse(fenced ? fenced[2] : text);
+}
+
 // Validates the engine's triage file against the ids it was given. Unknown ids
 // are ignored; ids it did not decide on are reported in `missing`.
 export function parseTriage(raw, expectedIds) {
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseEngineJson(raw);
   } catch (error) {
     return { ok: false, error: `triage output is not valid JSON: ${error.message}` };
   }
@@ -298,7 +313,7 @@ export function parseTriage(raw, expectedIds) {
 export function parseImplementReport(raw, expectedIds) {
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseEngineJson(raw);
   } catch (_) {
     return null;
   }
