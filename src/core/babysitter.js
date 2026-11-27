@@ -656,7 +656,9 @@ export class Babysitter {
           reasoning: decision.reasoning,
           plan: decision.plan
         })),
-        undecided: failures.map(f => f.comment.id)
+        // A comment whose triage batch could not start has no decision either;
+        // leaving it out would make the plan look complete
+        undecided: [...failures, ...retrying].map(f => f.comment.id)
       };
     }
 
