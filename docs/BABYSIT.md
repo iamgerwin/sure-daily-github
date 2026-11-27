@@ -254,7 +254,8 @@ change the work tree after the engine is done.
 
 ## Per-comment memory (ledger)
 
-`data/babysitter-state.json` (override with `SDG_BABYSITTER_STATE_FILE`)
+`data/babysitter-state.json` (override with `SDG_BABYSITTER_STATE_FILE`; a
+relative value is resolved against the project root, not the working directory)
 records each comment, keyed by repository, PR, and comment id. Each entry
 holds its state, the PR head SHA at handling time, the action, the reply id,
 and the commit SHA. Writes are atomic (write, then rename). A corrupt file is

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { resolveDataPath } from './data-path.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEDGER_FILE = path.join(__dirname, '../../data/babysitter-state.json');
@@ -26,7 +27,7 @@ const isObject = (value) => value && typeof value === 'object' && !Array.isArray
 // with which reply/commit, so a comment is answered exactly once across runs
 export class BabysitterLedger {
   constructor(options = {}) {
-    this.filePath = options.filePath || process.env.SDG_BABYSITTER_STATE_FILE || DEFAULT_LEDGER_FILE;
+    this.filePath = options.filePath || resolveDataPath(process.env.SDG_BABYSITTER_STATE_FILE, DEFAULT_LEDGER_FILE);
     this.data = this.load();
   }
 

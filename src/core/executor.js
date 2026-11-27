@@ -10,6 +10,7 @@ import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import config from '../config/loader.js';
 import { check as policyCheck, downgradeMode, MODES, DEFAULT_CAPS } from './policy.js';
+import { resolveDataPath } from '../utils/data-path.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DECISIONS_FILE = path.join(__dirname, '../../data/pr-maint-decisions.jsonl');
@@ -208,7 +209,7 @@ class Executor {
 }
 
 export function decisionsFilePath() {
-  return process.env.SDG_PR_MAINT_DECISIONS_FILE || DEFAULT_DECISIONS_FILE;
+  return resolveDataPath(process.env.SDG_PR_MAINT_DECISIONS_FILE, DEFAULT_DECISIONS_FILE);
 }
 
 // The mode a tick runs in: a tripped breaker caps the configured mode

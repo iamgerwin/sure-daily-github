@@ -112,6 +112,10 @@ copied (for example it cannot be read at all), the report says so instead of nam
 | `data/pr-maint.lock` (tick lock) | `SDG_PR_MAINT_LOCK_FILE` |
 | `data/pr-maint-decisions.jsonl` (decisions log) | `SDG_PR_MAINT_DECISIONS_FILE` |
 
+A relative `SDG_PR_MAINT_STATE_FILE` or `SDG_PR_MAINT_DECISIONS_FILE` is resolved against the project root, not the
+working directory, so a scheduled tick and a manual `pr-maint` started from another directory share one ledger and one
+decisions log. Surrounding whitespace is ignored, and a blank value keeps the default.
+
 ### Label state machine
 
 Labels are created (or repaired, for the AI-owned ones) on the first `act` tick. Each of those writes is admitted like an

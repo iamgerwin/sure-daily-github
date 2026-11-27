@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readLedgerObject } from './ledger-file.js';
+import { resolveDataPath } from './data-path.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEDGER_FILE = path.join(__dirname, '../../data/conflict-fixer-state.json');
@@ -52,7 +53,7 @@ function pruneExpired(entries, now, { attemptTtlMs, retryCooldownMs }) {
 // runs do not clone and test the same commit again
 export class FixerLedger {
   constructor({ filePath } = {}) {
-    this.filePath = filePath || process.env.SDG_CONFLICT_FIXER_STATE_FILE || DEFAULT_LEDGER_FILE;
+    this.filePath = filePath || resolveDataPath(process.env.SDG_CONFLICT_FIXER_STATE_FILE, DEFAULT_LEDGER_FILE);
   }
 
   load() {
