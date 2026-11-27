@@ -111,6 +111,10 @@ system**, not by the prompt:
   - the `ssh`, `ext`, and `git` protocols set to `never`, plus
     `GIT_SSH_COMMAND=false`
   - `GH_CONFIG_DIR=/dev/null`
+  - `core.hooksPath=/dev/null`, `core.fsmonitor=false`, and
+    `commit.gpgSign=false`: a hook, fsmonitor command, or `gpg.program` the
+    engine writes into the clone's `.git/` never runs through its own
+    `git commit` or `git status`
 
   So even a command the policy misses finds no git or `gh` credential under
   `HOME`.
