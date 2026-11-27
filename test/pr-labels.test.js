@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState } from '../src/github/pr-labels.js';
+import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState, contextsState } from '../src/github/pr-labels.js';
 import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
@@ -124,6 +124,21 @@ test('freshPullRequest reads live checks on request, failing closed when they be
   assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, null);
 });
 
+test('freshPullRequest treats check contexts past the 100 it reads as pending', async () => {
+  const passing = Array.from({ length: 100 }, (_, i) => ({ __typename: 'CheckRun', name: `job-${i}`, status: 'COMPLETED', conclusion: 'SUCCESS' }));
+  let contexts = { totalCount: 130, nodes: passing };
+  const stub = stubOctokit({
+    graphql: () => ({ repository: { pullRequest: { commits: { nodes: [{ commit: { oid: 'h1', statusCheckRollup: { contexts } } }] } } } })
+  });
+  stub.octokit.rest.pulls = { get: async () => ({ data: { number: 3, state: 'open', head: { sha: 'h1' }, labels: [], mergeable: true, mergeable_state: 'clean' } }) };
+  const github = new PrMaintGitHub(stub.octokit);
+  // A failing check may sit among the 30 unread ones, so tests-red is not cleared
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, 'PENDING');
+  assert.match(stub.calls[0].query, /contexts\(first: 100\) \{\s*totalCount/);
+  contexts = { totalCount: 100, nodes: passing };
+  assert.equal((await github.freshPullRequest(OWNER, 'demo', 3, { checks: true })).checks, 'SUCCESS');
+});
+
 test('readDashboard returns null for a deleted, closed, or foreign issue', async () => {
   const issue = { number: 77, state: 'open', body: `${MARKERS.dashboard}\nx`, user: { login: OWNER } };
   let respond = () => ({ data: issue });
@@ -236,6 +251,28 @@ test('fetchSnapshot normalizes every page and detects a paused dashboard', async
   assert.deepEqual(calls.map(c => c.params.cursor), [null, 'c1']);
 });
 
+test('fetchSnapshot reads the check context count and fails closed past the 100 it reads', async () => {
+  const passing = Array.from({ length: 100 }, (_, i) => ({ __typename: 'CheckRun', name: `job-${i}`, status: 'COMPLETED', conclusion: 'SUCCESS' }));
+  const node = (number, contexts) => ({
+    number, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE', author: { login: OWNER }, labels: { nodes: [] },
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts } } }] }
+  });
+  const { github, calls } = await client({
+    graphql: () => ({
+      repository: {
+        pausedIssues: { nodes: [] },
+        pullRequests: {
+          nodes: [node(1, { totalCount: 101, nodes: passing }), node(2, { totalCount: 100, nodes: passing })],
+          pageInfo: { hasNextPage: false, endCursor: null }
+        }
+      }
+    })
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.match(calls[0].query, /contexts\(first: 100\) \{\s*totalCount/);
+  assert.deepEqual(snapshot.prs.map(p => p.checks), ['PENDING', 'SUCCESS']);
+});
+
 test('rollupState leaves out our own status and reports the worst remaining state', () => {
   const run = (status, conclusion) => ({ __typename: 'CheckRun', name: 'test', status, conclusion });
   const ctx = (context, state) => ({ __typename: 'StatusContext', context, state });
@@ -245,6 +282,22 @@ test('rollupState leaves out our own status and reports the worst remaining stat
   assert.equal(rollupState([run('IN_PROGRESS', null), run('COMPLETED', 'SUCCESS')]), 'PENDING');
   assert.equal(rollupState([run('COMPLETED', 'FAILURE'), ctx('ci', 'PENDING')]), 'FAILURE');
   assert.equal(mergePolicyState([ctx('ci', 'SUCCESS'), ctx(MERGE_POLICY_CONTEXT, 'PENDING')]), 'PENDING');
+});
+
+test('contextsState fails closed when GitHub has more check contexts than were read', () => {
+  const run = (conclusion) => ({ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion });
+  const passing = [run('SUCCESS'), run('SUCCESS')];
+  // Every context read: the plain rollup
+  assert.equal(contextsState({ totalCount: 2, nodes: passing }), 'SUCCESS');
+  assert.equal(contextsState({ nodes: passing }), 'SUCCESS', 'no totalCount reads as complete');
+  // Unread contexts may hold a failure, so passing read ones are only pending
+  assert.equal(contextsState({ totalCount: 3, nodes: passing }), 'PENDING');
+  // A failure already read stays a failure
+  assert.equal(contextsState({ totalCount: 3, nodes: [run('SUCCESS'), run('FAILURE')] }), 'FAILURE');
+  // Only our own status read, more unread: not "no checks"
+  assert.equal(contextsState({ totalCount: 2, nodes: [{ __typename: 'StatusContext', context: MERGE_POLICY_CONTEXT, state: 'SUCCESS' }] }), 'PENDING');
+  assert.equal(contextsState(undefined), null);
+  assert.equal(contextsState({ totalCount: 0, nodes: [] }), null);
 });
 
 test('rollupState counts only passing conclusions as success; stale and unknown ones are pending', () => {
