@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError } from '../src/github/octokit.js';
+import { createOctokit, getRetryDelayMs, SECONDARY_RATE_LIMIT_DELAY_MS, MAX_RETRY_DELAY_MS, getRequestRetries, getRequestTimeoutMs, isIdempotentRequest, parseRetryAfterMs, graphqlRateLimitError, attemptSignal } from '../src/github/octokit.js';
 import { MAX_TIMER_MS } from '../src/utils/process.js';
 
 // Serves the queued responses in order, recording each request method
@@ -274,6 +274,73 @@ test('each retry of a timed-out GET gets a fresh deadline', async () => {
     server.closeAllConnections();
     server.close();
   }
+});
+
+// The first request stalls; later ones answer immediately
+async function startStallingServer() {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    if (++calls === 1) return;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ login: 'me' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    calls: () => calls,
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    close: () => { server.closeAllConnections(); server.close(); }
+  };
+}
+
+test('a caller signal keeps the per-attempt deadline, so a stalled GET is retried', { skip: typeof AbortSignal.any !== 'function' }, async () => {
+  const srv = await startStallingServer();
+  const controller = new AbortController();
+  process.env.GITHUB_REQUEST_TIMEOUT_MS = '200';
+  try {
+    const octokit = createOctokit({ baseUrl: srv.baseUrl, retry: { baseDelayMs: 5 } });
+    const started = Date.now();
+    const { data } = await octokit.request('GET /user', { request: { signal: controller.signal } });
+    assert.equal(data.login, 'me');
+    assert.equal(srv.calls(), 2);
+    assert.ok(Date.now() - started < 5000, 'the stalled attempt should time out quickly');
+    assert.equal(controller.signal.aborted, false);
+  } finally {
+    delete process.env.GITHUB_REQUEST_TIMEOUT_MS;
+    srv.close();
+  }
+});
+
+test('a caller abort during a stalled request still wins over the deadline and is not retried', async () => {
+  const srv = await startStallingServer();
+  const controller = new AbortController();
+  const reason = new Error('scan canceled');
+  const timer = setTimeout(() => controller.abort(reason), 50);
+  try {
+    const octokit = createOctokit({ baseUrl: srv.baseUrl, retry: { baseDelayMs: 5 } });
+    await assert.rejects(octokit.request('GET /user', { request: { signal: controller.signal } }), error => error === reason);
+    assert.equal(srv.calls(), 1);
+  } finally {
+    clearTimeout(timer);
+    srv.close();
+  }
+});
+
+test('attemptSignal combines the caller signal with the deadline', { skip: typeof AbortSignal.any !== 'function' }, async () => {
+  assert.equal(attemptSignal(undefined, 1000).aborted, false);
+
+  const controller = new AbortController();
+  const signal = attemptSignal(controller.signal, 20);
+  assert.notEqual(signal, controller.signal);
+  await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(signal.reason.name, 'TimeoutError');
+  assert.equal(controller.signal.aborted, false);
+
+  const caller = new AbortController();
+  const reason = new Error('stop');
+  const combined = attemptSignal(caller.signal, 60000);
+  caller.abort(reason);
+  assert.equal(combined.aborted, true);
+  assert.equal(combined.reason, reason);
 });
 
 test('getRetryDelayMs refuses to wait for a distant rate limit reset', () => {
