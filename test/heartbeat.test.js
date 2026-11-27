@@ -49,6 +49,23 @@ test('heartbeatFilePath honors SDG_HEARTBEAT_FILE', (t) => {
   assert.equal(heartbeatFilePath(), '/tmp/custom-heartbeat.json');
 });
 
+test('heartbeatFilePath uses data/scheduler-heartbeat.json under the project root by default', (t) => {
+  useHeartbeatFile(t, '');
+  assert.equal(heartbeatFilePath(), path.join(root, 'data', 'scheduler-heartbeat.json'));
+});
+
+// health-check.sh resolves a relative path against the app directory, so the
+// scheduler must write there too, whatever directory it was started from
+test('heartbeatFilePath resolves a relative SDG_HEARTBEAT_FILE against the project root, not the cwd', (t) => {
+  const cwd = process.cwd();
+  process.chdir(tmpDir(t));
+  t.after(() => process.chdir(cwd));
+  useHeartbeatFile(t, 'state/heartbeat.json');
+  assert.equal(heartbeatFilePath(), path.join(root, 'state', 'heartbeat.json'));
+  useHeartbeatFile(t, './state/../hb.json');
+  assert.equal(heartbeatFilePath(), path.join(root, 'hb.json'));
+});
+
 test('every scheduled tick writes a heartbeat, including one skipped for overlap', async (t) => {
   const file = path.join(tmpDir(t), 'heartbeat.json');
   useHeartbeatFile(t, file);
