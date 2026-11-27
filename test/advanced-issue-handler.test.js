@@ -805,6 +805,22 @@ test('leaves unknown placeholders as written', () => {
   assert.equal(body, '${constructor} ${toString}');
 });
 
+test('caps a title filled from a long randomization title list entry at 256 characters', () => {
+  const { handler } = createHandler();
+  const config = {
+    randomization: { bugTitles: ['Crash '.repeat(60)] },
+    contentTemplates: [{ title: 'Bug: ${randomBugTitle}', body: `${'Details '.repeat(9000)}` }]
+  };
+
+  const { title, body } = handler.generateIssueContent(repo(), config);
+
+  assert.ok(title.length <= 256);
+  assert.ok(title.startsWith('Bug: Crash Crash'));
+  assert.ok(title.endsWith('...'));
+  assert.ok(body.length <= 65536);
+  assert.match(body, /truncated to fit GitHub's issue size limit\)$/);
+});
+
 test('waits between repositories that create issues but not after the last one', async () => {
   const { handler, created } = createHandler();
   const delays = [];

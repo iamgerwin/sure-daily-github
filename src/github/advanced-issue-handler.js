@@ -1,4 +1,5 @@
 import { createOctokit } from './octokit.js';
+import { fitIssueTitle, fitIssueBody } from './issue-limits.js';
 import logger from '../utils/logger.js';
 import randomizer from '../utils/randomizer.js';
 import stateManager from '../utils/state.js';
@@ -254,8 +255,10 @@ class AdvancedIssueHandler {
     // placeholders are left as written.
     const fill = text => text.replace(/\$\{(\w+)\}/g, (match, key) =>
       Object.hasOwn(replacements, key) ? String(replacements[key]) : match);
-    title = fill(title);
-    body = fill(body);
+    // Capped after filling: a long configured title or randomization title
+    // list entry would otherwise be rejected by GitHub on every run
+    title = fitIssueTitle(fill(title));
+    body = fitIssueBody(fill(body));
     
     return {
       title,
