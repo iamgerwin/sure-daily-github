@@ -100,7 +100,19 @@ test('isTestFile matches test directories and .test/.spec files', () => {
   for (const file of ['test/a.js', 'test/unit/b.txt', '__tests__/c.js', 'src/x.test.js', 'lib/deep/y.spec.js', 'z.test.js']) {
     assert.equal(isTestFile(file), true, file);
   }
-  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'a.test.ts', 'testing/a.js']) {
+  for (const file of ['src/test.js', 'src/test/a.js', 'tests/a.js', 'src/a.js', 'testing/a.js']) {
+    assert.equal(isTestFile(file), false, file);
+  }
+});
+
+test('isTestFile matches the .test/.spec extensions Jest and Vitest find by default', () => {
+  for (const ext of ['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx']) {
+    for (const file of [`src/a.test.${ext}`, `lib/deep/b.spec.${ext}`, `c.test.${ext}`]) {
+      assert.equal(isTestFile(file), true, file);
+    }
+  }
+  for (const file of ['src/a.ts', 'src/test.ts', 'src/a.test.d.ts.map', 'src/a.test.json', 'src/a.test.tsx.snap',
+    'src/a.test.py', 'src/a.tests.ts', 'src/atest.ts', 'src/a.spec.md', 'src/a.test.ts.orig', 'src/a.test.d.mts.bak']) {
     assert.equal(isTestFile(file), false, file);
   }
 });

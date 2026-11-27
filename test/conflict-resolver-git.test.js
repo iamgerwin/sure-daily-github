@@ -337,3 +337,57 @@ test('resolveConflicts refuses a resolution that still contains markers', async 
   assert.equal(result.resolved, false);
   assert.match(result.reason, /conflict markers left/);
 });
+
+// TypeScript and ESM test files are test files too: newer-wins on them dropped
+// the older side's tests, as it once did for .test.js
+test('resolveConflicts keeps tests added on both sides of .test.ts and .spec.mjs files', async (t) => {
+  for (const file of ['app.test.ts', 'app.spec.mjs', 'view.test.tsx']) {
+    const dir = await conflictedRepo(t, {
+      base: { [file]: testFile('base') },
+      master: [[{ [file]: testFile('base', 'master') }, '2026-02-01T00:00:00Z']],
+      feature: [[{ [file]: testFile('base', 'feature') }, '2026-01-01T00:00:00Z']]
+    });
+
+    const result = await resolveConflicts({ cwd: dir });
+
+    assert.equal(result.resolved, true, result.reason);
+    assert.deepEqual(result.files, [{ file, hunks: ['union'] }]);
+    assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), testFile('base', 'feature', 'master'));
+  }
+});
+
+test('resolveConflicts merges a .test.ts conflict as a test file even when source hunks escalate', async (t) => {
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.ts': testFile('base') },
+    master: [[{ 'app.test.ts': testFile('base', 'master') }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.ts': testFile('base', 'feature') }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir, sourceHunks: 'escalate' });
+
+  assert.equal(result.resolved, true, result.reason);
+  assert.equal(fs.readFileSync(path.join(dir, 'app.test.ts'), 'utf8'), testFile('base', 'feature', 'master'));
+});
+
+test('resolveConflicts runs the test-count guard on a .test.ts file', async (t) => {
+  const filler = Array.from({ length: 6 }, (_, i) => `// spacer ${i + 1}\n`).join('');
+  const file = (top, bottom) => [
+    "import { test } from 'vitest';\n",
+    ...top.map(name => `test('${name}', () => {});\n`),
+    filler,
+    "test('three', () => {});\n",
+    ...bottom.map(name => `test('${name}', () => {});\n`)
+  ].join('');
+  const dir = await conflictedRepo(t, {
+    base: { 'app.test.ts': file(['one', 'two'], []) },
+    // master cleanly deletes two tests at the top; both sides add one at the end
+    master: [[{ 'app.test.ts': file([], ['master']) }, '2026-02-01T00:00:00Z']],
+    feature: [[{ 'app.test.ts': file(['one', 'two'], ['feature']) }, '2026-01-01T00:00:00Z']]
+  });
+
+  const result = await resolveConflicts({ cwd: dir });
+
+  assert.equal(result.resolved, false);
+  assert.equal(result.file, 'app.test.ts');
+  assert.match(result.reason, /keeps 3 tests, fewer than the 4 on one side/);
+});

@@ -117,8 +117,14 @@ export function pickNewer(oursTime, theirsTime) {
 const normalize = (line) => line.replace(/\r?\n$/, '');
 const sameLines = (a, b) => a.length === b.length && a.every((line, i) => normalize(line) === normalize(b[i]));
 
+// The .test/.spec suffixes Jest and Vitest find by default beyond .js
+// (`*.{test,spec}.?(c|m)[jt]s?(x)`): ESM, CommonJS, JSX and TypeScript test
+// files. Without them a conflict in foo.test.ts kept only the newer side,
+// dropping the tests the older side added, and skipped the test-count guard.
+const TEST_FILE_SUFFIX = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
 export function isTestFile(file) {
-  return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
+  return TEST_FILE_PATTERNS.some(pattern => pattern.test(file)) || TEST_FILE_SUFFIX.test(file);
 }
 
 const blankOut = (text) => text.replace(/[^\n]/g, ' ');
