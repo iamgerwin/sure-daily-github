@@ -342,9 +342,10 @@ const commentSize = (c) => (c.body || '').length + (c.diffHunk || '').length;
 // A failed batch only affects its own items: they are listed in
 // `batchFailures` ({ ids, infra, error }) while the other batches' results
 // are kept. Only when every batch fails is the whole call a failure; its
-// `batchFailures` still classify each item by its own batch.
+// `batchFailures` still classify each item by its own batch. No items means no
+// batches and nothing that failed, so that call succeeds with empty results.
 function settleBatches(failures, batchCount, result) {
-  if (failures.length === batchCount) {
+  if (batchCount > 0 && failures.length === batchCount) {
     return { ok: false, infra: failures.every(f => f.infra), error: failures[0].error, batchFailures: failures };
   }
   return { ok: true, ...result, batchFailures: failures };

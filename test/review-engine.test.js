@@ -9,6 +9,7 @@ import {
   CLAUDE_DISALLOWED_TOOLS,
   ENGINE_ENV_LOCKDOWN,
   MAX_BATCH_CHARS,
+  batchBySize,
   buildEngineCommand,
   opencodePolicy,
   runEngine,
@@ -561,4 +562,22 @@ test('runImplement names the signal that killed the engine instead of a null exi
   assert.equal(result.ok, false);
   assert.equal(result.error, 'claude was killed by SIGTERM');
   assert.doesNotMatch(result.error, /code null/);
+});
+
+test('batchBySize keeps order, splits at the bound, and isolates an oversized item', () => {
+  const size = (n) => n;
+  assert.deepEqual(batchBySize([], size, 10), []);
+  assert.deepEqual(batchBySize([4, 5, 1], size, 10), [[4, 5, 1]]);
+  assert.deepEqual(batchBySize([6, 5, 3, 2], size, 10), [[6], [5, 3, 2]]);
+  assert.deepEqual(batchBySize([3, 25, 4], size, 10), [[3], [25], [4]]);
+});
+
+test('runTriage and runImplement with nothing to do succeed without calling the engine', async () => {
+  const dir = tmpDir();
+  const { runner, calls } = stubRunner();
+  const triage = await runTriage({ engine: 'opencode', model: 'm', cwd: '/w', pr, comments: [], diff: '', outputFile: path.join(dir, 'triage.json'), runner });
+  assert.deepEqual(triage, { ok: true, decisions: [], missing: [], batchFailures: [] });
+  const implement = await runImplement({ engine: 'opencode', model: 'm', cwd: '/w', pr, items: [], reportFile: path.join(dir, 'implement.json'), runner });
+  assert.deepEqual(implement, { ok: true, report: { fixes: [], missing: [], conflicting: [], batchFailures: [] } });
+  assert.equal(calls.length, 0);
 });
