@@ -21,13 +21,16 @@ export function getRequestTimeoutMs() {
   return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
-// Whole retries in plain digits, ignoring surrounding whitespace (a systemd
-// Environment= or env-file line), as heartbeat.js reads its minutes. Number()
-// alone reads a blank value as 0, silently turning retries off, and "1e9" or
-// "0x10" as huge or hex counts; those fall back to the default instead.
+// Plain whole digits only, ignoring surrounding whitespace (a systemd
+// Environment= or env-file line). Number() reads a blank or whitespace-only
+// value as 0, which would silently turn retries off instead of keeping the
+// default, and accepts forms such as "0x10" or "1e3" nobody means as a count.
 export function getRequestRetries() {
   const text = String(process.env.GITHUB_REQUEST_RETRIES ?? '').trim();
-  return /^[0-9]+$/.test(text) ? Number(text) : DEFAULT_REQUEST_RETRIES;
+  const value = Number(text);
+  return /^\d+$/.test(text) && Number.isSafeInteger(value)
+    ? value
+    : DEFAULT_REQUEST_RETRIES;
 }
 
 // A secondary (abuse) limit may arrive as a 403 without any rate limit
