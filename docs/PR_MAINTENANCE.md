@@ -93,7 +93,9 @@ there still wakes the PR and its status comment says those threads could not be 
 managed label someone else added or removed is reconciled). `checks` is computed from the check contexts *without*
 `sdg/merge-policy`, and the sticky comment isn't part of the snapshot, so none of our own writes wake a PR. `checks` is
 `SUCCESS` only when every context passes the way a required status check does (`SUCCESS`, `NEUTRAL` or `SKIPPED`); a
-failed one makes it `FAILURE`, and anything else (in progress, `STALE`, or a value GitHub adds later) `PENDING`. An idle tick
+failed one makes it `FAILURE`, and anything else (in progress, `STALE`, or a value GitHub adds later) `PENDING`. Only the first 100 check contexts of the head commit are read; on a PR
+with more, `checks` can never be `SUCCESS` (it is `FAILURE` when a read context failed, `PENDING` otherwise), so a failing
+check past them cannot mark the PR ready or clear `tests-red`. An idle tick
 costs one GraphQL query, one dashboard read, and no writes.
 
 **Idempotency.** GitHub is the source of truth. Labels are compared against the snapshot. The status is only posted when

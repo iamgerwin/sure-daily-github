@@ -59,6 +59,7 @@ const SNAPSHOT_QUERY = `
               commit {
                 statusCheckRollup {
                   contexts(first: 100) {
+                    totalCount
                     nodes {
                       __typename
                       ... on CheckRun { name status conclusion }
@@ -87,6 +88,7 @@ const FRESH_CHECKS_QUERY = `
               oid
               statusCheckRollup {
                 contexts(first: 100) {
+                  totalCount
                   nodes {
                     __typename
                     ... on CheckRun { name status conclusion }
@@ -142,6 +144,19 @@ export function rollupState(contexts = []) {
   return 'SUCCESS';
 }
 
+// The rollup of a statusCheckRollup.contexts connection. Only the first 100
+// contexts are read, so on a PR with more (a large CI matrix) a failing check
+// past them would go unseen and the rest would read as SUCCESS, marking the PR
+// ready or clearing tests-red. Unread contexts fail closed: FAILURE when a read
+// one failed, PENDING otherwise. A response without totalCount is complete.
+export function contextsState(connection) {
+  const nodes = connection?.nodes || [];
+  const total = connection?.totalCount;
+  const state = rollupState(nodes);
+  const unread = Number.isInteger(total) && total > nodes.length;
+  return unread && state !== 'FAILURE' ? 'PENDING' : state;
+}
+
 // Our own status on this head, so a re-run (or a lost ledger) never posts it twice
 export function mergePolicyState(contexts = []) {
   return contexts.find(c => c?.context === MERGE_POLICY_CONTEXT)?.state || null;
@@ -158,7 +173,8 @@ export function unreadCount(connection) {
 }
 
 export function normalizePullRequest(node) {
-  const contexts = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
+  const connection = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+  const contexts = connection?.nodes || [];
   return {
     number: node.number,
     isDraft: Boolean(node.isDraft),
@@ -178,7 +194,7 @@ export function normalizePullRequest(node) {
     })),
     reviewThreadsUnread: unreadCount(node.reviewThreads),
     reviews: (node.reviews?.nodes || []).map(r => ({ id: r.id, state: r.state, author: r.author?.login || null })),
-    checks: rollupState(contexts),
+    checks: contextsState(connection),
     mergePolicy: mergePolicyState(contexts)
   };
 }
@@ -232,7 +248,7 @@ export class PrMaintGitHub {
       const result = await this.octokit.graphql(FRESH_CHECKS_QUERY, { owner, repo, number });
       const commit = result.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
       fresh.checks = commit && commit.oid === fresh.headRefOid
-        ? rollupState(commit.statusCheckRollup?.contexts?.nodes || [])
+        ? contextsState(commit.statusCheckRollup?.contexts)
         : null;
     }
     return fresh;

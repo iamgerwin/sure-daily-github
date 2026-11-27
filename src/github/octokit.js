@@ -21,10 +21,14 @@ export function getRequestTimeoutMs() {
   return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
+// Plain whole digits only, ignoring surrounding whitespace (a systemd
+// Environment= or env-file line). Number() reads a blank or whitespace-only
+// value as 0, which would silently turn retries off instead of keeping the
+// default, and accepts forms such as "0x10" or "1e3" nobody means as a count.
 export function getRequestRetries() {
-  const raw = process.env.GITHUB_REQUEST_RETRIES;
-  const value = Number(raw);
-  return raw !== undefined && raw !== '' && Number.isInteger(value) && value >= 0
+  const text = String(process.env.GITHUB_REQUEST_RETRIES ?? '').trim();
+  const value = Number(text);
+  return /^\d+$/.test(text) && Number.isSafeInteger(value)
     ? value
     : DEFAULT_REQUEST_RETRIES;
 }
