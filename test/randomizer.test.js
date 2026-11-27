@@ -370,3 +370,102 @@ test('selectRepositories round-robin ignores disabled repositories in the rotati
   assert.deepEqual(selected.map(r => r.id), ['b']);
   assert.equal(store.index, 0);
 });
+
+// The random strategy, the sequential shuffle and randomInt draw from
+// crypto.randomInt, which cannot be seeded, so these tests check the invariants
+// every draw must hold and that, over many draws, every outcome is reachable.
+// With 600 draws over at most 6 equally likely outcomes, missing one has a
+// probability below 1e-46.
+const DRAWS = 600;
+
+test('randomInt stays within the inclusive range and reaches both bounds', () => {
+  const seen = new Set();
+  for (let i = 0; i < DRAWS; i++) {
+    const value = randomizer.randomInt(1, 3);
+    assert.ok(Number.isInteger(value) && value >= 1 && value <= 3, `out of range: ${value}`);
+    seen.add(value);
+  }
+  assert.deepEqual([...seen].sort(), [1, 2, 3]);
+});
+
+test('shuffleArray returns a permutation without changing its input and reaches every order', () => {
+  const input = ['a', 'b', 'c'];
+  const orders = new Set();
+  for (let i = 0; i < DRAWS; i++) {
+    const shuffled = randomizer.shuffleArray(input);
+    assert.notEqual(shuffled, input);
+    assert.deepEqual([...shuffled].sort(), ['a', 'b', 'c']);
+    orders.add(shuffled.join(''));
+  }
+  assert.deepEqual(input, ['a', 'b', 'c']);
+  assert.equal(orders.size, 6);
+});
+
+test('selectRepositories random picks maxPerExecution distinct enabled repositories', () => {
+  const repos = [
+    { id: 'a', enabled: true },
+    { id: 'x', enabled: false },
+    { id: 'b', enabled: true },
+    { id: 'c', enabled: true }
+  ];
+  const snapshot = repos.map(repo => repo.id);
+  const picked = new Set();
+  for (let i = 0; i < DRAWS; i++) {
+    const selected = randomizer.selectRepositories(repos, { strategy: 'random', maxPerExecution: 2 });
+    const ids = selected.map(repo => repo.id);
+    assert.equal(ids.length, 2);
+    assert.equal(new Set(ids).size, 2, `picked a repository twice: ${ids}`);
+    assert.ok(!ids.includes('x'), 'picked a disabled repository');
+    ids.forEach(id => picked.add(id));
+  }
+  assert.deepEqual([...picked].sort(), ['a', 'b', 'c']);
+  assert.deepEqual(repos.map(repo => repo.id), snapshot);
+});
+
+test('selectRepositories random without a usable cap selects every enabled repository', () => {
+  const repos = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const firsts = new Set();
+  for (let i = 0; i < DRAWS; i++) {
+    for (const maxPerExecution of [undefined, null, 3, 10]) {
+      const selected = randomizer.selectRepositories(repos, { strategy: 'random', maxPerExecution });
+      assert.deepEqual(selected.map(repo => repo.id).sort(), ['a', 'b', 'c']);
+      firsts.add(selected[0].id);
+    }
+  }
+  // Every repository gets to go first, so none always runs ahead of the others
+  assert.deepEqual([...firsts].sort(), ['a', 'b', 'c']);
+});
+
+test('selectRepositories sequential with randomizeOrder shuffles before applying maxPerExecution', () => {
+  const repos = ['a', 'b', 'c'].map(id => ({ id, enabled: true }));
+  const picked = new Set();
+  for (let i = 0; i < DRAWS; i++) {
+    const selected = randomizer.selectRepositories(repos, { strategy: 'sequential', randomizeOrder: true, maxPerExecution: 2 });
+    const ids = selected.map(repo => repo.id);
+    assert.equal(ids.length, 2);
+    assert.equal(new Set(ids).size, 2);
+    ids.forEach(id => picked.add(id));
+  }
+  // Without the shuffle the cap would always keep a and b
+  assert.ok(picked.has('c'), 'the last repository was never selected');
+  assert.deepEqual(repos.map(repo => repo.id), ['a', 'b', 'c']);
+});
+
+test('selectRepositories returns nothing without enabled repositories', () => {
+  for (const strategy of ['sequential', 'random', 'weighted', 'round-robin']) {
+    const cursor = { getRoundRobinIndex: () => 0, setRoundRobinIndex: () => assert.fail('cursor moved') };
+    assert.deepEqual(randomizer.selectRepositories([], { strategy }, cursor), []);
+    assert.deepEqual(randomizer.selectRepositories(null, { strategy }, cursor), []);
+    assert.deepEqual(randomizer.selectRepositories([{ id: 'x', enabled: false }], { strategy }, cursor), []);
+  }
+});
+
+test('selectRepositories defaults to sequential order without a selection config', () => {
+  const repos = [
+    { id: 'a', enabled: true },
+    { id: 'x', enabled: false },
+    { id: 'b', enabled: true }
+  ];
+  assert.deepEqual(randomizer.selectRepositories(repos).map(repo => repo.id), ['a', 'b']);
+  assert.deepEqual(randomizer.selectRepositories(repos, {}).map(repo => repo.id), ['a', 'b']);
+});
