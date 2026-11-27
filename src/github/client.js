@@ -68,34 +68,6 @@ class GitHubClient {
     }
   }
 
-  async getRepository(owner, repo) {
-    try {
-      const { data } = await this.octokit.rest.repos.get({ owner, repo });
-      return { success: true, data };
-    } catch (error) {
-      logger.error('Failed to get repository', { owner, repo, error: error.message });
-      return { success: false, error: error.message };
-    }
-  }
-
-  async getDefaultBranch(owner, repo) {
-    const result = await this.getRepository(owner, repo);
-    if (result.success) {
-      return result.data.default_branch;
-    }
-    return 'main';
-  }
-
-  async getBranch(owner, repo, branch) {
-    try {
-      const { data } = await this.octokit.rest.repos.getBranch({ owner, repo, branch });
-      return { success: true, data };
-    } catch (error) {
-      logger.error('Failed to get branch', { owner, repo, branch, error: error.message });
-      return { success: false, error: error.message };
-    }
-  }
-
   // Without a branch, the contents API reads from and writes to the repository's
   // default branch, so repos whose default is not "main" still work unconfigured
   async getFile(owner, repo, path, branch = null) {
@@ -260,21 +232,6 @@ class GitHubClient {
       const { data } = await this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body });
       return data;
     });
-  }
-
-  async getRateLimit() {
-    try {
-      const { data } = await this.octokit.rest.rateLimit.get();
-      return {
-        core: {
-          limit: data.resources.core.limit,
-          remaining: data.resources.core.remaining,
-          reset: new Date(data.resources.core.reset * 1000)
-        }
-      };
-    } catch (error) {
-      return { error: error.message };
-    }
   }
 }
 
