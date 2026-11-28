@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState, contextsState } from '../src/github/pr-labels.js';
-import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED } from '../src/core/policy.js';
+import {
+  PrMaintGitHub, LABEL_DEFINITIONS, DASHBOARD_TITLE, rollupState, mergePolicyState, contextsState, canonicalLabel, normalizePullRequest
+} from '../src/github/pr-labels.js';
+import { decide } from '../src/core/pr-maint.js';
+import { MARKERS, MERGE_POLICY_CONTEXT, PAUSED, NEEDS_HUMAN } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
 
@@ -93,6 +96,43 @@ test('ensureLabels stops at the first write its admission refuses and reports it
   assert.deepEqual(result, { written: 2, complete: false });
   assert.deepEqual(admitted, ['create label sdg:conflict', 'create label sdg:fixing']);
   assert.equal(calls.filter(c => c.name === 'createLabel').length, 2);
+});
+
+test('canonicalLabel maps every known label in any case to its canonical name and passes others through', () => {
+  for (const { name } of LABEL_DEFINITIONS) {
+    assert.equal(canonicalLabel(name), name);
+    assert.equal(canonicalLabel(name.toUpperCase()), name);
+  }
+  assert.equal(canonicalLabel('Automation-Paused'), PAUSED);
+  assert.equal(canonicalLabel('Needs-Human'), NEEDS_HUMAN);
+  assert.equal(canonicalLabel('Bug'), 'Bug');
+  assert.equal(canonicalLabel('automation-paused-later'), 'automation-paused-later');
+  assert.equal(canonicalLabel(undefined), undefined);
+});
+
+test('snapshot labels in another case still pause, escalate and place a PR', () => {
+  // ensureLabels keeps a label that already exists in another case, so PRs carry it
+  const node = (number, labels) => ({
+    number, isDraft: false, isCrossRepository: false, headRefName: `b${number}`, headRefOid: 'a'.repeat(40), baseRefName: 'master',
+    mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', author: { login: OWNER },
+    labels: { nodes: labels.map(name => ({ name })) }
+  });
+  const prs = [node(1, ['Automation-Paused']), node(2, ['Needs-Human']), node(3, ['SDG:Waiting', 'Bug'])].map(normalizePullRequest);
+  assert.deepEqual(prs.map(p => p.labels), [[PAUSED], [NEEDS_HUMAN], ['sdg:waiting', 'Bug']]);
+
+  const { prs: rows } = decide({ prs }, { prs: {}, escalations: {}, dashboard: {} }, { mode: 'act', authors: [OWNER], owner: OWNER, now: Date.UTC(2026, 9, 17), pr: null });
+  assert.equal(rows[0].skip, 'paused');
+  assert.deepEqual(rows[0].actions, []);
+  assert.ok(!rows[1].actions.some(a => a.type === 'label.add'), 'an escalated PR gets no lifecycle label');
+  assert.equal(rows[2].lifecycle, 'sdg:waiting');
+  assert.ok(!rows[2].actions.some(a => a.type === 'label.add' && a.payload.label === 'sdg:waiting'), 'no second sdg:waiting is added');
+});
+
+test('freshPullRequest reports labels in another case by their canonical names', async () => {
+  const stub = stubOctokit();
+  stub.octokit.rest.pulls = { get: async () => ({ data: { number: 3, state: 'open', head: { sha: 'h1' }, labels: [{ name: 'Automation-Paused' }, 'Needs-Human', { name: 'Bug' }], mergeable: true, mergeable_state: 'clean' } }) };
+  const github = new PrMaintGitHub(stub.octokit);
+  assert.deepEqual((await github.freshPullRequest(OWNER, 'demo', 3)).labels, [PAUSED, NEEDS_HUMAN, 'Bug']);
 });
 
 test('freshPullRequest reports mergeability, UNKNOWN until GitHub computed it', async () => {

@@ -18,6 +18,18 @@ export const LABEL_DEFINITIONS = [
   { name: PAUSED, color: '000000', description: 'Kill switch: pr-maint ignores this PR, or everything when on the dashboard issue', managed: false }
 ];
 
+// GitHub label names are unique case-insensitively, and ensureLabels keeps a
+// label that already exists in another case (a human's "Automation-Paused")
+// instead of renaming it, so PRs carry that spelling. Every rule compares the
+// canonical names exactly, so a read label is mapped to its canonical name:
+// otherwise the kill switch, needs-human and the lifecycle labels would be
+// missed on such a repository. Labels pr-maint does not own pass through.
+const CANONICAL_LABELS = new Map(LABEL_DEFINITIONS.map(({ name }) => [name.toLowerCase(), name]));
+
+export function canonicalLabel(name) {
+  return typeof name === 'string' ? CANONICAL_LABELS.get(name.toLowerCase()) ?? name : name;
+}
+
 const FAILED_CONCLUSIONS = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
 // The conclusions a required status check accepts as passing. STALE (GitHub
 // gave up on a check run) does not pass and needs a re-run, so it is pending,
@@ -174,7 +186,7 @@ export function normalizePullRequest(node) {
     mergeable: node.mergeable,
     mergeStateStatus: node.mergeStateStatus,
     author: node.author?.login || null,
-    labels: (node.labels?.nodes || []).map(l => l.name),
+    labels: (node.labels?.nodes || []).map(l => canonicalLabel(l.name)),
     reviewThreads: (node.reviewThreads?.nodes || []).map(t => ({
       id: t.id,
       isResolved: Boolean(t.isResolved),
@@ -229,7 +241,7 @@ export class PrMaintGitHub {
       number: data.number,
       state: String(data.state).toUpperCase(),
       headRefOid: data.head?.sha || null,
-      labels: (data.labels || []).map(l => (typeof l === 'string' ? l : l.name)),
+      labels: (data.labels || []).map(l => canonicalLabel(typeof l === 'string' ? l : l.name)),
       ...restMergeable(data)
     };
     if (checks) {

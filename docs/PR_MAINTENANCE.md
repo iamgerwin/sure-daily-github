@@ -117,7 +117,9 @@ copied (for example it cannot be read at all), the report says so instead of nam
 ### Label state machine
 
 Labels are created (or repaired, for the AI-owned ones) on the first `act` tick. Each of those writes is admitted like an
-action (hourly cap, breaker, decisions log as `type: setup`); a setup cut short is finished on a later tick:
+action (hourly cap, breaker, decisions log as `type: setup`); a setup cut short is finished on a later tick. GitHub label
+names are case-insensitive, so a label that already exists in another case (`Automation-Paused`) is kept, not renamed,
+and is read as its canonical name below:
 
 | Label | Added by | Removed by | Meaning |
 |---|---|---|---|
