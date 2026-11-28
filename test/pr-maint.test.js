@@ -639,6 +639,51 @@ test('the default pr-maint lock file is data/pr-maint.lock', () => {
   assert.match(prMaintLockFile(), /data[\\/]pr-maint\.lock$/);
 });
 
+const PROJECT_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+
+function withLockEnv(t, value) {
+  const previous = process.env.SDG_PR_MAINT_LOCK_FILE;
+  if (value === undefined) delete process.env.SDG_PR_MAINT_LOCK_FILE;
+  else process.env.SDG_PR_MAINT_LOCK_FILE = value;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SDG_PR_MAINT_LOCK_FILE;
+    else process.env.SDG_PR_MAINT_LOCK_FILE = previous;
+  });
+}
+
+test('the default pr-maint lock file sits under the project root', (t) => {
+  withLockEnv(t, undefined);
+  assert.equal(prMaintLockFile(), path.join(PROJECT_ROOT, 'data', 'pr-maint.lock'));
+});
+
+test('a blank or whitespace-only SDG_PR_MAINT_LOCK_FILE keeps the default lock', (t) => {
+  for (const value of ['', '   ', '\t']) {
+    withLockEnv(t, value);
+    assert.equal(prMaintLockFile(), path.join(PROJECT_ROOT, 'data', 'pr-maint.lock'), JSON.stringify(value));
+  }
+});
+
+test('a relative SDG_PR_MAINT_LOCK_FILE resolves against the project root, not the working directory', (t) => {
+  withLockEnv(t, 'tmp/pr-maint.lock');
+  const cwd = process.cwd();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-pr-maint-cwd-'));
+  t.after(() => {
+    process.chdir(cwd);
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  const fromRoot = prMaintLockFile();
+  process.chdir(elsewhere);
+  assert.equal(prMaintLockFile(), fromRoot);
+  assert.equal(fromRoot, path.join(PROJECT_ROOT, 'tmp', 'pr-maint.lock'));
+});
+
+test('an absolute SDG_PR_MAINT_LOCK_FILE is used as is, ignoring surrounding whitespace', (t) => {
+  const file = path.join(os.tmpdir(), 'sdg-pr-maint.lock');
+  withLockEnv(t, `  ${file}\n`);
+  assert.equal(prMaintLockFile(), file);
+});
+
 // ---- review regressions ----
 
 const readLedger = (file) => JSON.parse(fs.readFileSync(file, 'utf8')).repos['iamgerwin/demo'];
