@@ -286,10 +286,13 @@ program
             const repoName = repo.repo.padEnd(nameWidth);
             const target = (repo.todayTarget || 'N/A').toString().padStart(10);
             const today = (repo.issuesCreatedToday || 0).toString().padStart(5);
-            let nextIssue = 'Any time';
-            
-            if (repo.nextIssueTime && repo.nextIssueTime !== 'Any time') {
-              nextIssue = formatNextIssueTime(timezone, new Date(repo.nextIssueTime));
+            let nextIssue = repo.nextIssueTime || 'Any time';
+
+            // Only an instant is formatted; 'Any time' and 'Unknown' (a stored
+            // value that is not a date) are shown as they are
+            const nextInstant = new Date(repo.nextIssueTime);
+            if (repo.nextIssueTime && Number.isFinite(nextInstant.getTime())) {
+              nextIssue = formatNextIssueTime(timezone, nextInstant);
             }
             
             nextIssue = nextIssue.padStart(20);

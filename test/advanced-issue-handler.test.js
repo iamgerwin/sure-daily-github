@@ -892,3 +892,37 @@ test('a template label that repeats a repository label is sent once', async () =
   assert.equal(created.length, 1);
   assert.deepEqual(created[0].labels, ['Automated', 'bug']);
 });
+
+// A hand-edited state file must not abort status: run already tolerates an
+// unparseable lastDailyReset (shouldResetDaily), so status must as well
+test('status reports unparseable stored times instead of throwing', async () => {
+  const { handler } = createHandler();
+  writeState(handler, {
+    lastDailyReset: 'yesterday',
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: 'noon', todayTarget: 3, nextIssueTime: null }
+    }
+  });
+
+  const result = await handler.getStatus([repo()], 'UTC');
+  assert.equal(result.lastDailyReset, null);
+  assert.equal(result.repositories[0].lastIssueTime, 'Unknown');
+  assert.equal(result.repositories[0].nextIssueTime, 'Any time');
+  // The next run resets the unplaceable day, so today's count no longer applies
+  assert.equal(result.repositories[0].issuesCreatedToday, 0);
+});
+
+test('status reports a pending next issue past the last representable date as Unknown', async () => {
+  const { handler } = createHandler();
+  const reset = new Date().toISOString();
+  writeState(handler, {
+    lastDailyReset: reset,
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: Date.now(), todayTarget: 3, nextIssueTime: 1e20 }
+    }
+  });
+
+  const result = await handler.getStatus([repo()], 'UTC');
+  assert.equal(result.lastDailyReset, reset);
+  assert.equal(result.repositories[0].nextIssueTime, 'Unknown');
+});
