@@ -19,6 +19,15 @@ const targetBounds = (dailyTarget) => (typeof dailyTarget === 'object'
   ? dailyTarget
   : { min: dailyTarget, max: dailyTarget });
 
+// ISO string of a stored instant, or null when it is not a representable date.
+// The state file can be hand edited; new Date(...).toISOString() throws a
+// RangeError for such a value, which would abort `status` for every repository.
+const toIsoString = (value) => {
+  if (value === null || value === undefined || typeof value === 'boolean') return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+};
+
 // Template labels are added to the repository's labels (default ["automated"]),
 // so a template that also lists "automated" would send it twice. GitHub label
 // names are case-insensitive ("Bug" and "bug" are one label); the first spelling
@@ -509,14 +518,16 @@ class AdvancedIssueHandler {
         repo: `${repo.owner}/${repo.repo}`,
         issuesCreatedToday: todayState.issuesCreatedToday || 0,
         todayTarget: (targetApplies && todayState.todayTarget) || 'Not set',
-        lastIssueTime: repoState.lastIssueTime ? new Date(repoState.lastIssueTime).toISOString() : 'Never',
-        nextIssueTime: waiting ? new Date(nextIssueTime).toISOString() : 'Any time'
+        lastIssueTime: repoState.lastIssueTime ? toIsoString(repoState.lastIssueTime) ?? 'Unknown' : 'Never',
+        nextIssueTime: waiting ? toIsoString(nextIssueTime) ?? 'Unknown' : 'Any time'
       });
     }
-    
-    // The CLI renders these instants in the configured timezone, not the host's
+
+    // The CLI renders these instants in the configured timezone, not the host's.
+    // An unparseable reset time is reported as none: the next run resets
+    // (shouldResetDaily), and the CLI cannot place it in a day either.
     return {
-      lastDailyReset: state.lastDailyReset,
+      lastDailyReset: toIsoString(state.lastDailyReset) ? state.lastDailyReset : null,
       timezone,
       repositories: statuses
     };

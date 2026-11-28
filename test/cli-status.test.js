@@ -220,3 +220,83 @@ test('advanced issue-mode status widens the repository column for a long owner/r
   assert.ok(output.includes(`│ ${longName} │`), output);
   assertAlignedTable(output);
 });
+
+test('advanced issue-mode status still prints the table when stored times are not dates', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  const issueStateFile = path.join(dir, 'issue-state.json');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  timezone: "UTC"',
+    '  mode: "issue"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    '    dailyTarget: { min: 1, max: 3 }',
+    '  - owner: "me"',
+    '    repo: "other"',
+    '    enabled: true',
+    '    dailyTarget: { min: 1, max: 3 }',
+    ''
+  ].join('\n'));
+
+  fs.writeFileSync(issueStateFile, JSON.stringify({
+    lastDailyReset: new Date().toISOString(),
+    repositories: {
+      'me/demo': { issuesCreatedToday: 1, lastIssueTime: 'noon', todayTarget: 3, nextIssueTime: 1e20 },
+      'me/other': { issuesCreatedToday: 0, lastIssueTime: null, todayTarget: 2, nextIssueTime: null }
+    }
+  }));
+
+  // Before, `new Date(...).toISOString()` threw "Invalid time value" and the
+  // command exited 1 without printing any repository
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      TZ: 'UTC',
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_ISSUE_STATE_FILE: issueStateFile,
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  assert.match(output.split('\n').find(line => line.includes('me/demo')) || '', /Unknown │$/, output);
+  assert.match(output.split('\n').find(line => line.includes('me/other')) || '', /Any time │$/, output);
+  assert.match(output, /Last daily reset: /);
+});
+
+test('advanced issue-mode status leaves out a last daily reset that is not a date', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-cli-status-'));
+  const configFile = path.join(dir, 'config.yaml');
+  const issueStateFile = path.join(dir, 'issue-state.json');
+  fs.writeFileSync(configFile, [
+    'general:',
+    '  timezone: "UTC"',
+    '  mode: "issue"',
+    'repositories:',
+    '  - owner: "me"',
+    '    repo: "demo"',
+    '    enabled: true',
+    '    dailyTarget: { min: 1, max: 3 }',
+    ''
+  ].join('\n'));
+  fs.writeFileSync(issueStateFile, JSON.stringify({ lastDailyReset: 'yesterday', repositories: {} }));
+
+  const output = execFileSync(process.execPath, [cliPath, 'status', '--config', configFile], {
+    env: {
+      ...process.env,
+      TZ: 'UTC',
+      GITHUB_TOKEN: 'ghp_test',
+      SDG_ISSUE_STATE_FILE: issueStateFile,
+      SDG_STATE_FILE: path.join(dir, 'state.json'),
+      LOG_LEVEL: 'error'
+    },
+    encoding: 'utf8'
+  });
+
+  assert.ok(output.split('\n').some(line => line.includes('me/demo')), output);
+  assert.doesNotMatch(output, /Last daily reset/);
+});
