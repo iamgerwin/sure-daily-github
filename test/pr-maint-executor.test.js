@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ActionExecutor, effectiveMode, actionKey, BREAKER_MS } from '../src/core/executor.js';
+import { ActionExecutor, effectiveMode, boundBreaker, actionKey, BREAKER_MS } from '../src/core/executor.js';
 import { MARKERS, MERGE_POLICY_CONTEXT } from '../src/core/policy.js';
 
 const OWNER = 'iamgerwin';
@@ -206,6 +206,26 @@ test('effectiveMode caps the configured mode while the breaker is active', () =>
   assert.equal(effectiveMode('shadow', breaker, NOW), 'shadow');
   assert.equal(effectiveMode('autonomous', breaker, NOW + 1000), 'autonomous');
   assert.equal(effectiveMode('act', null, NOW), 'act');
+});
+
+test('boundBreaker leaves a breaker with at most 24 hours left as it is', () => {
+  const tripped = { trippedAt: NOW, until: NOW + BREAKER_MS, from: 'act', to: 'shadow', reason: 'rate: cap', pr: 7 };
+  assert.equal(boundBreaker(tripped, NOW), tripped);
+  const expired = { ...tripped, until: NOW - 1000 };
+  assert.equal(boundBreaker(expired, NOW), expired);
+  assert.equal(boundBreaker(null, NOW), null);
+});
+
+test('boundBreaker caps a breaker ending more than 24 hours ahead (clock stepped back) at 24 hours from now', () => {
+  const YEAR = 365 * 24 * 60 * 60 * 1000;
+  const breaker = { trippedAt: NOW + YEAR, until: NOW + YEAR + BREAKER_MS, from: 'autonomous', to: 'act', reason: 'rate: cap', pr: 7 };
+  const bounded = boundBreaker(breaker, NOW);
+  assert.deepEqual(bounded, { ...breaker, until: NOW + BREAKER_MS });
+  assert.equal(breaker.until, NOW + YEAR + BREAKER_MS, 'the input is not mutated');
+  // Still caps the mode for the bounded window, then lets it go
+  assert.equal(effectiveMode('autonomous', bounded, NOW + BREAKER_MS - 1), 'act');
+  assert.equal(effectiveMode('autonomous', bounded, NOW + BREAKER_MS), 'autonomous');
+  assert.equal(boundBreaker({ ...breaker, until: NOW + BREAKER_MS + 1 }, NOW).until, NOW + BREAKER_MS);
 });
 
 test('actionKey tells different bodies apart without embedding them', () => {

@@ -180,7 +180,9 @@ retried in the same tick. `head-pin` and `rate` denials leave the PR to be decid
 
 **Circuit breaker.** An *impossible* denial escalates the PR (`needs-human`, reason `policy-denial`) and trips the breaker.
 So does a `rate` denial, which doesn't escalate. A trip drops the mode one level (autonomous → act → shadow) for 24
-hours, effective immediately for the rest of the tick. The dashboard shows it.
+hours, effective immediately for the rest of the tick. The dashboard shows it. A stored breaker that ends more than 24
+hours ahead (the clock was stepped back after the trip, or the ledger was edited) is capped at 24 hours from the next
+tick, with a warning in the log, so it cannot hold the mode down until the clock catches up.
 
 **Decisions log.** `data/pr-maint-decisions.jsonl` gets one line per planned action: time, repository, PR, type, head,
 mode, verdict, rule, reason and outcome. Comment bodies are stored only as a SHA-1 and a byte count. In shadow mode this

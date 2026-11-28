@@ -7,7 +7,7 @@ import config from '../config/loader.js';
 import logger from '../utils/logger.js';
 import { acquireRunLock } from '../utils/run-lock.js';
 import { PrMaintLedger, repoState } from '../utils/pr-maint-ledger.js';
-import { ActionExecutor, effectiveMode } from './executor.js';
+import { ActionExecutor, effectiveMode, boundBreaker } from './executor.js';
 import { isConflicted, selectRepositories, gateReason } from './conflict-fixer.js';
 import {
   LIFECYCLE_LABELS, MANAGED_LABELS, NEEDS_HUMAN, BABYSIT, PAUSED, MARKERS, MERGE_POLICY_CONTEXT,
@@ -418,6 +418,13 @@ export class PrMaint {
       const selected = selectRepositories(cfg.repositories, repos);
       const ledger = this.options.ledger || new PrMaintLedger();
       const state = ledger.load();
+      const bounded = boundBreaker(state.breaker, this.now());
+      if (bounded !== state.breaker) {
+        logger.warn('pr-maint circuit breaker ends more than 24 hours ahead; capping it at 24 hours from now', {
+          until: new Date(state.breaker.until).toISOString(), cappedUntil: new Date(bounded.until).toISOString()
+        });
+        state.breaker = bounded;
+      }
       const configuredMode = mode || settings.mode;
       const token = this.options.token !== undefined ? this.options.token : null;
       const github = this.options.github || new PrMaintGitHub(new GitHubClient(token || config.getGitHubToken()).octokit);
