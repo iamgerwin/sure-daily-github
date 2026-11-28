@@ -179,10 +179,19 @@ function batchFile(filePath, index) {
   return index === 0 ? filePath : filePath.replace(/(\.json)?$/, `-${index + 1}$1`);
 }
 
+// The last few non-blank lines of a stream, CRLF-safe
+function outputTail(text, count = 3) {
+  return String(text ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-count);
+}
+
 function describeEngineFailure(engine, result) {
   if (result.timedOut) return `${engine} timed out`;
   if (result.error) return `${engine} could not be started: ${result.error.message}`;
-  const tail = (result.stderr || result.stdout).trim().split('\n').slice(-3).join(' | ');
+  // stderr is preferred, but a stderr holding only whitespace (a cleared
+  // spinner, a stray newline) must not hide the reason the engine printed on
+  // stdout; blank lines would otherwise use up the three lines shown
+  const stderrTail = outputTail(result.stderr);
+  const tail = (stderrTail.length ? stderrTail : outputTail(result.stdout)).join(' | ');
   // A process killed by a signal (the OOM killer, a manual kill) has no exit
   // code; "exited with code null" would hide why the engine stopped
   const how = result.code === null && result.signal

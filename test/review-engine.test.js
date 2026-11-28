@@ -221,6 +221,26 @@ test('runTriage fails on a non-zero exit, a spawn error, a signal, or a timeout'
   }
 });
 
+test('an engine failure names the reason on stdout when stderr holds only whitespace', async () => {
+  const outputFile = path.join(tmpDir(), 'triage.json');
+  const cases = [
+    // A stray newline or cleared spinner on stderr used to hide stdout entirely
+    [{ code: 1, stdout: 'Error: model m not found\n', stderr: '\n  \n' }, 'opencode exited with code 1: Error: model m not found'],
+    // Blank and CRLF-terminated lines do not use up the three lines shown
+    [{ code: 1, stdout: '', stderr: 'one\r\ntwo\r\n\r\n\r\nthree\r\n\r\n' }, 'opencode exited with code 1: one | two | three'],
+    // stderr with content still wins over stdout
+    [{ code: 3, stdout: 'progress 100%', stderr: 'quota exceeded' }, 'opencode exited with code 3: quota exceeded'],
+    // Nothing printed anywhere leaves just the exit code
+    [{ code: 1, stdout: ' \n', stderr: '\n' }, 'opencode exited with code 1']
+  ];
+  for (const [result, expected] of cases) {
+    const { runner } = stubRunner({ result, write: () => fs.writeFileSync(outputFile, '{"comments":[]}') });
+    const triage = await runTriage({ engine: 'opencode', model: 'm', cwd: '/w', pr, comments, diff: '', outputFile, runner });
+    assert.equal(triage.ok, false);
+    assert.equal(triage.error, expected);
+  }
+});
+
 test('runImplement returns the parsed report, and an infrastructure failure when none was written', async () => {
   const reportFile = path.join(tmpDir(), 'implement.json');
   const items = [{ comment: comments[0], decision: { action: 'fix', reasoning: 'r', plan: 'use <=' } }];
