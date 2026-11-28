@@ -87,6 +87,41 @@ test('getStatus in simple issue mode uses timeVariations.daily when time variati
   assert.equal(status.needsCommit, true);
 });
 
+test('getStatus in simple issue mode reports a repo at its weekly cap as done, as run skips it', async (t) => {
+  // A Wednesday: Monday and Tuesday of the same ISO week already used the cap
+  mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-28T12:00:00Z') });
+  t.after(() => mock.timers.reset());
+
+  const timezone = 'UTC';
+  config.config = {
+    general: { mode: 'issue', timezone, dryRun: false },
+    randomization: {
+      enabled: true,
+      issueCount: { min: 1, max: 2 },
+      timeVariations: { enabled: true, daily: { min: 3, max: 6 }, weekly: { min: 2, max: 3 } }
+    },
+    repositories: [{ owner: 'me', repo: 'weekly', enabled: true, dailyTarget: 1 }]
+  };
+
+  for (const day of ['2026-10-26T09:00:00Z', '2026-10-27T09:00:00Z']) {
+    state.recordAction('me', 'weekly', { type: 'issue', timezone, now: new Date(day) });
+  }
+
+  const [before] = (await executor.getStatus()).status;
+  assert.equal(before.today, 0);
+  assert.equal(before.needsCommit, true);
+
+  state.recordAction('me', 'weekly', { type: 'issue', timezone });
+  const handler = new (await import('../src/github/issue-handler.js')).default();
+  assert.equal(handler.checkLimits(config.config.repositories[0], config.config).allowed, false);
+
+  // Today's daily cap (6) is far off, but the weekly cap (3) keeps run away
+  const [after] = (await executor.getStatus()).status;
+  assert.equal(after.today, 1);
+  assert.equal(after.target, 6);
+  assert.equal(after.needsCommit, false);
+});
+
 test('getStatus leaves disabled repositories out of the commit-mode table and names them separately', async () => {
   config.config = {
     general: { mode: 'commit', timezone: 'UTC', dryRun: false },

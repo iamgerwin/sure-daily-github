@@ -310,7 +310,9 @@ class IssueHandler {
         today: counts.daily,
         total: repoState.totals?.issues ?? 0,
         lastCommit: repoState.lastCommitDate,
-        needsCommit: counts.daily < limits.dailyMax
+        // The hourly cap only pauses run until the next hour, so it does not
+        // settle the day; a reached weekly cap skips the repo until next week
+        needsCommit: counts.daily < limits.dailyMax && counts.weekly < limits.weeklyMax
       };
     });
   }
