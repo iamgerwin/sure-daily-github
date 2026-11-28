@@ -17,7 +17,8 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Separate from run.lock: a pr-maint tick must not wait on (or block) `run`
-const DEFAULT_LOCK_FILE = path.join(__dirname, '../../data/pr-maint.lock');
+const PROJECT_ROOT = path.join(__dirname, '../..');
+const DEFAULT_LOCK_FILE = path.join(PROJECT_ROOT, 'data/pr-maint.lock');
 // Bump when LABEL_DEFINITIONS change so the labels are repaired once more
 export const LABELS_VERSION = 1;
 // Denials a later tick may clear by itself, so the PR is decided again. A
@@ -27,8 +28,14 @@ const RETRY_RULES = new Set(['rate', 'head-pin', 'needs-human']);
 const retryable = (outcome) => outcome.status === 'error'
   || (outcome.status === 'denied' && RETRY_RULES.has(outcome.verdict.rule));
 
+// A relative override is anchored to the project root like the default:
+// resolved against the working directory, a scheduled tick and a manual
+// `cli.js pr-maint` started elsewhere would take two different locks and run
+// at the same time against one ledger and write budget. Surrounding whitespace
+// (a systemd Environment= line) is ignored, and a blank value keeps the default.
 export function prMaintLockFile() {
-  return process.env.SDG_PR_MAINT_LOCK_FILE || DEFAULT_LOCK_FILE;
+  const text = String(process.env.SDG_PR_MAINT_LOCK_FILE ?? '').trim();
+  return text ? path.resolve(PROJECT_ROOT, text) : DEFAULT_LOCK_FILE;
 }
 
 export const sha1 = (value) => crypto.createHash('sha1').update(String(value)).digest('hex');
