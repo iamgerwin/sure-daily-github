@@ -824,6 +824,34 @@ test('renderDashboard keeps an escalated babysit PR within the bound ahead of 50
   assert.match(body, /1 more pull request not listed \(the dashboard is capped\): https:\/\/github\.com\/iamgerwin\/demo\/pulls/);
 });
 
+test('a breaker ending more than 24 hours ahead is capped at 24 hours from now and saved', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [] });
+  const YEAR = 365 * 24 * 60 * 60 * 1000;
+  const DAY = 24 * 60 * 60 * 1000;
+  const breaker = { trippedAt: NOW + YEAR, until: NOW + YEAR + DAY, from: 'act', to: 'shadow', reason: 'rate: cap', pr: null };
+  new PrMaintLedger({ filePath: files.ledger }).save({ breaker, writes: [], repos: {} });
+
+  const result = await makeRunner(fake, files).execute(makeConfig({ mode: 'act' }));
+  assert.equal(result.mode, 'shadow', 'the breaker still lowers the mode for now');
+  assert.equal(result.breaker.until, NOW + DAY);
+  assert.equal(JSON.parse(fs.readFileSync(files.ledger, 'utf8')).breaker.until, NOW + DAY);
+
+  // Once the capped window has passed, the configured mode is back
+  const later = await makeRunner(fake, files, { now: () => NOW + DAY }).execute(makeConfig({ mode: 'act' }));
+  assert.equal(later.mode, 'act');
+});
+
+test('a breaker within its 24-hour window is kept as tripped', async (t) => {
+  const files = tmpFiles(t);
+  const fake = fakeGitHub({ prs: [] });
+  const breaker = { trippedAt: NOW - 1000, until: NOW + 60000, from: 'act', to: 'shadow', reason: 'rate: cap', pr: null };
+  new PrMaintLedger({ filePath: files.ledger }).save({ breaker, writes: [], repos: {} });
+  const result = await makeRunner(fake, files).execute(makeConfig({ mode: 'act' }));
+  assert.equal(result.mode, 'shadow');
+  assert.deepEqual(JSON.parse(fs.readFileSync(files.ledger, 'utf8')).breaker, breaker);
+});
+
 test('label setup makes no write when the hourly budget is already spent', async (t) => {
   const files = tmpFiles(t);
   const fake = fakeGitHub({ prs: [] });

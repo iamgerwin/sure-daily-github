@@ -217,6 +217,17 @@ export function effectiveMode(configured, breaker, now = Date.now()) {
   return MODES[Math.min(MODES.indexOf(configured), MODES.indexOf(breaker.to))] || 'shadow';
 }
 
+// A trip lasts BREAKER_MS, so a breaker with more time left than that was not
+// set on this clock: the clock was stepped back after the trip (e.g. a reboot
+// before NTP sync) or the ledger was edited. Left alone it would hold the mode
+// down until the clock caught up, days or years later. Its remaining time is
+// capped at BREAKER_MS from now instead, so the downgrade still applies for at
+// most one full window. Returns the breaker unchanged when it is within bounds.
+export function boundBreaker(breaker, now = Date.now()) {
+  if (!breaker || !(breaker.until - now > BREAKER_MS)) return breaker;
+  return { ...breaker, until: now + BREAKER_MS };
+}
+
 // Same action, same key: a denial is never retried in the same tick
 export function actionKey(action) {
   const { body, ...payload } = action.payload || {};
