@@ -251,6 +251,72 @@ test('fetchSnapshot normalizes every page and detects a paused dashboard', async
   assert.deepEqual(calls.map(c => c.params.cursor), [null, 'c1']);
 });
 
+// The snapshot reads only the first 20 issues labeled automation-paused; the
+// dashboard sorting past them must still pause the tick
+function pausedPages({ firstPage, laterPages }) {
+  const queries = [];
+  const graphql = (variables, query) => {
+    if (/pullRequests/.test(query)) {
+      return {
+        repository: {
+          pausedIssues: firstPage,
+          pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }
+        }
+      };
+    }
+    queries.push(variables.cursor);
+    return { repository: { issues: laterPages[variables.cursor] } };
+  };
+  return { graphql, queries };
+}
+
+async function pagedClient(pages) {
+  const { graphql, queries } = pausedPages(pages);
+  const stub = stubOctokit();
+  stub.octokit.graphql = async (query, variables) => graphql(variables, query);
+  return { github: new PrMaintGitHub(stub.octokit), queries };
+}
+
+const others = (from, count) => Array.from({ length: count }, (_, i) => ({ number: from + i, body: 'unrelated' }));
+
+test('fetchSnapshot finds a paused dashboard past the first 20 labeled issues', async () => {
+  const { github, queries } = await pagedClient({
+    firstPage: { nodes: others(1, 20), pageInfo: { hasNextPage: true, endCursor: 'p1' } },
+    laterPages: {
+      p1: { nodes: others(21, 100), pageInfo: { hasNextPage: true, endCursor: 'p2' } },
+      p2: { nodes: [{ number: 300, body: `${MARKERS.dashboard}\n` }], pageInfo: { hasNextPage: false, endCursor: null } }
+    }
+  });
+  const snapshot = await github.fetchSnapshot(OWNER, 'demo');
+  assert.equal(snapshot.paused, true);
+  assert.deepEqual(queries, ['p1', 'p2']);
+});
+
+test('fetchSnapshot reports not paused after reading every labeled issue without the dashboard', async () => {
+  const { github, queries } = await pagedClient({
+    firstPage: { nodes: others(1, 20), pageInfo: { hasNextPage: true, endCursor: 'p1' } },
+    laterPages: { p1: { nodes: others(21, 5), pageInfo: { hasNextPage: false, endCursor: null } } }
+  });
+  assert.equal((await github.fetchSnapshot(OWNER, 'demo')).paused, false);
+  assert.deepEqual(queries, ['p1']);
+});
+
+test('fetchSnapshot reads no further labeled issues when the first page settles it', async () => {
+  const found = await pagedClient({
+    firstPage: { nodes: [{ number: 3, body: MARKERS.dashboard }], pageInfo: { hasNextPage: true, endCursor: 'p1' } },
+    laterPages: {}
+  });
+  assert.equal((await found.github.fetchSnapshot(OWNER, 'demo')).paused, true);
+  assert.deepEqual(found.queries, []);
+
+  const complete = await pagedClient({
+    firstPage: { nodes: others(1, 3), pageInfo: { hasNextPage: false, endCursor: null } },
+    laterPages: {}
+  });
+  assert.equal((await complete.github.fetchSnapshot(OWNER, 'demo')).paused, false);
+  assert.deepEqual(complete.queries, []);
+});
+
 test('fetchSnapshot reads the check context count and fails closed past the 100 it reads', async () => {
   const passing = Array.from({ length: 100 }, (_, i) => ({ __typename: 'CheckRun', name: `job-${i}`, status: 'COMPLETED', conclusion: 'SUCCESS' }));
   const node = (number, contexts) => ({
