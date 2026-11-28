@@ -25,12 +25,14 @@ const FAILED_CONCLUSIONS = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'
 // never mark a PR ready or clear needs-human.
 const PASSING_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
-// Paused issues are fetched with every page, but only the first page's are read
+// Paused issues are fetched with every page, but only the first page's are read;
+// past those 20, fetchSnapshot pages the rest with PAUSED_ISSUES_QUERY
 const SNAPSHOT_QUERY = `
   query ($owner: String!, $repo: String!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
       pausedIssues: issues(states: OPEN, labels: ["${PAUSED}"], first: 20) {
         nodes { number body }
+        pageInfo { hasNextPage endCursor }
       }
       pullRequests(states: OPEN, first: 50, after: $cursor) {
         nodes {
@@ -75,6 +77,22 @@ const SNAPSHOT_QUERY = `
     }
   }
 `;
+
+// The labeled issues past the snapshot's first 20. The kill switch is the
+// dashboard issue carrying the label, so it must be found wherever it sorts.
+const PAUSED_ISSUES_QUERY = `
+  query ($owner: String!, $repo: String!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      issues(states: OPEN, labels: ["${PAUSED}"], first: 100, after: $cursor) {
+        nodes { number body }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+const hasDashboardMarker = (issues) => (issues?.nodes || [])
+  .some(issue => String(issue?.body || '').includes(MARKERS.dashboard));
 
 // Check evidence for clearing needs-human, read right before the write
 const FRESH_CHECKS_QUERY = `
@@ -211,13 +229,27 @@ export class PrMaintGitHub {
       const data = await this.octokit.graphql(SNAPSHOT_QUERY, { owner, repo, cursor });
       const repository = data.repository;
       if (first) {
-        paused = (repository.pausedIssues?.nodes || []).some(issue => String(issue.body || '').includes(MARKERS.dashboard));
+        paused = hasDashboardMarker(repository.pausedIssues) || await this.pausedPastFirstPage(owner, repo, repository.pausedIssues);
         first = false;
       }
       prs.push(...repository.pullRequests.nodes.map(normalizePullRequest));
       cursor = repository.pullRequests.pageInfo.hasNextPage ? repository.pullRequests.pageInfo.endCursor : null;
     } while (cursor);
     return { owner, repo, paused, prs: prs.sort((a, b) => a.number - b.number) };
+  }
+
+  // With more than 20 open issues labeled automation-paused, the dashboard can
+  // sort past the snapshot's page; reading only that page would keep writing
+  // while the kill switch is on. Pages the rest until the dashboard is found.
+  async pausedPastFirstPage(owner, repo, firstPage) {
+    let pageInfo = firstPage?.pageInfo;
+    while (pageInfo?.hasNextPage && pageInfo.endCursor) {
+      const data = await this.octokit.graphql(PAUSED_ISSUES_QUERY, { owner, repo, cursor: pageInfo.endCursor });
+      const issues = data.repository?.issues;
+      if (hasDashboardMarker(issues)) return true;
+      pageInfo = issues?.pageInfo;
+    }
+    return false;
   }
 
   // The head pin: re-read right before a write. Mergeability comes with it;
